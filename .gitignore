@@ -1,0 +1,10 @@
+# Air build output
+server/tmp/
+
+# Build binaries
+/bin/
+*.exe
+*.test
+
+# Logs
+*.log
