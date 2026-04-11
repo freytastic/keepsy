@@ -8,3 +8,5 @@ server/tmp/
 
 # Logs
 *.log
+
+.env
