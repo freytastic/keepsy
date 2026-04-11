@@ -18,14 +18,31 @@ var (
 	ErrTooManyRequests = errors.New("too many requests, please try again later")
 )
 
+// repository interfaces to allow for mocking in tests
+type OTPStore interface {
+	SetOTP(ctx context.Context, email, otp string, ttl time.Duration) error
+	GetOTP(ctx context.Context, email string) (string, error)
+	DeleteOTP(ctx context.Context, email string) error
+	CheckRateLimit(ctx context.Context, email string) (bool, error)
+}
+
+type UserStore interface {
+	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	Create(ctx context.Context, user *model.User) error
+}
+
+type SessionStore interface {
+	Create(ctx context.Context, session *model.Session) error
+}
+
 type AuthService struct {
-	OTPRepo      *repository.OTPRepository
-	UserRepo     *repository.UserRepository
-	SessionRepo  *repository.SessionRepository
+	OTPRepo      OTPStore
+	UserRepo     UserStore
+	SessionRepo  SessionStore
 	EmailService EmailService
 }
 
-func NewAuthService(otpRepo *repository.OTPRepository, userRepo *repository.UserRepository, sessionRepo *repository.SessionRepository, emailService EmailService) *AuthService {
+func NewAuthService(otpRepo OTPStore, userRepo UserStore, sessionRepo SessionStore, emailService EmailService) *AuthService {
 	return &AuthService{
 		OTPRepo:      otpRepo,
 		UserRepo:     userRepo,
