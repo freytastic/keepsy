@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/keepsy/internal/model"
 	"github.com/google/uuid"
 )
 
@@ -14,11 +14,16 @@ type contextKey string
 
 const UserIDKey contextKey = "user_id"
 
-type AuthMiddleware struct {
-	sessionRepo *repository.SessionRepository
+// any struct that has this GetByToken method can now be used by the middleware
+type SessionStore interface {
+	GetByToken(ctx context.Context, token string) (*model.Session, error)
 }
 
-func NewAuthMiddleware(sessionRepo *repository.SessionRepository) *AuthMiddleware {
+type AuthMiddleware struct {
+	sessionRepo SessionStore
+}
+
+func NewAuthMiddleware(sessionRepo SessionStore) *AuthMiddleware {
 	return &AuthMiddleware{sessionRepo: sessionRepo}
 }
 
