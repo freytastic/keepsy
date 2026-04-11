@@ -23,6 +23,10 @@ func (r *OTPRepository) GetOTP(ctx context.Context, email string) (string, error
 	return r.Redis.Get(ctx, "otp:"+email).Result()
 }
 
+func (r *OTPRepository) DeleteOTP(ctx context.Context, email string) error {
+	return r.Redis.Del(ctx, "otp:"+email).Err()
+}
+
 func (r *OTPRepository) CheckRateLimit(ctx context.Context, email string) (bool, error) {
 	key := "ratelimit:" + email
 	count, err := r.Redis.Get(ctx, key).Int()
