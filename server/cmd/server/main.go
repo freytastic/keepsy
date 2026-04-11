@@ -8,6 +8,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/config"
 	"github.com/freytastic/keepsy/internal/handler"
+	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/golang-migrate/migrate/v4"
@@ -60,15 +61,27 @@ func main() {
 	// initialize services
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
+	userService := service.NewUserService(userRepo)
 
 	//initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
+	userHandler := handler.NewUserHandler(userService)
+
+	// initialize middleware
+	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
 
 	r := mux.NewRouter()
 
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/auth/otp/request", authHandler.RequestOTP).Methods(http.MethodPost)
 	apiV1.HandleFunc("/auth/otp/verify", authHandler.VerifyOTP).Methods(http.MethodPost)
+
+	// authenticated routes
+	authenticated := apiV1.PathPrefix("").Subrouter()
+	authenticated.Use(authMiddleware.Authenticate)
+
+	authenticated.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
+	authenticated.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
 
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "OK")

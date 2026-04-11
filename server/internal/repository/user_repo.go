@@ -35,6 +35,27 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.U
 	return &user, nil
 }
 
+func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
+	var user model.User
+	query := `SELECT id, email, name, avatar_key, accent_color, theme, created_at, updated_at FROM users WHERE id = $1`
+	err := r.DB.QueryRow(ctx, query, id).Scan(
+		&user.ID, &user.Email, &user.Name, &user.AvatarKey, &user.AccentColor, &user.Theme, &user.CreatedAt, &user.UpdatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) Update(ctx context.Context, user *model.User) error {
+	query := `UPDATE users SET name = $1, accent_color = $2, theme = $3, updated_at = NOW() WHERE id = $4`
+	_, err := r.DB.Exec(ctx, query, user.Name, user.AccentColor, user.Theme, user.ID)
+	return err
+}
+
 func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	if user.ID == uuid.Nil {
 		user.ID = uuid.New()

@@ -80,6 +80,9 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo stri
 		return "", ErrInvalidOTP
 	}
 
+	// success, del OTP from redis so it cant be used again
+	_ = s.OTPRepo.DeleteOTP(ctx, email)
+
 	// OTP verified, check if user exists or create new one
 	user, err := s.UserRepo.GetByEmail(ctx, email)
 	if err != nil {
