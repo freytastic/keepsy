@@ -57,15 +57,18 @@ func main() {
 	otpRepo := repository.NewOTPRepository(rdb)
 	userRepo := repository.NewUserRepository(dbPool)
 	sessionRepo := repository.NewSessionRepository(dbPool)
+	albumRepo := repository.NewAlbumRepository(dbPool)
 
 	// initialize services
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
 	userService := service.NewUserService(userRepo)
+	albumService := service.NewAlbumService(albumRepo)
 
 	//initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
+	albumHandler := handler.NewAlbumHandler(albumService)
 
 	// initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
@@ -82,6 +85,14 @@ func main() {
 
 	authenticated.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
 	authenticated.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
+
+	// album routes
+	authenticated.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
+	authenticated.HandleFunc("/albums", albumHandler.ListAlbums).Methods(http.MethodGet)
+	authenticated.HandleFunc("/albums/{id}", albumHandler.GetAlbum).Methods(http.MethodGet)
+	authenticated.HandleFunc("/albums/{id}", albumHandler.UpdateAlbum).Methods(http.MethodPatch)
+	authenticated.HandleFunc("/albums/{id}", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
+	authenticated.HandleFunc("/albums/{id}/members", albumHandler.AddMember).Methods(http.MethodPost)
 
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "OK")
