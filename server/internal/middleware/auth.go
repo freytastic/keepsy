@@ -67,3 +67,13 @@ func GetUserID(ctx context.Context) (uuid.UUID, bool) {
 	userID, ok := ctx.Value(UserIDKey).(uuid.UUID)
 	return userID, ok
 }
+
+// MustGetUserID retrieves the user_id from the context or writes an unauthorized error to the response
+func MustGetUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return uuid.Nil, false
+	}
+	return userID, true
+}
