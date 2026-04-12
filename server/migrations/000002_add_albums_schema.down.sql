@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS album_members;
+DROP TABLE IF EXISTS albums;
