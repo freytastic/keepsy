@@ -16,11 +16,22 @@ var (
 
 const MaxAlbumMembers = 100 //for now lets say 100
 
-type AlbumService struct {
-	albumRepo *repository.AlbumRepository
+type AlbumStore interface {
+	CreateWithMember(ctx context.Context, album *model.Album) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Album, error)
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error)
+	GetMember(ctx context.Context, albumID, userID uuid.UUID) (*model.AlbumMember, error)
+	Update(ctx context.Context, album *model.Album) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) error
+	CountMembers(ctx context.Context, albumID uuid.UUID) (int, error)
 }
 
-func NewAlbumService(albumRepo *repository.AlbumRepository) *AlbumService {
+type AlbumService struct {
+	albumRepo AlbumStore
+}
+
+func NewAlbumService(albumRepo AlbumStore) *AlbumService {
 	return &AlbumService{albumRepo: albumRepo}
 }
 
