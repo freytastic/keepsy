@@ -4,15 +4,19 @@ import (
 	"context"
 
 	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/google/uuid"
 )
 
-type UserService struct {
-	userRepo *repository.UserRepository
+type UserStore interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	Update(ctx context.Context, user *model.User) error
 }
 
-func NewUserService(userRepo *repository.UserRepository) *UserService {
+type UserService struct {
+	userRepo UserStore
+}
+
+func NewUserService(userRepo UserStore) *UserService {
 	return &UserService{userRepo: userRepo}
 }
 

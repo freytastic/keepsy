@@ -26,7 +26,7 @@ type OTPStore interface {
 	CheckRateLimit(ctx context.Context, email string) (bool, error)
 }
 
-type UserStore interface {
+type AuthUserStore interface {
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	Create(ctx context.Context, user *model.User) error
 }
@@ -37,12 +37,12 @@ type SessionStore interface {
 
 type AuthService struct {
 	OTPRepo      OTPStore
-	UserRepo     UserStore
+	UserRepo     AuthUserStore
 	SessionRepo  SessionStore
 	EmailService EmailService
 }
 
-func NewAuthService(otpRepo OTPStore, userRepo UserStore, sessionRepo SessionStore, emailService EmailService) *AuthService {
+func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo SessionStore, emailService EmailService) *AuthService {
 	return &AuthService{
 		OTPRepo:      otpRepo,
 		UserRepo:     userRepo,
