@@ -61,6 +61,7 @@ func main() {
 	sessionRepo := repository.NewSessionRepository(dbPool)
 	albumRepo := repository.NewAlbumRepository(dbPool)
 	mediaRepo := repository.NewMediaRepository(dbPool)
+	inviteRepo := repository.NewInviteRepository(dbPool)
 
 	// initialize storage
 	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
@@ -82,12 +83,14 @@ func main() {
 	userService := service.NewUserService(userRepo)
 	albumService := service.NewAlbumService(albumRepo)
 	mediaService := service.NewMediaService(mediaRepo, albumRepo, s3Client)
+	inviteService := service.NewInviteService(inviteRepo, albumRepo)
 
 	//initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	albumHandler := handler.NewAlbumHandler(albumService)
 	mediaHandler := handler.NewMediaHandler(mediaService)
+	inviteHandler := handler.NewInviteHandler(inviteService)
 
 	// initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
@@ -97,6 +100,9 @@ func main() {
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/auth/otp/request", authHandler.RequestOTP).Methods(http.MethodPost)
 	apiV1.HandleFunc("/auth/otp/verify", authHandler.VerifyOTP).Methods(http.MethodPost)
+
+	// public invite preview
+	apiV1.HandleFunc("/invite/{code}", inviteHandler.GetPreview).Methods(http.MethodGet)
 
 	// authenticated routes
 	authenticated := apiV1.PathPrefix("").Subrouter()
@@ -112,6 +118,10 @@ func main() {
 	authenticated.HandleFunc("/albums/{id}", albumHandler.UpdateAlbum).Methods(http.MethodPatch)
 	authenticated.HandleFunc("/albums/{id}", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
 	authenticated.HandleFunc("/albums/{id}/members", albumHandler.AddMember).Methods(http.MethodPost)
+
+	// invite routes
+	authenticated.HandleFunc("/albums/{id}/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)
+	authenticated.HandleFunc("/invite/{code}/join", inviteHandler.JoinAlbum).Methods(http.MethodPost)
 
 	// media routes
 	authenticated.HandleFunc("/albums/{id}/media/upload-url", mediaHandler.RequestUploadURL).Methods(http.MethodPost)
