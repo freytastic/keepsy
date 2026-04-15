@@ -75,9 +75,8 @@ func (h *InviteHandler) GetPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InviteHandler) JoinAlbum(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.GetUserID(r.Context())
+	userID, ok := middleware.MustGetUserID(w, r)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
