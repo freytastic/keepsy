@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/big"
 	"time"
-
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/repository"
 )
@@ -85,16 +84,16 @@ func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
 	return nil
 }
 
-func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo string) (string, error) {
+func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo string) (string, time.Time, error) {
 	storedOTP, err := s.OTPRepo.GetOTP(ctx, email)
 	if err != nil {
 		log.Printf("VerifyOTP: OTP not found in Redis for %s: %v", email, err)
-		return "", ErrInvalidOTP
+		return "", time.Time{}, ErrInvalidOTP
 	}
 
 	if storedOTP != otp {
 		log.Printf("VerifyOTP: OTP mismatch for %s. Expected %s, got %s", email, storedOTP, otp)
-		return "", ErrInvalidOTP
+		return "", time.Time{}, ErrInvalidOTP
 	}
 
 	// success, del OTP from redis so it cant be used again
@@ -114,34 +113,37 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo stri
 			err = s.UserRepo.Create(ctx, user)
 			if err != nil {
 				log.Printf("VerifyOTP: Failed to create user: %v", err)
-				return "", err
+				return "", time.Time{}, err
 			}
 		} else {
 			log.Printf("VerifyOTP: Database error fetching user: %v", err)
-			return "", err
+			return "", time.Time{}, err
 		}
 	}
 
 	// create session
 	token, err := generateToken(32)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
+
+	expiresAt := time.Now().Add(30 * 24 * time.Hour) //30 days
 
 	session := &model.Session{
 		UserID:     user.ID,
 		TokenHash:  repository.HashToken(token),
 		DeviceInfo: deviceInfo,
-		ExpiresAt:  time.Now().Add(30 * 24 * time.Hour), // 30 days
+		ExpiresAt:  expiresAt,
 	}
 
 	err = s.SessionRepo.Create(ctx, session)
 	if err != nil {
 		log.Printf("VerifyOTP: Failed to create session: %v", err)
-		return "", err
+		return "", time.Time{}, err
 	}
+	log.Println(expiresAt)
 
-	return token, nil
+	return token, expiresAt, nil
 }
 
 func generateOTP(length int) (string, error) {
