@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freytastic/keepsy/internal/service"
 )
@@ -67,7 +68,7 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
+	token, expiresAt, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidOTP) {
 			http.Error(w, "invalid or expired OTP", http.StatusUnauthorized)
@@ -78,5 +79,8 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
+	json.NewEncoder(w).Encode(map[string]interface{}{ 
+		"token":      token,
+		"expires_at": expiresAt.Format(time.RFC3339),
+	})
 }
