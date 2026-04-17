@@ -44,22 +44,6 @@ services:
       timeout: 5s
       retries: 5
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.web
-    ports:
-      - "8081:80"
-    environment:
-      - API_URL=http://localhost:8080/api/v1
-    depends_on:
-      - server
-    volumes:
-      - ./frontend:/app
-      # Prevents local node_modules/build artifacts from overwriting container
-      - /app/build
-      - /app/.dart_tool
-
   server:
     build:
       context: ./server
