@@ -45,3 +45,10 @@ func (r *SessionRepository) GetByToken(ctx context.Context, token string) (*mode
 	}
 	return &session, nil
 }
+
+func (r *SessionRepository) DeleteByToken(ctx context.Context, token string) error {
+	tokenHash := HashToken(token)
+	query := `DELETE FROM sessions WHERE token_hash = $1`
+	_, err := r.DB.Exec(ctx, query, tokenHash)
+	return err
+}

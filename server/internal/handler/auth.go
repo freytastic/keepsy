@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freytastic/keepsy/internal/service"
 )
@@ -76,7 +77,53 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to verify OTP", http.StatusInternalServerError)
 		return
 	}
-
+	expiresAt := time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
+	json.NewEncoder(w).Encode(map[string]string{
+		"token":        token,
+		"refreshToken": token, // since token is opaque, it acts as both access and refresh token
+		"expiresAt":    expiresAt,
+	})
 }
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refreshToken"`
+	DeviceInfo   string `json:"deviceInfo"`
+}
+
+type RefreshResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refreshToken"`
+	ExpiresAt    string `json:"expiresAt"`
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var payload RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if payload.RefreshToken == "" {
+		http.Error(w, "refresh token is required", http.StatusBadRequest)
+		return
+	}
+
+	newToken, newRefreshToken, expiresAt, err := h.AuthService.RefreshSession(r.Context(), payload.RefreshToken, payload.DeviceInfo)
+	if err != nil {
+		http.Error(w, "invalid or expired refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	resp := RefreshResponse{
+		Token:        newToken,
+		RefreshToken: newRefreshToken,
+		ExpiresAt:    expiresAt.Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+

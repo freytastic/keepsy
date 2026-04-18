@@ -33,6 +33,8 @@ type AuthUserStore interface {
 
 type SessionStore interface {
 	Create(ctx context.Context, session *model.Session) error
+	GetByToken(ctx context.Context, token string) (*model.Session, error)
+	DeleteByToken(ctx context.Context, token string) error
 }
 
 type AuthService struct {
@@ -142,6 +144,46 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo stri
 	}
 
 	return token, nil
+}
+
+func (s *AuthService) RefreshSession(ctx context.Context, refreshToken, deviceInfo string) (string, string, time.Time, error) {
+	session, err := s.SessionRepo.GetByToken(ctx, refreshToken)
+
+	if err != nil {
+		log.Printf("RefreshSession: session not found or db error: %v", err)
+		return "", "", time.Time{}, errors.New("unauthorized")
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		log.Printf("RefreshSession: session expired")
+		return "", "", time.Time{}, errors.New("unauthorized")
+	}
+
+	// delete old session
+	_ = s.SessionRepo.DeleteByToken(ctx, refreshToken)
+	
+	// create new session sliding it by another 30 days
+	newToken, err := generateToken(32)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	newExpiresAt := time.Now().Add(30 * 24 * time.Hour)
+	newSession := &model.Session{
+		UserID:     session.UserID,
+		TokenHash:  repository.HashToken(newToken),
+		DeviceInfo: deviceInfo,
+		ExpiresAt:  newExpiresAt,
+	}
+
+	err = s.SessionRepo.Create(ctx, newSession)
+	if err != nil {
+		log.Printf("RefreshSession: failed to create new session: %v", err)
+		return "", "", time.Time{}, err
+	}
+
+	// opaque token acts as both access and refresh token
+	return newToken, newToken, newExpiresAt, nil
 }
 
 func generateOTP(length int) (string, error) {
