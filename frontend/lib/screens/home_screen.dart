@@ -50,7 +50,7 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-// ─── Header ───────────────────────────────────────────────────────────────────
+// header
 
 class _Header extends StatelessWidget {
   final bool dark;
@@ -84,8 +84,8 @@ class _Header extends StatelessWidget {
           GestureDetector(
             onTap: () => Navigator.of(context).push(
               PageRouteBuilder(
-                pageBuilder: (_, __, ___) => const ProfileScreen(),
-                transitionsBuilder: (_, a, __, child) => SlideTransition(
+                pageBuilder: (_, _, _) => const ProfileScreen(),
+                transitionsBuilder: (_, a, _, child) => SlideTransition(
                   position: Tween<Offset>(
                       begin: const Offset(1, 0), end: Offset.zero)
                       .animate(CurvedAnimation(
@@ -107,7 +107,7 @@ class _Header extends StatelessWidget {
   }
 }
 
-// ─── Greeting ────────────────────────────────────────────────────────────────
+// greeting
 
 class _GreetingBar extends StatelessWidget {
   final bool dark;
@@ -148,7 +148,7 @@ class _GreetingBar extends StatelessWidget {
   }
 }
 
-// ─── Bento Grid ──────────────────────────────────────────────────────────────
+// bento grido
 
 class _BentoGrid extends StatelessWidget {
   final List<AlbumModel> albums;
@@ -294,7 +294,7 @@ class _BentoGrid extends StatelessWidget {
   }
 }
 
-// ─── Album card ───────────────────────────────────────────────────────────────
+// album card
 
 class _AlbumCard extends StatefulWidget {
   final AlbumModel album;
@@ -347,7 +347,7 @@ class _AlbumCardState extends State<_AlbumCard> {
               hasPhoto
                   ? Image.network(widget.album.coverPhotoUrl!,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => _Gradient(colors: colors))
+                  errorBuilder: (_, _, _) => _Gradient(colors: colors))
                   : _Gradient(colors: colors),
 
               // Vignette
