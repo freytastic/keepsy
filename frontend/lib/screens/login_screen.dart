@@ -6,6 +6,7 @@ import '../core/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 import 'main_shell.dart';
 import '../services/auth_service.dart';
+import '../services/user_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -112,6 +113,11 @@ class _LoginScreenState extends State<LoginScreen>
         final ok = await authService.verifyOtp(_emailCtrl.text.trim(), otpCode);
 
         if (ok) {
+          final userService = UserService();
+          final userData = await userService.getMe();
+          if (userData != null && mounted) {
+            context.read<AppState>().setUserData(userData);
+          }
           setState(() => _loading = false);
           _goHome();
         } else {
