@@ -17,8 +17,30 @@ class AppState extends ChangeNotifier {
   }
 
   // fix these later too
-  final String _profileName = 'User';
+  String? _userId;
+  String? _email;
+  String? _avatarKey;
+  String _profileName = 'User';
+
+  String? get userId => _userId;
+  String? get email => _email;
+  String? get avatarKey => _avatarKey;
   String get profileName => _profileName;
+
+  void setUserData(Map<String, dynamic> data) {
+    _userId = data['id'];
+    _email = data['email'];
+    _profileName = data['name'] ?? 'User';
+    _avatarKey = data['avatar_key'];
+    
+    if (data['accent_color'] != null) {
+      _accent = K.hexColor(data['accent_color']);
+    }
+    if (data['theme'] != null) {
+      _isDark = data['theme'] == 'dark';
+    }
+    notifyListeners();
+  }
 
   void setAccent(Color c) {
     _accent = c;
