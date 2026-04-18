@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/app_theme.dart';
+import '../models/album_model.dart';
 
 class AppState extends ChangeNotifier {
   // only accent color for now cuz the login screen needs it
@@ -16,7 +17,14 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // fix these later too
+  List<AlbumModel> _albums = [];
+  List<AlbumModel> get albums => _albums;
+
+  void setAlbums(List<AlbumModel> newAlbums) {
+    _albums = newAlbums;
+    notifyListeners();
+  }
+
   String? _userId;
   String? _email;
   String? _avatarKey;
@@ -26,6 +34,9 @@ class AppState extends ChangeNotifier {
   String? get email => _email;
   String? get avatarKey => _avatarKey;
   String get profileName => _profileName;
+
+  // forward proxy for the avatar explicit URL 
+  String? get avatarUrl => _avatarKey;
 
   void setUserData(Map<String, dynamic> data) {
     _userId = data['id'];
