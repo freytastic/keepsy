@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
-
+import '../core/app_theme.dart';
 // ui element: orbs glowing in the background
 class GlowOrbs extends StatefulWidget {
   final List<Color> colors;
@@ -214,3 +214,158 @@ class _PrimaryButtonState extends State<PrimaryButton>
   }
 }
 
+// glass card
+
+class GlassCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final BorderRadius? radius;
+  final bool dark;
+
+  const GlassCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.radius,
+    required this.dark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: padding ?? const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: K.cardCol(dark),
+        borderRadius: radius ?? BorderRadius.circular(20),
+        border: Border.all(color: K.borderCol(dark), width: 0.5),
+      ),
+      child: child,
+    );
+  }
+}
+
+// user avatar
+
+class UserAvatar extends StatelessWidget {
+  final String name;
+  final String? avatarUrl;
+  final double size;
+  final List<String>? gradientColors;
+
+  const UserAvatar({
+    super.key,
+    required this.name,
+    this.avatarUrl,
+    required this.size,
+    this.gradientColors,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = name.trim().isNotEmpty
+        ? name.trim().split(' ').map((e) => e[0]).take(2).join().toUpperCase()
+        : '?';
+
+    if (avatarUrl != null && avatarUrl!.isNotEmpty) {
+      return ClipOval(
+        child: Image.network(
+          avatarUrl!,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _buildFallback(initials, context),
+        ),
+      );
+    }
+
+    return _buildFallback(initials, context);
+  }
+
+  Widget _buildFallback(String initials, BuildContext context) {
+    final accent = context.watch<AppState>().accent;
+    final colors = gradientColors != null
+        ? K.gradColors(gradientColors!)
+        : [accent, accent.withOpacity(0.6)];
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient:
+        LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+      ),
+      child: Center(
+        child: Text(initials,
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: size * 0.34,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5)),
+      ),
+    );
+  }
+}
+
+// gradient bbadge
+
+class GradientBadge extends StatelessWidget {
+  final String label;
+  final List<Color> colors;
+
+  const GradientBadge({super.key, required this.label, required this.colors});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: colors),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(label,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+// tap feedback wrapper
+
+class Tappable extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  const Tappable({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.onLongPress,
+  });
+
+  @override
+  State<Tappable> createState() => _TappableState();
+}
+
+class _TappableState extends State<Tappable> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap?.call();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      onLongPress: widget.onLongPress,
+      child: AnimatedScale(
+        scale: _pressed ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        child: widget.child,
+      ),
+    );
+  }
+}

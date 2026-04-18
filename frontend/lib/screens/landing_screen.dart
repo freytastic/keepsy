@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
 import '../services/storage_service.dart';
 import '../services/user_service.dart';
+import '../services/album_service.dart';
 import 'login_screen.dart';
 import 'main_shell.dart';
 
@@ -23,13 +24,26 @@ class _LandingPageState extends State<LandingPage> {
   Future<void> _checkAuth() async {
     final storage = StorageService();
     final userService = UserService();
+    final albumService = AlbumService();
     final valid = await storage.isValid();
 
     if (valid) {
-      // User has a valid token session, fetch their latest profile
-      final userData = await userService.getMe();
-      if (userData != null && mounted) {
-        context.read<AppState>().setUserData(userData);
+      // Fetch user profile and their albums concurrently
+      final responses = await Future.wait([
+        userService.getMe(),
+        albumService.getMyAlbums(),
+      ]);
+      
+      final userData = responses[0] as Map<String, dynamic>?;
+      final userAlbums = responses[1] as List<dynamic>?;
+
+      if (mounted) {
+        if (userData != null) {
+          context.read<AppState>().setUserData(userData);
+        }
+        if (userAlbums != null) {
+          context.read<AppState>().setAlbums(userAlbums.cast());
+        }
       }
     }
 
