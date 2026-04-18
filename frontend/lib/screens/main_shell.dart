@@ -26,8 +26,8 @@ class _MainShellState extends State<MainShell> {
     HapticFeedback.mediumImpact();
     await Navigator.of(context).push(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const CreateAlbumScreen(),
-        transitionsBuilder: (_, a, __, child) => SlideTransition(
+        pageBuilder: (_, _, _) => const CreateAlbumScreen(),
+        transitionsBuilder: (_, a, _, child) => SlideTransition(
           position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
               .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
           child: child,
@@ -289,7 +289,7 @@ class _CreateBtnState extends State<_CreateBtn>
           duration: const Duration(milliseconds: 120),
           child: AnimatedBuilder(
             animation: _ctrl,
-            builder: (_, __) => Container(
+            builder: (_, _) => Container(
               width: 56,
               height: 56,
               decoration: BoxDecoration(
