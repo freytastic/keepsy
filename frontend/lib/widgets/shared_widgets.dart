@@ -127,7 +127,7 @@ class _PrimaryButtonState extends State<PrimaryButton>
   void initState() {
     super.initState();
     _shimmer = AnimationController(
-        vsync: this, duration: const Duration(seconds: 3))
+        vsync: this, duration: const Duration(seconds: 2))
       ..repeat();
   }
 

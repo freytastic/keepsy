@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
-// import '../core/app_theme.dart';
+import '../core/app_theme.dart';
 import '../widgets/shared_widgets.dart';
 import 'main_shell.dart';
 import '../services/auth_service.dart';
@@ -36,15 +36,19 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
+  // navigate to MainShell – wipe entire nav stack
   void _goHome() {
-    Navigator.of(context).pushReplacement(PageRouteBuilder(
-      transitionDuration: const Duration(milliseconds: 600),
-      pageBuilder: (_, _, _) => const MainShell(),
-      transitionsBuilder: (_, a, _, child) => FadeTransition(
-        opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
-        child: child,
+    Navigator.of(context).pushAndRemoveUntil(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (_, __, ___) => const MainShell(),
+        transitionsBuilder: (_, a, __, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: a, curve: Curves.easeOutQuad),
+          child: child,
+        ),
       ),
-    ));
+      (_) => false, // remove every route below
+    );
   }
 
   void _handleContinue() async {
@@ -52,18 +56,16 @@ class _LoginScreenState extends State<LoginScreen>
 
     final authService = AuthService();
 
-    // email mode. request otp 
+    // email mode
     if (!_otpMode) {
       final email = _emailCtrl.text.trim();
 
-      // check if empty
       if (email.isEmpty) {
         HapticFeedback.lightImpact();
         _showError("Please enter your email");
         return;
       }
 
-      // check if valid
       final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
       if (!emailRegex.hasMatch(email)) {
         HapticFeedback.lightImpact();
@@ -71,7 +73,7 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
 
-      setState(() => _loading = true); 
+      setState(() => _loading = true);
 
       try {
         final success = await authService.requestOtp(email);
@@ -82,7 +84,7 @@ class _LoginScreenState extends State<LoginScreen>
             _loading = false;
           });
 
-          await Future.delayed(const Duration(milliseconds: 150));
+          await Future.delayed(const Duration(milliseconds: 100));
           _otpFoci[0].requestFocus();
         } else {
           setState(() => _loading = false);
@@ -92,11 +94,10 @@ class _LoginScreenState extends State<LoginScreen>
         setState(() => _loading = false);
         _showError("Connection error");
       }
-    } 
-    
+    }
+
     // otp mode
     else {
-      // combine the indivual controllers to get the otp string
       String otpCode = _otpCtrls.map((c) => c.text).join();
 
       if (otpCode.length < 6) {
@@ -107,30 +108,36 @@ class _LoginScreenState extends State<LoginScreen>
       setState(() => _loading = true);
 
       try {
-        final token = await authService.verifyOtp(_emailCtrl.text.trim(), otpCode);
-        if (token != null) {
-          // TODO: save token to your AppState or Secure Storage here
+        // verifyOtp now returns bool and saves token+expiry internally
+        final ok = await authService.verifyOtp(_emailCtrl.text.trim(), otpCode);
+
+        if (ok) {
           setState(() => _loading = false);
           _goHome();
         } else {
+          for (final c in _otpCtrls) { c.clear(); }
           setState(() => _loading = false);
+          _otpFoci[0].requestFocus();
           _showError("Invalid OTP code. Try again.");
         }
       } catch (e) {
+        for (final c in _otpCtrls) { c.clear(); }
         setState(() => _loading = false);
+        _otpFoci[0].requestFocus();
         _showError("Something went wrong. Please try again.");
       }
     }
   }
 
-  // helper to show errors
+  // error snackbar
   void _showError(String message) {
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
+            const Icon(Icons.error_outline_rounded,
+                color: Colors.white, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -153,16 +160,21 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-
+  // build
   @override
   Widget build(BuildContext context) {
     final accent = context.watch<AppState>().accent;
+    final dark = context.watch<AppState>().isDark;
     final size = MediaQuery.of(context).size;
 
-    // GlowOrbs sits OUTSIDE the Scaffold so keyboard resize never touches it.
     return Stack(
       children: [
-        // background layer – fully isolated from keyboard insets
+        // solid backdrop – respects theme toggle
+        Positioned.fill(
+          child: Container(color: K.bg(dark)),
+        ),
+
+        // background – fully isolated from keyboard insets
         Positioned.fill(
           child: RepaintBoundary(
             child: GlowOrbs(
@@ -176,7 +188,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ),
 
-        // foreground layer – resizes with keyboard
+        // foreground – resizes with keyboard
         Scaffold(
           backgroundColor: Colors.transparent,
           resizeToAvoidBottomInset: true,
@@ -192,7 +204,7 @@ class _LoginScreenState extends State<LoginScreen>
                     children: [
                       SizedBox(height: size.height * 0.1),
 
-                      // logo placeholder
+                      // logo
                       Container(
                         width: 72,
                         height: 72,
@@ -222,7 +234,7 @@ class _LoginScreenState extends State<LoginScreen>
 
                       const SizedBox(height: 28),
 
-                      // keepsy wordmark
+                      // wordmark
                       ShaderMask(
                         shaderCallback: (b) => LinearGradient(
                           colors: [Colors.white, accent],
@@ -250,34 +262,36 @@ class _LoginScreenState extends State<LoginScreen>
 
                       SizedBox(height: size.height * 0.06),
 
-                      // email / otp
+                      // email ↔ otp animated switch (snappy 200ms)
                       AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 350),
+                        duration: const Duration(milliseconds: 200),
+                        switchInCurve: Curves.easeOutQuad,
+                        switchOutCurve: Curves.easeInQuad,
                         transitionBuilder: (child, anim) => FadeTransition(
                           opacity: anim,
                           child: SlideTransition(
                             position: Tween<Offset>(
-                                begin: const Offset(0, 0.15),
-                                end: Offset.zero)
+                                    begin: const Offset(0, 0.08),
+                                    end: Offset.zero)
                                 .animate(anim),
                             child: child,
                           ),
                         ),
                         child: _otpMode
                             ? _OtpRow(
-                          key: const ValueKey('otp'),
-                          ctrls: _otpCtrls,
-                          foci: _otpFoci,
-                          accent: accent,
-                          onComplete: _handleContinue,
-                        )
+                                key: const ValueKey('otp'),
+                                ctrls: _otpCtrls,
+                                foci: _otpFoci,
+                                accent: accent,
+                                onComplete: _handleContinue,
+                              )
                             : _EmailField(
-                          key: const ValueKey('email'),
-                          ctrl: _emailCtrl,
-                          focus: _emailFocus,
-                          accent: accent,
-                          onSubmit: _handleContinue,
-                        ),
+                                key: const ValueKey('email'),
+                                ctrl: _emailCtrl,
+                                focus: _emailFocus,
+                                accent: accent,
+                                onSubmit: _handleContinue,
+                              ),
                       ),
 
                       const SizedBox(height: 16),
@@ -293,7 +307,8 @@ class _LoginScreenState extends State<LoginScreen>
                       // divider
                       Row(children: [
                         Expanded(
-                            child: Container(height: 0.5,
+                            child: Container(
+                                height: 0.5,
                                 color: Colors.white.withOpacity(0.12))),
                         const Padding(
                           padding: EdgeInsets.symmetric(horizontal: 16),
@@ -302,13 +317,14 @@ class _LoginScreenState extends State<LoginScreen>
                                   color: Color(0x55FFFFFF), fontSize: 13)),
                         ),
                         Expanded(
-                            child: Container(height: 0.5,
+                            child: Container(
+                                height: 0.5,
                                 color: Colors.white.withOpacity(0.12))),
                       ]),
 
                       const SizedBox(height: 24),
 
-                      // google – disabled for now
+                      // google – disabled
                       Opacity(
                         opacity: 0.45,
                         child: IgnorePointer(
@@ -323,7 +339,8 @@ class _LoginScreenState extends State<LoginScreen>
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Image.asset('lib/assets/Google_logo.svg', height: 24),
+                                Image.asset('lib/assets/Google_logo.svg',
+                                    height: 24),
                                 const SizedBox(width: 12),
                                 const Text('Continue with Google',
                                     style: TextStyle(
@@ -359,7 +376,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// email field
+// Email field
 
 class _EmailField extends StatelessWidget {
   final TextEditingController ctrl;
@@ -396,16 +413,15 @@ class _EmailField extends StatelessWidget {
           hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
           border: InputBorder.none,
           contentPadding:
-          const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-          prefixIcon:
-          Icon(Icons.mail_outline_rounded, color: accent, size: 20),
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          prefixIcon: Icon(Icons.mail_outline_rounded, color: accent, size: 20),
         ),
       ),
     );
   }
 }
 
-// otp row
+// OTP row
 
 class _OtpRow extends StatelessWidget {
   final List<TextEditingController> ctrls;
@@ -474,5 +490,3 @@ class _OtpRow extends StatelessWidget {
     );
   }
 }
-
-    
