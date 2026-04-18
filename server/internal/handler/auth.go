@@ -68,7 +68,7 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
+	token, expiresAt, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidOTP) {
 			http.Error(w, "invalid or expired OTP", http.StatusUnauthorized)
