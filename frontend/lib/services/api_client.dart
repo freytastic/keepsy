@@ -119,4 +119,15 @@ class ApiClient {
       return await http.delete(url, headers: await _headers());
     });
   }
+
+  Future<http.Response> patch(String path, {Map<String, dynamic>? body}) async {
+    return _sendWithRetry(() async {
+      final url = Uri.parse('${K.baseURL}$path');
+      return await http.patch(
+        url,
+        headers: await _headers(),
+        body: body != null ? jsonEncode(body) : null,
+      );
+    });
+  }
 }

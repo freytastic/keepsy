@@ -63,4 +63,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
   
+  void setProfileName(String name) {
+    _profileName = name;
+    notifyListeners();
+  }
+
+  void setProfileAvatar(String url) {
+    _avatarKey = url;
+    notifyListeners();
+  }
 }

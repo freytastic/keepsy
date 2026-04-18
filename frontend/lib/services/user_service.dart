@@ -15,4 +15,13 @@ class UserService {
       return null;
     }
   }
+
+  Future<bool> updateMe(Map<String, dynamic> data) async {
+    try {
+      final response = await _client.patch('/users/me', body: data);
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 }

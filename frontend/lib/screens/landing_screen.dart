@@ -54,8 +54,8 @@ class _LandingPageState extends State<LandingPage> {
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 250),
-        pageBuilder: (_, __, ___) => destination,
-        transitionsBuilder: (_, a, __, child) => FadeTransition(
+        pageBuilder: (_, _, _) => destination,
+        transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
           child: child,
         ),

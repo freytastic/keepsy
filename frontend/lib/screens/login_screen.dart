@@ -42,8 +42,8 @@ class _LoginScreenState extends State<LoginScreen>
     Navigator.of(context).pushAndRemoveUntil(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 220),
-        pageBuilder: (_, __, ___) => const MainShell(),
-        transitionsBuilder: (_, a, __, child) => FadeTransition(
+        pageBuilder: (_, _, _) => const MainShell(),
+        transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOutQuad),
           child: child,
         ),
