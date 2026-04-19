@@ -54,9 +54,9 @@ class K {
       dark ? Colors.white.withOpacity(0.28) : Colors.black.withOpacity(0.50);
 
   // surfaces
-  static Color bg(bool dark) => dark ? black : const Color(0xFFFAFAFA);
+  static Color bg(bool dark) => dark ? black : Colors.white;
   static Color cardCol(bool dark) =>
-      dark ? const Color(0xFF2A2A2E) : Colors.white;
+      dark ? const Color(0xFF2A2A2E) : const Color(0xFFF4F4F6);
   static Color borderCol(bool dark) =>
       dark ? border : Colors.black.withOpacity(0.08);
   static Color glassCol(bool dark) =>
