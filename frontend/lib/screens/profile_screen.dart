@@ -55,7 +55,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         children: [
           GlowOrbs(
               colors: [accent.withOpacity(0.6), const Color(0xFF818cf8)],
-              opacity: 0.10),
+              opacity: dark ? 0.10 : 0.85),
           SafeArea(
             bottom: false,
             child: SingleChildScrollView(

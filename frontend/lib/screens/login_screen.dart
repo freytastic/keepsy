@@ -37,13 +37,13 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  // navigate to MainShell – wipe entire nav stack
+  // ── Navigate to MainShell – wipe entire nav stack ─────────────────────────
   void _goHome() {
     Navigator.of(context).pushAndRemoveUntil(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 220),
-        pageBuilder: (_, _, _) => const MainShell(),
-        transitionsBuilder: (_, a, _, child) => FadeTransition(
+        pageBuilder: (_, __, ___) => const MainShell(),
+        transitionsBuilder: (_, a, __, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOutQuad),
           child: child,
         ),
@@ -189,7 +189,7 @@ class _LoginScreenState extends State<LoginScreen>
                 accent,
                 const Color(0xFFf093fb),
               ],
-              opacity: 0.30,
+              opacity: dark ? 0.30 : 0.85,
             ),
           ),
         ),
@@ -228,10 +228,10 @@ class _LoginScreenState extends State<LoginScreen>
                                 offset: const Offset(0, 8)),
                           ],
                         ),
-                        child: const Center(
+                        child: Center(
                           child: Text('k',
                               style: TextStyle(
-                                  color: Colors.white,
+                                  color: K.t1(dark),
                                   fontSize: 36,
                                   fontWeight: FontWeight.w800,
                                   fontStyle: FontStyle.italic)),
@@ -243,25 +243,25 @@ class _LoginScreenState extends State<LoginScreen>
                       // wordmark
                       ShaderMask(
                         shaderCallback: (b) => LinearGradient(
-                          colors: [Colors.white, accent],
+                          colors: [K.t1(dark), accent],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ).createShader(b),
-                        child: const Text(
+                        child: Text(
                           'keepsy',
                           style: TextStyle(
                               fontSize: 48,
                               fontWeight: FontWeight.w800,
-                              color: Colors.white,
+                              color: K.t1(dark),
                               letterSpacing: -2),
                         ),
                       ),
 
                       const SizedBox(height: 10),
-                      const Text(
+                      Text(
                         'Tagline for the app.',
                         style: TextStyle(
-                            color: Color(0x99FFFFFF),
+                            color: K.t2(dark),
                             fontSize: 15,
                             fontWeight: FontWeight.w400),
                       ),
@@ -315,17 +315,17 @@ class _LoginScreenState extends State<LoginScreen>
                         Expanded(
                             child: Container(
                                 height: 0.5,
-                                color: Colors.white.withOpacity(0.12))),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
+                                color: K.borderCol(dark))),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Text('or continue with',
                               style: TextStyle(
-                                  color: Color(0x55FFFFFF), fontSize: 13)),
+                                  color: K.t3(dark), fontSize: 13)),
                         ),
                         Expanded(
                             child: Container(
                                 height: 0.5,
-                                color: Colors.white.withOpacity(0.12))),
+                                color: K.borderCol(dark))),
                       ]),
 
                       const SizedBox(height: 24),
@@ -337,10 +337,10 @@ class _LoginScreenState extends State<LoginScreen>
                           child: Container(
                             height: 52,
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.08),
+                              color: K.glassCol(dark),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                  color: Colors.white.withOpacity(0.12)),
+                                  color: K.borderCol(dark)),
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -348,9 +348,9 @@ class _LoginScreenState extends State<LoginScreen>
                                 Image.asset('lib/assets/Google_logo.svg',
                                     height: 24),
                                 const SizedBox(width: 12),
-                                const Text('Continue with Google',
+                                Text('Continue with Google',
                                     style: TextStyle(
-                                        color: Colors.white,
+                                        color: K.t1(dark),
                                         fontSize: 15,
                                         fontWeight: FontWeight.w500)),
                               ],
@@ -365,7 +365,7 @@ class _LoginScreenState extends State<LoginScreen>
                         'By continuing, you agree to our Terms & Privacy Policy',
                         style: TextStyle(
                             fontSize: 12,
-                            color: Colors.white.withOpacity(0.3)),
+                            color: K.t3(dark)),
                         textAlign: TextAlign.center,
                       ),
 
@@ -382,7 +382,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// Email field
+// email field
 
 class _EmailField extends StatelessWidget {
   final TextEditingController ctrl;
@@ -400,12 +400,13 @@ class _EmailField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = context.watch<AppState>().isDark;
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.07),
+        color: K.glassCol(dark),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.12)),
+        border: Border.all(color: K.borderCol(dark)),
       ),
       child: TextField(
         controller: ctrl,
@@ -413,10 +414,10 @@ class _EmailField extends StatelessWidget {
         keyboardType: TextInputType.emailAddress,
         textInputAction: TextInputAction.done,
         onSubmitted: (_) => onSubmit(),
-        style: const TextStyle(color: Colors.white, fontSize: 16),
+        style: TextStyle(color: K.t1(dark), fontSize: 16),
         decoration: InputDecoration(
           hintText: 'Enter your email',
-          hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+          hintStyle: TextStyle(color: K.t3(dark)),
           border: InputBorder.none,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -427,7 +428,7 @@ class _EmailField extends StatelessWidget {
   }
 }
 
-// OTP row
+// otp row
 
 class _OtpRow extends StatelessWidget {
   final List<TextEditingController> ctrls;
@@ -445,12 +446,13 @@ class _OtpRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = context.watch<AppState>().isDark;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('  Enter the code sent to your email',
             style: TextStyle(
-                color: Colors.white.withOpacity(0.4), fontSize: 12)),
+                color: K.t3(dark), fontSize: 12)),
         const SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -460,9 +462,9 @@ class _OtpRow extends StatelessWidget {
               height: 56,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.07),
+                  color: K.glassCol(dark),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white.withOpacity(0.12)),
+                  border: Border.all(color: K.borderCol(dark)),
                 ),
                 child: TextField(
                   controller: ctrls[i],
@@ -470,8 +472,8 @@ class _OtpRow extends StatelessWidget {
                   maxLength: 1,
                   textAlign: TextAlign.center,
                   keyboardType: TextInputType.number,
-                  style: const TextStyle(
-                      color: Colors.white,
+                  style: TextStyle(
+                      color: K.t1(dark),
                       fontSize: 22,
                       fontWeight: FontWeight.w700),
                   decoration: const InputDecoration(

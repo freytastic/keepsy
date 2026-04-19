@@ -46,17 +46,17 @@ class K {
     return Color(int.parse('FF$h', radix: 16));
   }
 
-  // Text
+  // text
   static Color t1(bool dark) => dark ? Colors.white : const Color(0xFF0D0D0F);
   static Color t2(bool dark) =>
-      dark ? Colors.white.withOpacity(0.55) : Colors.black.withOpacity(0.55);
+      dark ? Colors.white.withOpacity(0.55) : Colors.black.withOpacity(0.70);
   static Color t3(bool dark) =>
-      dark ? Colors.white.withOpacity(0.28) : Colors.black.withOpacity(0.28);
+      dark ? Colors.white.withOpacity(0.28) : Colors.black.withOpacity(0.50);
 
-  // Surfaces
-  static Color bg(bool dark) => dark ? black : const Color(0xFFF5F5F7);
+  // surfaces
+  static Color bg(bool dark) => dark ? black : Colors.white;
   static Color cardCol(bool dark) =>
-      dark ? card : Colors.white;
+      dark ? const Color(0xFF2A2A2E) : const Color(0xFFF4F4F6);
   static Color borderCol(bool dark) =>
       dark ? border : Colors.black.withOpacity(0.08);
   static Color glassCol(bool dark) =>
