@@ -23,7 +23,7 @@ class HomeScreen extends StatelessWidget {
         children: [
           GlowOrbs(
             colors: [accent.withOpacity(0.6), const Color(0xFF6366f1)],
-            opacity: 0.12,
+            opacity: dark ? 0.12 : 0.35,
           ),
           SafeArea(
             bottom: false,
