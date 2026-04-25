@@ -58,6 +58,7 @@ func main() {
 	// initialize repos
 	otpRepo := repository.NewOTPRepository(rdb)
 	userRepo := repository.NewUserRepository(dbPool)
+	prekeyRepo := repository.NewPrekeyRepository(dbPool)
 	sessionRepo := repository.NewSessionRepository(dbPool)
 	albumRepo := repository.NewAlbumRepository(dbPool)
 	mediaRepo := repository.NewMediaRepository(dbPool)
@@ -80,7 +81,7 @@ func main() {
 	// initialize services
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
-	userService := service.NewUserService(userRepo)
+	userService := service.NewUserService(userRepo, prekeyRepo)
 	albumService := service.NewAlbumService(albumRepo)
 	mediaService := service.NewMediaService(mediaRepo, albumRepo, s3Client)
 	inviteService := service.NewInviteService(inviteRepo, albumRepo)
@@ -111,6 +112,9 @@ func main() {
 
 	authenticated.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
 	authenticated.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
+	authenticated.HandleFunc("/users/{id}/prekey-bundle", userHandler.GetPrekeyBundle).Methods(http.MethodGet)
+	authenticated.HandleFunc("/users/me/opks", userHandler.ReplenishOPKs).Methods(http.MethodPost)
+	authenticated.HandleFunc("/users/me/opks/count", userHandler.GetOPKCount).Methods(http.MethodGet)
 
 	// album routes
 	authenticated.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
@@ -118,10 +122,13 @@ func main() {
 	authenticated.HandleFunc("/albums/{id}", albumHandler.GetAlbum).Methods(http.MethodGet)
 	authenticated.HandleFunc("/albums/{id}", albumHandler.UpdateAlbum).Methods(http.MethodPatch)
 	authenticated.HandleFunc("/albums/{id}", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
+	authenticated.HandleFunc("/albums/{id}/rotate-epoch", albumHandler.RotateAlbumEpoch).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/members", albumHandler.AddMember).Methods(http.MethodPost)
 
 	// invite routes
 	authenticated.HandleFunc("/albums/{id}/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)
+	authenticated.HandleFunc("/albums/{id}/invite-blob", inviteHandler.CreateInviteBlob).Methods(http.MethodPost)
+	authenticated.HandleFunc("/albums/{id}/invite-blob", inviteHandler.GetInviteBlob).Methods(http.MethodGet)
 	authenticated.HandleFunc("/invite/{code}/join", inviteHandler.JoinAlbum).Methods(http.MethodPost)
 
 	// media routes

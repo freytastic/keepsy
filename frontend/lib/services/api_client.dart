@@ -35,7 +35,7 @@ class ApiClient {
     if (refreshToken == null) return false;
 
     try {
-      final url = Uri.parse('${K.baseURL}/auth/refresh');
+      final url = Uri.parse('${AppConstants.baseURL}/auth/refresh');
       final res = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -86,14 +86,14 @@ class ApiClient {
   // public API 
   Future<http.Response> get(String path) async {
     return _sendWithRetry(() async {
-      final url = Uri.parse('${K.baseURL}$path');
+      final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.get(url, headers: await _headers());
     });
   }
 
   Future<http.Response> post(String path, {Map<String, dynamic>? body}) async {
     return _sendWithRetry(() async {
-      final url = Uri.parse('${K.baseURL}$path');
+      final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.post(
         url,
         headers: await _headers(),
@@ -104,7 +104,7 @@ class ApiClient {
 
   Future<http.Response> put(String path, {Map<String, dynamic>? body}) async {
     return _sendWithRetry(() async {
-      final url = Uri.parse('${K.baseURL}$path');
+      final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.put(
         url,
         headers: await _headers(),
@@ -115,14 +115,14 @@ class ApiClient {
 
   Future<http.Response> delete(String path) async {
     return _sendWithRetry(() async {
-      final url = Uri.parse('${K.baseURL}$path');
+      final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.delete(url, headers: await _headers());
     });
   }
 
   Future<http.Response> patch(String path, {Map<String, dynamic>? body}) async {
     return _sendWithRetry(() async {
-      final url = Uri.parse('${K.baseURL}$path');
+      final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.patch(
         url,
         headers: await _headers(),

@@ -99,3 +99,63 @@ func (h *InviteHandler) JoinAlbum(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *InviteHandler) CreateInviteBlob(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.MustGetUserID(w, r)
+	if !ok {
+		return
+	}
+
+	vars := mux.Vars(r)
+	albumID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Payload   string    `json:"payload"`
+		Signature string    `json:"signature"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	blob, err := h.inviteService.CreateInviteBlob(r.Context(), albumID, userID, req.Payload, req.Signature, req.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, service.ErrUnauthorized) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(blob)
+}
+
+func (h *InviteHandler) GetInviteBlob(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	albumID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		return
+	}
+
+	blob, err := h.inviteService.GetInviteBlob(r.Context(), albumID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if blob == nil {
+		http.Error(w, "Invite blob not found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(blob)
+}

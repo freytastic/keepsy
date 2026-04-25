@@ -15,6 +15,8 @@ type MockInviteStore struct {
 	GetByCodeFunc  func(ctx context.Context, code string) (*model.InviteLink, error)
 	GetPreviewFunc func(ctx context.Context, code string) (*model.InvitePreview, error)
 	JoinAlbumFunc  func(ctx context.Context, albumID, userID uuid.UUID, code string) error
+	CreateBlobFunc func(ctx context.Context, blob *model.InviteBlob) error
+	GetBlobByAlbumIDFunc func(ctx context.Context, albumID uuid.UUID) (*model.InviteBlob, error)
 }
 
 func (m *MockInviteStore) Create(ctx context.Context, i *model.InviteLink) error {
@@ -28,6 +30,18 @@ func (m *MockInviteStore) GetPreview(ctx context.Context, c string) (*model.Invi
 }
 func (m *MockInviteStore) JoinAlbum(ctx context.Context, aid, uid uuid.UUID, c string) error {
 	return m.JoinAlbumFunc(ctx, aid, uid, c)
+}
+func (m *MockInviteStore) CreateBlob(ctx context.Context, b *model.InviteBlob) error {
+	if m.CreateBlobFunc != nil {
+		return m.CreateBlobFunc(ctx, b)
+	}
+	return nil
+}
+func (m *MockInviteStore) GetBlobByAlbumID(ctx context.Context, aid uuid.UUID) (*model.InviteBlob, error) {
+	if m.GetBlobByAlbumIDFunc != nil {
+		return m.GetBlobByAlbumIDFunc(ctx, aid)
+	}
+	return nil, nil
 }
 
 func TestInviteService_CreateInvite(t *testing.T) {
@@ -58,8 +72,8 @@ func TestInviteService_CreateInvite(t *testing.T) {
 				}
 			},
 			checkRes: func(t *testing.T, i *model.InviteLink) {
-				if i.MaxUses == nil || *i.MaxUses != 25 {
-					t.Errorf("Expected default max uses 25, got %v", i.MaxUses)
+				if i.MaxUses == nil || *i.MaxUses != 10 {
+					t.Errorf("Expected default max uses 10, got %v", i.MaxUses)
 				}
 				if i.ExpiresAt == nil || i.ExpiresAt.Before(time.Now().Add(23*time.Hour)) {
 					t.Errorf("Expected default expiry ~24h, got %v", i.ExpiresAt)

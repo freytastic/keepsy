@@ -107,3 +107,40 @@ func (r *InviteRepository) JoinAlbum(ctx context.Context, albumID, userID uuid.U
 
 	return tx.Commit(ctx)
 }
+
+func (r *InviteRepository) CreateBlob(ctx context.Context, blob *model.InviteBlob) error {
+	if blob.ID == uuid.Nil {
+		blob.ID = uuid.New()
+	}
+	query := `
+		INSERT INTO invite_blobs (id, album_id, payload, signature, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		RETURNING created_at
+	`
+	return r.DB.QueryRow(ctx, query,
+		blob.ID, blob.AlbumID, blob.Payload, blob.Signature, blob.ExpiresAt,
+	).Scan(&blob.CreatedAt)
+}
+
+func (r *InviteRepository) GetBlobByAlbumID(ctx context.Context, albumID uuid.UUID) (*model.InviteBlob, error) {
+	var b model.InviteBlob
+	query := `
+		SELECT id, album_id, payload, signature, expires_at, created_at
+		FROM invite_blobs 
+		WHERE album_id = $1 AND expires_at > NOW()
+		ORDER BY created_at DESC LIMIT 1
+	`
+	err := r.DB.QueryRow(ctx, query, albumID).Scan(
+		&b.ID, &b.AlbumID, &b.Payload, &b.Signature, &b.ExpiresAt, &b.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return &b, err
+}
+
+func (r *InviteRepository) DeleteExpiredBlobs(ctx context.Context) error {
+	query := `DELETE FROM invite_blobs WHERE expires_at <= NOW()`
+	_, err := r.DB.Exec(ctx, query)
+	return err
+}

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -11,14 +10,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	ErrDuplicateMedia = errors.New("duplicate media found in this album")
-)
 
 type MediaStore interface {
 	Create(ctx context.Context, media *model.Media) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Media, error)
-	GetByHash(ctx context.Context, albumID uuid.UUID, hash string) (*model.Media, error)
 	ListByAlbum(ctx context.Context, albumID uuid.UUID, limit, offset int) ([]model.Media, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -51,7 +46,6 @@ type UploadRequest struct {
 	ContentType string
 	FileSize    int64
 	MediaType   string // "photo" || "video"
-	ContentHash string
 }
 
 // RequestUploadURL generates a presigned URL and prepares the DB record
@@ -60,14 +54,6 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, req UploadRequest) 
 	_, err := s.albumRepo.GetMember(ctx, req.AlbumID, req.UploaderID)
 	if err != nil {
 		return "", nil, ErrUnauthorized
-	}
-
-	// check if hash exists in this album
-	if req.ContentHash != "" {
-		existing, err := s.mediaRepo.GetByHash(ctx, req.AlbumID, req.ContentHash)
-		if err == nil && existing != nil {
-			return "", nil, ErrDuplicateMedia
-		}
 	}
 
 	mediaID := uuid.New()
@@ -81,14 +67,13 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, req UploadRequest) 
 	}
 
 	media := &model.Media{
-		ID:          mediaID,
-		AlbumID:     req.AlbumID,
-		UploaderID:  req.UploaderID,
-		StorageKey:  storageKey,
-		MediaType:   req.MediaType,
-		MimeType:    req.ContentType,
-		FileSize:    req.FileSize,
-		ContentHash: &req.ContentHash,
+		ID:         mediaID,
+		AlbumID:    req.AlbumID,
+		UploaderID: req.UploaderID,
+		StorageKey: storageKey,
+		MediaType:  req.MediaType,
+		MimeType:   req.ContentType,
+		FileSize:   req.FileSize,
 	}
 
 	return uploadURL, media, nil
@@ -140,13 +125,13 @@ func (s *MediaService) DeleteMedia(ctx context.Context, mediaID, userID uuid.UUI
 		return err
 	}
 
-	//uploader OR album owner/admin can delete
+	//uploader OR album owner/co-owner can delete
 	member, err := s.albumRepo.GetMember(ctx, media.AlbumID, userID)
 	if err != nil {
 		return ErrUnauthorized
 	}
 
-	if media.UploaderID != userID && member.Role != "owner" && member.Role != "admin" {
+	if media.UploaderID != userID && member.Role != "owner" && member.Role != "co-owner" {
 		return ErrUnauthorized
 	}
 

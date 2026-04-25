@@ -35,15 +35,15 @@ func (r *AlbumRepository) CreateWithMember(ctx context.Context, album *model.Alb
 	if album.ID == uuid.Nil {
 		album.ID = uuid.New()
 	}
-	query := `INSERT INTO albums (id, name, description, creator_id, widget_config, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+	query := `INSERT INTO albums (id, name, description, creator_id, widget_config, current_epoch, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
 		RETURNING created_at, updated_at`
-	err = tx.QueryRow(ctx, query, album.ID, album.Name, album.Description, album.CreatorID, album.WidgetConfig).Scan(&album.CreatedAt, &album.UpdatedAt)
+	err = tx.QueryRow(ctx, query, album.ID, album.Name, album.Description, album.CreatorID, album.WidgetConfig, album.CurrentEpoch).Scan(&album.CreatedAt, &album.UpdatedAt)
 	if err != nil {
 		return err
 	}
 
-	// addd the creator as the 'owner'
+	// add the creator as the 'owner'
 	memberQuery := `INSERT INTO album_members (album_id, user_id, role, joined_at)
 		VALUES ($1, $2, $3, NOW())`
 	_, err = tx.Exec(ctx, memberQuery, album.ID, album.CreatorID, "owner")
@@ -56,9 +56,9 @@ func (r *AlbumRepository) CreateWithMember(ctx context.Context, album *model.Alb
 
 func (r *AlbumRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Album, error) {
 	var album model.Album
-	query := `SELECT id, name, description, cover_media_id, creator_id, widget_config, created_at, updated_at FROM albums WHERE id = $1`
+	query := `SELECT id, name, description, cover_media_id, creator_id, widget_config, current_epoch, created_at, updated_at FROM albums WHERE id = $1`
 	err := r.DB.QueryRow(ctx, query, id).Scan(
-		&album.ID, &album.Name, &album.Description, &album.CoverMediaID, &album.CreatorID, &album.WidgetConfig, &album.CreatedAt, &album.UpdatedAt,
+		&album.ID, &album.Name, &album.Description, &album.CoverMediaID, &album.CreatorID, &album.WidgetConfig, &album.CurrentEpoch, &album.CreatedAt, &album.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrAlbumNotFound
@@ -71,7 +71,7 @@ func (r *AlbumRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Alb
 
 func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error) {
 	query := `
-		SELECT a.id, a.name, a.description, a.cover_media_id, a.creator_id, a.widget_config, a.created_at, a.updated_at, am.role
+		SELECT a.id, a.name, a.description, a.cover_media_id, a.creator_id, a.widget_config, a.current_epoch, a.created_at, a.updated_at, am.role
 		FROM albums a
 		JOIN album_members am ON a.id = am.album_id
 		WHERE am.user_id = $1
@@ -87,7 +87,7 @@ func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]
 	for rows.Next() {
 		var a model.AlbumWithMemberInfo
 		err := rows.Scan(
-			&a.ID, &a.Name, &a.Description, &a.CoverMediaID, &a.CreatorID, &a.WidgetConfig, &a.CreatedAt, &a.UpdatedAt, &a.UserRole,
+			&a.ID, &a.Name, &a.Description, &a.CoverMediaID, &a.CreatorID, &a.WidgetConfig, &a.CurrentEpoch, &a.CreatedAt, &a.UpdatedAt, &a.UserRole,
 		)
 		if err != nil {
 			return nil, err
@@ -111,8 +111,8 @@ func (r *AlbumRepository) GetMember(ctx context.Context, albumID, userID uuid.UU
 }
 
 func (r *AlbumRepository) Update(ctx context.Context, album *model.Album) error {
-	query := `UPDATE albums SET name = $1, description = $2, widget_config = $3, updated_at = NOW() WHERE id = $4`
-	_, err := r.DB.Exec(ctx, query, album.Name, album.Description, album.WidgetConfig, album.ID)
+	query := `UPDATE albums SET name = $1, description = $2, widget_config = $3, current_epoch = $4, updated_at = NOW() WHERE id = $5`
+	_, err := r.DB.Exec(ctx, query, album.Name, album.Description, album.WidgetConfig, album.CurrentEpoch, album.ID)
 	return err
 }
 

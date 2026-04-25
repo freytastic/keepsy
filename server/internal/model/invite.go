@@ -24,3 +24,12 @@ type InvitePreview struct {
 	CreatorName string `json:"creator_name"`
 	MemberCount int    `json:"member_count"`
 }
+
+type InviteBlob struct {
+	ID        uuid.UUID `json:"id" db:"id"`
+	AlbumID   uuid.UUID `json:"album_id" db:"album_id"`
+	Payload   string    `json:"payload" db:"payload"`
+	Signature string    `json:"signature" db:"signature"`
+	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+}

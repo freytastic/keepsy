@@ -190,3 +190,29 @@ func (h *AlbumHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 }
+
+func (h *AlbumHandler) RotateAlbumEpoch(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.MustGetUserID(w, r)
+	if !ok {
+		return
+	}
+
+	vars := mux.Vars(r)
+	albumID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		return
+	}
+
+	newEpoch, err := h.albumService.RotateAlbumEpoch(r.Context(), albumID, userID)
+	if err != nil {
+		if err == service.ErrUnauthorized {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]int{"current_epoch": newEpoch})
+}

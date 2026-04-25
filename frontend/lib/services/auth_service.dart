@@ -9,7 +9,7 @@ class AuthService {
   // request OTP
   Future<bool> requestOtp(String email) async {
     try {
-      final url = Uri.parse('${K.baseURL}/auth/otp/request');
+      final url = Uri.parse('${AppConstants.baseURL}/auth/otp/request');
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -25,7 +25,7 @@ class AuthService {
   /// Returns `true` on success (token saved), `false` otherwise.
   Future<bool> verifyOtp(String email, String code) async {
     try {
-      final url = Uri.parse('${K.baseURL}/auth/otp/verify');
+      final url = Uri.parse('${AppConstants.baseURL}/auth/otp/verify');
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},

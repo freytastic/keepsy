@@ -14,7 +14,6 @@ import (
 type MockMediaStore struct {
 	CreateFunc      func(ctx context.Context, media *model.Media) error
 	GetByIDFunc     func(ctx context.Context, id uuid.UUID) (*model.Media, error)
-	GetByHashFunc   func(ctx context.Context, albumID uuid.UUID, hash string) (*model.Media, error)
 	ListByAlbumFunc func(ctx context.Context, albumID uuid.UUID, limit, offset int) ([]model.Media, error)
 	DeleteFunc      func(ctx context.Context, id uuid.UUID) error
 }
@@ -24,9 +23,6 @@ func (m *MockMediaStore) Create(ctx context.Context, media *model.Media) error {
 }
 func (m *MockMediaStore) GetByID(ctx context.Context, id uuid.UUID) (*model.Media, error) {
 	return m.GetByIDFunc(ctx, id)
-}
-func (m *MockMediaStore) GetByHash(ctx context.Context, aid uuid.UUID, h string) (*model.Media, error) {
-	return m.GetByHashFunc(ctx, aid, h)
 }
 func (m *MockMediaStore) ListByAlbum(ctx context.Context, aid uuid.UUID, l, o int) ([]model.Media, error) {
 	return m.ListByAlbumFunc(ctx, aid, l, o)
@@ -71,7 +67,6 @@ func TestMediaService_RequestUploadURL(t *testing.T) {
 				UploaderID:  userID,
 				FileName:    "test.jpg",
 				ContentType: "image/jpeg",
-				ContentHash: "hash123",
 			},
 			mockAlbum: func() *MockAlbumStore {
 				return &MockAlbumStore{
@@ -81,11 +76,7 @@ func TestMediaService_RequestUploadURL(t *testing.T) {
 				}
 			},
 			mockMedia: func() *MockMediaStore {
-				return &MockMediaStore{
-					GetByHashFunc: func(ctx context.Context, aid uuid.UUID, h string) (*model.Media, error) {
-						return nil, nil
-					},
-				}
+				return &MockMediaStore{}
 			},
 			mockFile: func() *MockFileStore {
 				return &MockFileStore{
@@ -112,30 +103,6 @@ func TestMediaService_RequestUploadURL(t *testing.T) {
 			mockMedia: func() *MockMediaStore { return &MockMediaStore{} },
 			mockFile:  func() *MockFileStore { return &MockFileStore{} },
 			wantErr:   ErrUnauthorized,
-		},
-		{
-			name: "Failure: Duplicate Hash",
-			req: UploadRequest{
-				AlbumID:     albumID,
-				UploaderID:  userID,
-				ContentHash: "exists",
-			},
-			mockAlbum: func() *MockAlbumStore {
-				return &MockAlbumStore{
-					GetMemberFunc: func(ctx context.Context, aid, uid uuid.UUID) (*model.AlbumMember, error) {
-						return &model.AlbumMember{AlbumID: aid, UserID: uid}, nil
-					},
-				}
-			},
-			mockMedia: func() *MockMediaStore {
-				return &MockMediaStore{
-					GetByHashFunc: func(ctx context.Context, aid uuid.UUID, h string) (*model.Media, error) {
-						return &model.Media{ID: uuid.New()}, nil
-					},
-				}
-			},
-			mockFile: func() *MockFileStore { return &MockFileStore{} },
-			wantErr:  ErrDuplicateMedia,
 		},
 	}
 
@@ -304,7 +271,7 @@ func TestMediaService_DeleteMedia(t *testing.T) {
 			mockAlbum: func() *MockAlbumStore {
 				return &MockAlbumStore{
 					GetMemberFunc: func(ctx context.Context, aid, uid uuid.UUID) (*model.AlbumMember, error) {
-						return &model.AlbumMember{Role: "admin"}, nil
+						return &model.AlbumMember{Role: "co-owner"}, nil
 					},
 				}
 			},
