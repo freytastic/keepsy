@@ -39,7 +39,6 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 		ContentType string `json:"content_type"`
 		FileSize    int64  `json:"file_size"`
 		MediaType   string `json:"media_type"`
-		ContentHash string `json:"content_hash"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -54,15 +53,9 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 		ContentType: req.ContentType,
 		FileSize:    req.FileSize,
 		MediaType:   req.MediaType,
-		ContentHash: req.ContentHash,
 	})
 
 	if err != nil {
-		if err == service.ErrDuplicateMedia {
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Duplicate pic found"})
-			return
-		}
 		if err == service.ErrUnauthorized {
 			http.Error(w, "Unauthorized", http.StatusForbidden)
 			return
