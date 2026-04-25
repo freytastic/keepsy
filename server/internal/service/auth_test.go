@@ -40,11 +40,25 @@ func (m *MockUserStore) GetByEmail(ctx context.Context, e string) (*model.User, 
 func (m *MockUserStore) Create(ctx context.Context, u *model.User) error { return m.CreateFunc(ctx, u) }
 
 type MockSessionStore struct {
-	CreateFunc func(ctx context.Context, session *model.Session) error
+	CreateFunc        func(ctx context.Context, session *model.Session) error
+	GetByTokenFunc    func(ctx context.Context, token string) (*model.Session, error)
+	DeleteByTokenFunc func(ctx context.Context, token string) error
 }
 
 func (m *MockSessionStore) Create(ctx context.Context, s *model.Session) error {
 	return m.CreateFunc(ctx, s)
+}
+func (m *MockSessionStore) GetByToken(ctx context.Context, token string) (*model.Session, error) {
+	if m.GetByTokenFunc != nil {
+		return m.GetByTokenFunc(ctx, token)
+	}
+	return nil, errors.New("not implemented")
+}
+func (m *MockSessionStore) DeleteByToken(ctx context.Context, token string) error {
+	if m.DeleteByTokenFunc != nil {
+		return m.DeleteByTokenFunc(ctx, token)
+	}
+	return nil
 }
 
 type MockEmailService struct {

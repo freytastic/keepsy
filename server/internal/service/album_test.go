@@ -171,10 +171,10 @@ func TestAlbumService_AddMember(t *testing.T) {
 			mock: func() *MockAlbumStore {
 				return &MockAlbumStore{
 					GetMemberFunc: func(ctx context.Context, aid, uid uuid.UUID) (*model.AlbumMember, error) {
-						return &model.AlbumMember{Role: "member"}, nil
+						return &model.AlbumMember{Role: "co-owner"}, nil
 					},
 					CountMembersFunc: func(ctx context.Context, aid uuid.UUID) (int, error) {
-						return 10, nil
+						return 5, nil
 					},
 					AddMemberFunc: func(ctx context.Context, aid, uid uuid.UUID, role string) error {
 						return nil
@@ -188,7 +188,7 @@ func TestAlbumService_AddMember(t *testing.T) {
 			mock: func() *MockAlbumStore {
 				return &MockAlbumStore{
 					GetMemberFunc: func(ctx context.Context, aid, uid uuid.UUID) (*model.AlbumMember, error) {
-						return &model.AlbumMember{Role: "member"}, nil
+						return &model.AlbumMember{Role: "owner"}, nil
 					},
 					CountMembersFunc: func(ctx context.Context, aid uuid.UUID) (int, error) {
 						return MaxAlbumMembers, nil

@@ -14,7 +14,7 @@ var (
 	ErrAlbumFull    = errors.New("album has reached the maximum number of members")
 )
 
-const MaxAlbumMembers = 100 //for now lets say 100
+const MaxAlbumMembers = 10 // for now lets say 10
 
 type AlbumStore interface {
 	CreateWithMember(ctx context.Context, album *model.Album) error
@@ -106,6 +106,30 @@ func (s *AlbumService) UpdateAlbum(ctx context.Context, albumID, userID uuid.UUI
 	return s.albumRepo.Update(ctx, album)
 }
 
+func (s *AlbumService) RotateAlbumEpoch(ctx context.Context, albumID, userID uuid.UUID) (int, error) {
+	// Only owner or co-owner can rotate epoch
+	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
+	if err != nil {
+		return 0, ErrUnauthorized
+	}
+	if member.Role != "owner" && member.Role != "co-owner" {
+		return 0, ErrUnauthorized
+	}
+
+	album, err := s.albumRepo.GetByID(ctx, albumID)
+	if err != nil {
+		return 0, err
+	}
+
+	album.CurrentEpoch++
+	err = s.albumRepo.Update(ctx, album)
+	if err != nil {
+		return 0, err
+	}
+
+	return album.CurrentEpoch, nil
+}
+
 func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUID) error {
 	//only owner can delete
 	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
@@ -120,9 +144,12 @@ func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUI
 }
 
 func (s *AlbumService) AddMember(ctx context.Context, albumID, requesterID, newUserID uuid.UUID) error {
-	//only existing members can add others (or maybe only owner? letss stick to any member for now)
-	_, err := s.albumRepo.GetMember(ctx, albumID, requesterID)
+	// Only owner or co-owner can add others directly
+	member, err := s.albumRepo.GetMember(ctx, albumID, requesterID)
 	if err != nil {
+		return ErrUnauthorized
+	}
+	if member.Role != "owner" && member.Role != "co-owner" {
 		return ErrUnauthorized
 	}
 

@@ -15,6 +15,8 @@ type InviteStore interface {
 	GetByCode(ctx context.Context, code string) (*model.InviteLink, error)
 	GetPreview(ctx context.Context, code string) (*model.InvitePreview, error)
 	JoinAlbum(ctx context.Context, albumID, userID uuid.UUID, code string) error
+	CreateBlob(ctx context.Context, blob *model.InviteBlob) error
+	GetBlobByAlbumID(ctx context.Context, albumID uuid.UUID) (*model.InviteBlob, error)
 }
 
 type InviteService struct {
@@ -29,6 +31,35 @@ func NewInviteService(inviteRepo InviteStore, albumRepo AlbumStore) *InviteServi
 	}
 }
 
+func (s *InviteService) CreateInviteBlob(ctx context.Context, albumID, userID uuid.UUID, payload, signature string, expiresAt time.Time) (*model.InviteBlob, error) {
+	// Only owner or co-owner can create invite blobs
+	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+	if member.Role != "owner" && member.Role != "co-owner" {
+		return nil, ErrUnauthorized
+	}
+
+	blob := &model.InviteBlob{
+		AlbumID:   albumID,
+		Payload:   payload,
+		Signature: signature,
+		ExpiresAt: expiresAt,
+	}
+
+	err = s.inviteRepo.CreateBlob(ctx, blob)
+	if err != nil {
+		return nil, err
+	}
+
+	return blob, nil
+}
+
+func (s *InviteService) GetInviteBlob(ctx context.Context, albumID uuid.UUID) (*model.InviteBlob, error) {
+	return s.inviteRepo.GetBlobByAlbumID(ctx, albumID)
+}
+
 func (s *InviteService) CreateInvite(ctx context.Context, albumID, userID uuid.UUID, maxUses *int, expiresAt *time.Time) (*model.InviteLink, error) {
 	// must be album member to create invite
 	_, err := s.albumRepo.GetMember(ctx, albumID, userID)
@@ -36,9 +67,9 @@ func (s *InviteService) CreateInvite(ctx context.Context, albumID, userID uuid.U
 		return nil, ErrUnauthorized
 	}
 
-	// one link can add up to 25 users for now
+	// one link can add up to 10 users for now
 	if maxUses == nil {
-		defaultMax := 25
+		defaultMax := 10
 		maxUses = &defaultMax
 	}
 	if expiresAt == nil {
