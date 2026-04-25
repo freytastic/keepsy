@@ -31,17 +31,16 @@ func (r *MediaRepository) Create(ctx context.Context, media *model.Media) error 
 		INSERT INTO media (
 			id, album_id, uploader_id, storage_key, thumb_key,
 			media_type, mime_type, file_size, width, height,
-			duration_ms, taken_at, location_lat, location_lng,
-			content_hash, created_at
+			duration_ms, content_hash, wrapped_dek, epoch_tag,
+			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()
 		) RETURNING created_at
 	`
 	err := r.DB.QueryRow(ctx, query,
 		media.ID, media.AlbumID, media.UploaderID, media.StorageKey, media.ThumbKey,
 		media.MediaType, media.MimeType, media.FileSize, media.Width, media.Height,
-		media.DurationMS, media.TakenAt, media.LocationLat, media.LocationLng,
-		media.ContentHash,
+		media.DurationMS, media.ContentHash, media.WrappedDEK, media.EpochTag,
 	).Scan(&media.CreatedAt)
 
 	return err
@@ -53,15 +52,15 @@ func (r *MediaRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Med
 		SELECT
 			id, album_id, uploader_id, storage_key, thumb_key,
 			media_type, mime_type, file_size, width, height,
-			duration_ms, taken_at, location_lat, location_lng,
-			content_hash, created_at
+			duration_ms, content_hash, wrapped_dek, epoch_tag,
+			created_at
 		FROM media WHERE id = $1
 	`
 	err := r.DB.QueryRow(ctx, query, id).Scan(
 		&m.ID, &m.AlbumID, &m.UploaderID, &m.StorageKey, &m.ThumbKey,
 		&m.MediaType, &m.MimeType, &m.FileSize, &m.Width, &m.Height,
-		&m.DurationMS, &m.TakenAt, &m.LocationLat, &m.LocationLng,
-		&m.ContentHash, &m.CreatedAt,
+		&m.DurationMS, &m.ContentHash, &m.WrappedDEK, &m.EpochTag,
+		&m.CreatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrMediaNotFound
@@ -74,8 +73,8 @@ func (r *MediaRepository) ListByAlbum(ctx context.Context, albumID uuid.UUID, li
 		SELECT
 			id, album_id, uploader_id, storage_key, thumb_key,
 			media_type, mime_type, file_size, width, height,
-			duration_ms, taken_at, location_lat, location_lng,
-			content_hash, created_at
+			duration_ms, content_hash, wrapped_dek, epoch_tag,
+			created_at
 		FROM media
 		WHERE album_id = $1
 		ORDER BY created_at DESC
@@ -93,8 +92,8 @@ func (r *MediaRepository) ListByAlbum(ctx context.Context, albumID uuid.UUID, li
 		err := rows.Scan(
 			&m.ID, &m.AlbumID, &m.UploaderID, &m.StorageKey, &m.ThumbKey,
 			&m.MediaType, &m.MimeType, &m.FileSize, &m.Width, &m.Height,
-			&m.DurationMS, &m.TakenAt, &m.LocationLat, &m.LocationLng,
-			&m.ContentHash, &m.CreatedAt,
+			&m.DurationMS, &m.ContentHash, &m.WrappedDEK, &m.EpochTag,
+			&m.CreatedAt,
 		)
 		if err != nil {
 			return nil, err
@@ -102,29 +101,6 @@ func (r *MediaRepository) ListByAlbum(ctx context.Context, albumID uuid.UUID, li
 		results = append(results, m)
 	}
 	return results, nil
-}
-
-func (r *MediaRepository) GetByHash(ctx context.Context, albumID uuid.UUID, hash string) (*model.Media, error) {
-	var m model.Media
-	query := `
-		SELECT 
-			id, album_id, uploader_id, storage_key, thumb_key, 
-			media_type, mime_type, file_size, width, height, 
-			duration_ms, taken_at, location_lat, location_lng, 
-			content_hash, created_at 
-		FROM media 
-		WHERE album_id = $1 AND content_hash = $2
-	`
-	err := r.DB.QueryRow(ctx, query, albumID, hash).Scan(
-		&m.ID, &m.AlbumID, &m.UploaderID, &m.StorageKey, &m.ThumbKey,
-		&m.MediaType, &m.MimeType, &m.FileSize, &m.Width, &m.Height,
-		&m.DurationMS, &m.TakenAt, &m.LocationLat, &m.LocationLng,
-		&m.ContentHash, &m.CreatedAt,
-	)
-	if err == pgx.ErrNoRows {
-		return nil, ErrMediaNotFound
-	}
-	return &m, err
 }
 
 func (r *MediaRepository) Delete(ctx context.Context, id uuid.UUID) error {

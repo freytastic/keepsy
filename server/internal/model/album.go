@@ -13,6 +13,7 @@ type Album struct {
 	CoverMediaID *uuid.UUID             `json:"cover_media_id,omitempty"`
 	CreatorID    uuid.UUID              `json:"creator_id"`
 	WidgetConfig map[string]interface{} `json:"widget_config"`
+	CurrentEpoch int                    `json:"current_epoch"` // increments on membership changes / every x key rotation
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
 }
@@ -20,7 +21,7 @@ type Album struct {
 type AlbumMember struct {
 	AlbumID  uuid.UUID `json:"album_id"`
 	UserID   uuid.UUID `json:"user_id"`
-	Role     string    `json:"role"` // "owner" or "member"
+	Role     string    `json:"role"` // "owner", "co-owner", or "member"
 	JoinedAt time.Time `json:"joined_at"`
 }
 

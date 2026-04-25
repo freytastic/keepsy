@@ -22,9 +22,10 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	var user model.User
-	query := `SELECT id, email, name, avatar_key, accent_color, theme, created_at, updated_at FROM users WHERE email = $1`
+	query := `SELECT id, email, name, avatar_key, accent_color, theme, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts FROM users WHERE email = $1`
 	err := r.DB.QueryRow(ctx, query, email).Scan(
 		&user.ID, &user.Email, &user.Name, &user.AvatarKey, &user.AccentColor, &user.Theme, &user.CreatedAt, &user.UpdatedAt,
+		&user.IKPub, &user.LKPub, &user.SPKPub, &user.SPKSig, &user.SPKTs,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrUserNotFound
@@ -37,9 +38,10 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.U
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var user model.User
-	query := `SELECT id, email, name, avatar_key, accent_color, theme, created_at, updated_at FROM users WHERE id = $1`
+	query := `SELECT id, email, name, avatar_key, accent_color, theme, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts FROM users WHERE id = $1`
 	err := r.DB.QueryRow(ctx, query, id).Scan(
 		&user.ID, &user.Email, &user.Name, &user.AvatarKey, &user.AccentColor, &user.Theme, &user.CreatedAt, &user.UpdatedAt,
+		&user.IKPub, &user.LKPub, &user.SPKPub, &user.SPKSig, &user.SPKTs,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrUserNotFound
@@ -51,8 +53,21 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User
 }
 
 func (r *UserRepository) Update(ctx context.Context, user *model.User) error {
-	query := `UPDATE users SET name = $1, accent_color = $2, theme = $3, updated_at = NOW() WHERE id = $4`
-	_, err := r.DB.Exec(ctx, query, user.Name, user.AccentColor, user.Theme, user.ID)
+	query := `UPDATE users SET 
+		name = $1, 
+		accent_color = $2, 
+		theme = $3, 
+		ik_pub = $4,
+		lk_pub = $5,
+		spk_pub = $6,
+		spk_sig = $7,
+		spk_ts = $8,
+		updated_at = NOW() 
+	WHERE id = $9`
+	_, err := r.DB.Exec(ctx, query, 
+		user.Name, user.AccentColor, user.Theme, 
+		user.IKPub, user.LKPub, user.SPKPub, user.SPKSig, user.SPKTs,
+		user.ID)
 	return err
 }
 
@@ -60,8 +75,14 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	if user.ID == uuid.Nil {
 		user.ID = uuid.New()
 	}
-	query := `INSERT INTO users (id, email, name, accent_color, theme, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+	query := `INSERT INTO users (
+			id, email, name, accent_color, theme, 
+			ik_pub, lk_pub, spk_pub, spk_sig, spk_ts, 
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		RETURNING created_at, updated_at`
-	return r.DB.QueryRow(ctx, query, user.ID, user.Email, user.Name, user.AccentColor, user.Theme).Scan(&user.CreatedAt, &user.UpdatedAt)
+	return r.DB.QueryRow(ctx, query, 
+		user.ID, user.Email, user.Name, user.AccentColor, user.Theme,
+		user.IKPub, user.LKPub, user.SPKPub, user.SPKSig, user.SPKTs,
+	).Scan(&user.CreatedAt, &user.UpdatedAt)
 }
