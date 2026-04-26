@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/freytastic/keepsy/internal/config"
@@ -141,6 +144,39 @@ func main() {
 		fmt.Fprintf(w, "OK")
 	}).Methods(http.MethodGet)
 
-	fmt.Printf("Server starting on port %s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
+	srv := &http.Server{
+		Addr:           ":" + cfg.Port,
+		Handler:        middleware.CORS(r),
+		ReadTimeout:    5 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	serverErrors := make(chan error, 1)
+
+	go func() {
+		fmt.Printf("Server starting on port %s\n", cfg.Port)
+		serverErrors <- srv.ListenAndServe()
+	}()
+
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErrors:
+		log.Fatalf("Error starting server: %v", err)
+
+	case sig := <-shutdown:
+		fmt.Printf("Start shutdown... Signal: %v\n", sig)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Shutdown failed: %v. Forcing close.", err)
+			srv.Close()
+		}
+		fmt.Println("Server stopped.")
+	}
 }
