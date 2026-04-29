@@ -35,7 +35,7 @@ class _GlowOrbsState extends State<GlowOrbs>
     final size = MediaQuery.of(context).size;
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (_, _) {
+      builder: (context, child) {
         final t = _ctrl.value;
         return Stack(
           children: [
@@ -152,7 +152,7 @@ class _PrimaryButtonState extends State<PrimaryButton>
         duration: const Duration(milliseconds: 120),
         child: AnimatedBuilder(
           animation: _shimmer,
-          builder: (_, _) => Container(
+          builder: (context, child) => Container(
             width: double.infinity,
             height: 56,
             decoration: BoxDecoration(
@@ -273,7 +273,7 @@ class UserAvatar extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => _buildFallback(initials, context),
+          errorBuilder: (ctx, err, stack) => _buildFallback(initials, context),
         ),
       );
     }

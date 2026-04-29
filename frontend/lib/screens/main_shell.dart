@@ -26,8 +26,8 @@ class _MainShellState extends State<MainShell> {
     HapticFeedback.mediumImpact();
     await Navigator.of(context).push(
       PageRouteBuilder(
-        pageBuilder: (_, _, _) => const CreateAlbumScreen(),
-        transitionsBuilder: (_, a, _, child) => SlideTransition(
+        pageBuilder: (_, __, ___) => const CreateAlbumScreen(),
+        transitionsBuilder: (_, a, __, child) => SlideTransition(
           position: Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero)
               .animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
           child: child,
@@ -216,9 +216,8 @@ class _NavBtn extends StatelessWidget {
                           color: const Color(0xFFEF4444),
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: dark
-                                ? const Color(0xFF0D0D0F)
-                                : Colors.white,
+                            color:
+                                dark ? const Color(0xFF0D0D0F) : Colors.white,
                             width: 1.5,
                           ),
                         ),
@@ -263,8 +262,9 @@ class _CreateBtnState extends State<_CreateBtn>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 3))
-      ..repeat();
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 3))
+          ..repeat();
   }
 
   @override
@@ -289,7 +289,7 @@ class _CreateBtnState extends State<_CreateBtn>
           duration: const Duration(milliseconds: 120),
           child: AnimatedBuilder(
             animation: _ctrl,
-            builder: (_, _) => Container(
+            builder: (context, child) => Container(
               width: 56,
               height: 56,
               decoration: BoxDecoration(
@@ -304,7 +304,8 @@ class _CreateBtnState extends State<_CreateBtn>
                   ),
                 ],
               ),
-              child: const Icon(Icons.add_rounded, color: Colors.white, size: 30),
+              child:
+                  const Icon(Icons.add_rounded, color: Colors.white, size: 30),
             ),
           ),
         ),
@@ -312,3 +313,4 @@ class _CreateBtnState extends State<_CreateBtn>
     );
   }
 }
+

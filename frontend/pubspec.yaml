@@ -1,13 +1,12 @@
 name: keepsy
 description: "E2E collaborative album sharing cross-platform mobile app."
 
-publish_to: 'none'
-
+publish_to: "none"
 
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.11.4
+  sdk: ">=3.5.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -20,11 +19,23 @@ dependencies:
   image_picker: ^1.1.2
   shared_preferences: ^2.5.5
 
+  # E2EE dependencies
+  cryptography: ^2.7.0
+  cryptography_flutter: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+  web_socket_channel: ^3.0.1
+  app_links: ^6.3.2
+  uuid: ^4.5.1
+  collection: ^1.18.0
+  image: ^4.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
   flutter_lints: ^6.0.0
+  test: ^1.25.8
+  build_runner: ^2.4.13
 
 flutter:
   uses-material-design: true

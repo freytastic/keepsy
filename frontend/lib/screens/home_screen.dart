@@ -36,10 +36,10 @@ class HomeScreen extends StatelessWidget {
                   child: state.albums.isEmpty
                       ? _Empty(dark: dark, accent: accent)
                       : _BentoGrid(
-                    albums: state.albums,
-                    dark: dark,
-                    accent: accent,
-                  ),
+                          albums: state.albums,
+                          dark: dark,
+                          accent: accent,
+                        ),
                 ),
               ],
             ),
@@ -84,12 +84,12 @@ class _Header extends StatelessWidget {
           GestureDetector(
             onTap: () => Navigator.of(context).push(
               PageRouteBuilder(
-                pageBuilder: (_, _, _) => const ProfileScreen(),
-                transitionsBuilder: (_, a, _, child) => SlideTransition(
-                  position: Tween<Offset>(
-                      begin: const Offset(1, 0), end: Offset.zero)
-                      .animate(CurvedAnimation(
-                      parent: a, curve: Curves.easeOutCubic)),
+                pageBuilder: (_, __, ___) => const ProfileScreen(),
+                transitionsBuilder: (_, a, __, child) => SlideTransition(
+                  position:
+                      Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                          .animate(CurvedAnimation(
+                              parent: a, curve: Curves.easeOutCubic)),
                   child: child,
                 ),
                 transitionDuration: const Duration(milliseconds: 350),
@@ -121,8 +121,8 @@ class _GreetingBar extends StatelessWidget {
     final greeting = hour < 12
         ? 'Good morning'
         : hour < 17
-        ? 'Good afternoon'
-        : 'Good evening';
+            ? 'Good afternoon'
+            : 'Good evening';
     final firstName = state.profileName.split(' ').first;
     return Padding(
       padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
@@ -170,13 +170,14 @@ class _BentoGrid extends StatelessWidget {
         if (context.mounted) context.read<AppState>().setAlbums(newAlbums);
       },
       child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics()),
         slivers: [
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
-                    (_, i) => items[i],
+                (_, i) => items[i],
                 childCount: items.length,
               ),
             ),
@@ -206,8 +207,7 @@ class _BentoGrid extends StatelessWidget {
             height: 280,
             child: Row(
               children: [
-                Expanded(
-                    flex: 3, child: _AlbumCard(album: big, dark: dark)),
+                Expanded(flex: 3, child: _AlbumCard(album: big, dark: dark)),
                 if (sm1 != null) ...[
                   const SizedBox(width: 12),
                   Expanded(
@@ -228,7 +228,11 @@ class _BentoGrid extends StatelessWidget {
             ),
           ),
         ));
-        i += sm2 != null ? 3 : sm1 != null ? 2 : 1;
+        i += sm2 != null
+            ? 3
+            : sm1 != null
+                ? 2
+                : 1;
       } else if (pattern == 1) {
         // Row B: two equal tiles
         final a1 = albums[i];
@@ -277,14 +281,17 @@ class _BentoGrid extends StatelessWidget {
                 ),
                 if (big != null) ...[
                   const SizedBox(width: 12),
-                  Expanded(
-                      flex: 3, child: _AlbumCard(album: big, dark: dark)),
+                  Expanded(flex: 3, child: _AlbumCard(album: big, dark: dark)),
                 ],
               ],
             ),
           ),
         ));
-        i += big != null ? 3 : sm2 != null ? 2 : 1;
+        i += big != null
+            ? 3
+            : sm2 != null
+                ? 2
+                : 1;
       }
 
       rowIdx++;
@@ -320,19 +327,19 @@ class _AlbumCardState extends State<_AlbumCard> {
       onTapUp: (_) {
         setState(() => _pressed = false);
 
-      // this will be used later when the album detail screen is implemented
-      //   Navigator.of(context).push(PageRouteBuilder(
-      //     pageBuilder: (_, __, ___) =>
-      //         AlbumDetailScreen(albumId: widget.album.id),
-      //     transitionsBuilder: (_, a, __, child) => SlideTransition(
-      //       position: Tween<Offset>(
-      //           begin: const Offset(1, 0), end: Offset.zero)
-      //           .animate(
-      //           CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
-      //       child: child,
-      //     ),
-      //     transitionDuration: const Duration(milliseconds: 380),
-      //   ));
+        // this will be used later when the album detail screen is implemented
+        //   Navigator.of(context).push(PageRouteBuilder(
+        //     pageBuilder: (_, __, ___) =>
+        //         AlbumDetailScreen(albumId: widget.album.id),
+        //     transitionsBuilder: (_, a, __, child) => SlideTransition(
+        //       position: Tween<Offset>(
+        //           begin: const Offset(1, 0), end: Offset.zero)
+        //           .animate(
+        //           CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+        //       child: child,
+        //     ),
+        //     transitionDuration: const Duration(milliseconds: 380),
+        //   ));
       },
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
@@ -346,8 +353,8 @@ class _AlbumCardState extends State<_AlbumCard> {
               // Background
               hasPhoto
                   ? Image.network(widget.album.coverPhotoUrl!,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => _Gradient(colors: colors))
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _Gradient(colors: colors))
                   : _Gradient(colors: colors),
 
               // Vignette
@@ -385,8 +392,7 @@ class _AlbumCardState extends State<_AlbumCard> {
                   children: [
                     if (widget.album.collaborators.isNotEmpty) ...[
                       _CollabStack(
-                          collabs:
-                          widget.album.collaborators.take(3).toList()),
+                          collabs: widget.album.collaborators.take(3).toList()),
                       const SizedBox(height: 6),
                     ],
                     Text(
@@ -447,14 +453,14 @@ class _Gradient extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: colors,
-      ),
-    ),
-  );
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: colors,
+          ),
+        ),
+      );
 }
 
 class _CollabStack extends StatelessWidget {
@@ -477,7 +483,7 @@ class _CollabStack extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient:
-                LinearGradient(colors: K.gradColors(c.gradientColors)),
+                    LinearGradient(colors: K.gradColors(c.gradientColors)),
                 border: Border.all(color: Colors.black, width: 1.5),
               ),
               child: Center(
@@ -514,8 +520,8 @@ class _Empty extends StatelessWidget {
               color: accent.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            child: const Center(
-                child: Text('📷', style: TextStyle(fontSize: 40))),
+            child:
+                const Center(child: Text('📷', style: TextStyle(fontSize: 40))),
           ),
           const SizedBox(height: 20),
           Text('No albums yet',

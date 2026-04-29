@@ -10,6 +10,7 @@ server/tmp/
 *.log
 
 .env
+/docs
 
 # frontend
 # Miscellaneous
