@@ -64,8 +64,8 @@ func (r *UserRepository) Update(ctx context.Context, user *model.User) error {
 		spk_ts = $8,
 		updated_at = NOW() 
 	WHERE id = $9`
-	_, err := r.DB.Exec(ctx, query, 
-		user.Name, user.AccentColor, user.Theme, 
+	_, err := r.DB.Exec(ctx, query,
+		user.Name, user.AccentColor, user.Theme,
 		user.IKPub, user.LKPub, user.SPKPub, user.SPKSig, user.SPKTs,
 		user.ID)
 	return err
@@ -81,7 +81,7 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 			created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		RETURNING created_at, updated_at`
-	return r.DB.QueryRow(ctx, query, 
+	return r.DB.QueryRow(ctx, query,
 		user.ID, user.Email, user.Name, user.AccentColor, user.Theme,
 		user.IKPub, user.LKPub, user.SPKPub, user.SPKSig, user.SPKTs,
 	).Scan(&user.CreatedAt, &user.UpdatedAt)

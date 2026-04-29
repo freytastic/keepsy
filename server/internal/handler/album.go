@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/google/uuid"
@@ -31,13 +33,13 @@ func (h *AlbumHandler) CreateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	album, err := h.albumService.CreateAlbum(r.Context(), req.Name, req.Description, userID, req.WidgetConfig)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to create album").WithCause(err))
 		return
 	}
 
@@ -55,17 +57,17 @@ func (h *AlbumHandler) GetAlbum(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
 	album, err := h.albumService.GetAlbum(r.Context(), albumID, userID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.NotMember("not a member of this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to fetch album").WithCause(err))
 		return
 	}
 
@@ -81,7 +83,7 @@ func (h *AlbumHandler) ListAlbums(w http.ResponseWriter, r *http.Request) {
 
 	albums, err := h.albumService.ListUserAlbums(r.Context(), userID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to list albums").WithCause(err))
 		return
 	}
 
@@ -98,7 +100,7 @@ func (h *AlbumHandler) UpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
@@ -109,17 +111,17 @@ func (h *AlbumHandler) UpdateAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	err = h.albumService.UpdateAlbum(r.Context(), albumID, userID, req.Name, req.Description, req.WidgetConfig)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.Forbidden("only album admin can update this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to update album").WithCause(err))
 		return
 	}
 
@@ -135,17 +137,17 @@ func (h *AlbumHandler) DeleteAlbum(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
 	err = h.albumService.DeleteAlbum(r.Context(), albumID, userID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.Forbidden("only album admin can delete this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to delete album").WithCause(err))
 		return
 	}
 
@@ -161,7 +163,7 @@ func (h *AlbumHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
@@ -170,21 +172,21 @@ func (h *AlbumHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	err = h.albumService.AddMember(r.Context(), albumID, userID, req.UserID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.Forbidden("only admin or co-admin can add members"))
 			return
 		}
-		if err == service.ErrAlbumFull {
-			http.Error(w, err.Error(), http.StatusConflict)
+		if errors.Is(err, service.ErrAlbumFull) {
+			apierr.Write(w, r, apierr.AlbumFull(err.Error()))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to add member").WithCause(err))
 		return
 	}
 
@@ -200,17 +202,17 @@ func (h *AlbumHandler) RotateAlbumEpoch(w http.ResponseWriter, r *http.Request) 
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
 	newEpoch, err := h.albumService.RotateAlbumEpoch(r.Context(), albumID, userID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.Forbidden("only admin or co-admin can rotate epoch"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to rotate epoch").WithCause(err))
 		return
 	}
 

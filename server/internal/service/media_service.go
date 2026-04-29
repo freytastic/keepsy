@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
 type MediaStore interface {
 	Create(ctx context.Context, media *model.Media) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Media, error)

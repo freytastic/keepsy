@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/google/uuid"
@@ -26,7 +27,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userService.GetUserByID(r.Context(), userID)
 	if err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		apierr.Write(w, r, apierr.NotFound("user not found").WithCause(err))
 		return
 	}
 
@@ -53,7 +54,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
@@ -62,7 +63,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		req.IKPub, req.LKPub, req.SPKPub, req.SPKSig, req.SPKTs,
 	)
 	if err != nil {
-		http.Error(w, "Failed to update user", http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to update user").WithCause(err))
 		return
 	}
 
@@ -74,13 +75,13 @@ func (h *UserHandler) GetPrekeyBundle(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	targetID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid user id").WithCause(err))
 		return
 	}
 
 	bundle, err := h.userService.GetPrekeyBundle(r.Context(), targetID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to fetch prekey bundle").WithCause(err))
 		return
 	}
 
@@ -99,18 +100,18 @@ func (h *UserHandler) ReplenishOPKs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	if len(req.Keys) == 0 {
-		http.Error(w, "No keys provided", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("no keys provided"))
 		return
 	}
 
 	err := h.userService.ReplenishOPKs(r.Context(), userID, req.Keys)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to replenish OPKs").WithCause(err))
 		return
 	}
 
@@ -125,7 +126,7 @@ func (h *UserHandler) GetOPKCount(w http.ResponseWriter, r *http.Request) {
 
 	count, err := h.userService.GetOPKCount(r.Context(), userID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to count OPKs").WithCause(err))
 		return
 	}
 

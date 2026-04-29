@@ -161,7 +161,7 @@ func (s *AuthService) RefreshSession(ctx context.Context, refreshToken, deviceIn
 
 	// delete old session
 	_ = s.SessionRepo.DeleteByToken(ctx, refreshToken)
-	
+
 	// create new session sliding it by another 30 days
 	newToken, err := generateToken(32)
 	if err != nil {
