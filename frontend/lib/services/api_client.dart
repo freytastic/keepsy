@@ -3,17 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../core/constants.dart';
 import '../services/storage_service.dart';
+import 'api_error.dart';
 
-// attaches jwt to requests and refreshes on 401 and retires request
 class ApiClient {
-  // global navigator key ─ set this in MaterialApp 
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
 
   final StorageService _storage = StorageService();
   static Future<bool>? _refreshFuture;
 
-  // helpers 
   Future<Map<String, String>> _headers() async {
     final token = await _storage.getToken();
     return {
@@ -63,16 +61,12 @@ class ApiClient {
       Future<http.Response> Function() requestAction) async {
     http.Response response = await requestAction();
 
-    // If unauthorized, attempt to pause, refresh the token, and retry
     if (response.statusCode == 401) {
       final refreshSuccess = await _handleRefresh();
 
       if (refreshSuccess) {
-        // Retry the request. When requestAction runs, it will call _headers() 
-        // again and smoothly pick up the new token!
         response = await requestAction();
       } else {
-        // Refresh failed (or expired), force logout
         await _storage.deleteAuth();
         navigatorKey.currentState?.pushNamedAndRemoveUntil(
           '/login',
@@ -80,10 +74,14 @@ class ApiClient {
         );
       }
     }
-    return response;
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response;
+    }
+
+    throw ApiError.fromResponse(response);
   }
 
-  // public API 
   Future<http.Response> get(String path) async {
     return _sendWithRetry(() async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
