@@ -11,11 +11,11 @@ import (
 )
 
 type MockInviteStore struct {
-	CreateFunc     func(ctx context.Context, invite *model.InviteLink) error
-	GetByCodeFunc  func(ctx context.Context, code string) (*model.InviteLink, error)
-	GetPreviewFunc func(ctx context.Context, code string) (*model.InvitePreview, error)
-	JoinAlbumFunc  func(ctx context.Context, albumID, userID uuid.UUID, code string) error
-	CreateBlobFunc func(ctx context.Context, blob *model.InviteBlob) error
+	CreateFunc           func(ctx context.Context, invite *model.InviteLink) error
+	GetByCodeFunc        func(ctx context.Context, code string) (*model.InviteLink, error)
+	GetPreviewFunc       func(ctx context.Context, code string) (*model.InvitePreview, error)
+	JoinAlbumFunc        func(ctx context.Context, albumID, userID uuid.UUID, code string) error
+	CreateBlobFunc       func(ctx context.Context, blob *model.InviteBlob) error
 	GetBlobByAlbumIDFunc func(ctx context.Context, albumID uuid.UUID) (*model.InviteBlob, error)
 }
 

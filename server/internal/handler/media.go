@@ -2,9 +2,11 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/service"
@@ -23,14 +25,14 @@ func NewMediaHandler(mediaService *service.MediaService) *MediaHandler {
 func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apierr.Write(w, r, apierr.Auth("authentication required"))
 		return
 	}
 
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
@@ -42,7 +44,7 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
@@ -56,11 +58,11 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 	})
 
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.NotMember("not a member of this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to request upload url").WithCause(err))
 		return
 	}
 
@@ -73,23 +75,23 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apierr.Write(w, r, apierr.Auth("authentication required"))
 		return
 	}
 
 	var media model.Media
 	if err := json.NewDecoder(r.Body).Decode(&media); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	err := h.mediaService.ConfirmUpload(r.Context(), &media, userID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.NotMember("not a member of this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to confirm upload").WithCause(err))
 		return
 	}
 
@@ -100,14 +102,14 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apierr.Write(w, r, apierr.Auth("authentication required"))
 		return
 	}
 
 	vars := mux.Vars(r)
 	albumID, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid album ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
 
@@ -119,11 +121,11 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 
 	media, err := h.mediaService.ListMedia(r.Context(), albumID, userID, limit, offset)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.NotMember("not a member of this album"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to list media").WithCause(err))
 		return
 	}
 
@@ -139,17 +141,17 @@ func (h *MediaHandler) DeleteMedia(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	mediaID, err := uuid.Parse(vars["mid"])
 	if err != nil {
-		http.Error(w, "Invalid media ID", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid media id").WithCause(err))
 		return
 	}
 
 	err = h.mediaService.DeleteMedia(r.Context(), mediaID, userID)
 	if err != nil {
-		if err == service.ErrUnauthorized {
-			http.Error(w, "Unauthorized", http.StatusForbidden)
+		if errors.Is(err, service.ErrUnauthorized) {
+			apierr.Write(w, r, apierr.Forbidden("only uploader or album admin can delete media"))
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to delete media").WithCause(err))
 		return
 	}
 

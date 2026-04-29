@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/service"
 )
 
@@ -25,23 +26,23 @@ type RequestOTPPayload struct {
 func (h *AuthHandler) RequestOTP(w http.ResponseWriter, r *http.Request) {
 	var payload RequestOTPPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
 	if payload.Email == "" {
-		http.Error(w, "email is required", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("email is required"))
 		return
 	}
 
 	err := h.AuthService.RequestOTP(r.Context(), payload.Email)
 	if err != nil {
 		if errors.Is(err, service.ErrTooManyRequests) {
-			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			apierr.Write(w, r, apierr.RateLimited(err.Error()))
 			return
 		}
-		http.Error(w, "failed to request OTP", http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to request OTP").WithCause(err))
 		return
 	}
 
@@ -58,30 +59,30 @@ type VerifyOTPPayload struct {
 func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	var payload VerifyOTPPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
 	if payload.Email == "" || payload.OTP == "" {
-		http.Error(w, "email and otp are required", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("email and otp are required"))
 		return
 	}
 
 	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidOTP) {
-			http.Error(w, "invalid or expired OTP", http.StatusUnauthorized)
+			apierr.Write(w, r, apierr.Auth("invalid or expired OTP"))
 			return
 		}
-		http.Error(w, "failed to verify OTP", http.StatusInternalServerError)
+		apierr.Write(w, r, apierr.Internal("failed to verify OTP").WithCause(err))
 		return
 	}
 	expiresAt := time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"token":        token,
-		"refreshToken": token, // since token is opaque, it acts as both access and refresh token
+		"refreshToken": token,
 		"expiresAt":    expiresAt,
 	})
 }
@@ -100,18 +101,18 @@ type RefreshResponse struct {
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var payload RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
 
 	if payload.RefreshToken == "" {
-		http.Error(w, "refresh token is required", http.StatusBadRequest)
+		apierr.Write(w, r, apierr.Validation("refresh token is required"))
 		return
 	}
 
 	newToken, newRefreshToken, expiresAt, err := h.AuthService.RefreshSession(r.Context(), payload.RefreshToken, payload.DeviceInfo)
 	if err != nil {
-		http.Error(w, "invalid or expired refresh token", http.StatusUnauthorized)
+		apierr.Write(w, r, apierr.Auth("invalid or expired refresh token").WithCause(err))
 		return
 	}
 
@@ -125,5 +126,3 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
 }
-
-

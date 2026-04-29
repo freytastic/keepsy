@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,16 +26,18 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	cfg := config.Load()
 
-	// connect to postgres
 	dbPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
 	defer dbPool.Close()
 
-	// run migrations which are being stored in the docker volume for now
 	m, err := migrate.New(
 		"file://migrations",
 		cfg.DatabaseURL,
@@ -49,7 +52,6 @@ func main() {
 		}
 	}
 
-	// connect to redis
 	rdb := redis.NewClient(&redis.Options{
 		Addr: cfg.RedisURL,
 	})
@@ -58,7 +60,6 @@ func main() {
 	}
 	defer rdb.Close()
 
-	// initialize repos
 	otpRepo := repository.NewOTPRepository(rdb)
 	userRepo := repository.NewUserRepository(dbPool)
 	prekeyRepo := repository.NewPrekeyRepository(dbPool)
@@ -67,13 +68,11 @@ func main() {
 	mediaRepo := repository.NewMediaRepository(dbPool)
 	inviteRepo := repository.NewInviteRepository(dbPool)
 
-	// initialize storage
 	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
 	if err != nil {
 		log.Fatalf("Unable to initialize S3 client: %v\n", err)
 	}
 
-	// ensure bucket exists (for MinIO/Local dev)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err = s3Client.CreateBucketIfNotExists(ctx)
@@ -81,7 +80,6 @@ func main() {
 		log.Printf("Warning: Could not verify/create bucket: %v", err)
 	}
 
-	// initialize services
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
 	userService := service.NewUserService(userRepo, prekeyRepo)
@@ -89,14 +87,12 @@ func main() {
 	mediaService := service.NewMediaService(mediaRepo, albumRepo, s3Client)
 	inviteService := service.NewInviteService(inviteRepo, albumRepo)
 
-	//initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	albumHandler := handler.NewAlbumHandler(albumService)
 	mediaHandler := handler.NewMediaHandler(mediaService)
 	inviteHandler := handler.NewInviteHandler(inviteService)
 
-	// initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
 
 	r := mux.NewRouter()
@@ -106,10 +102,8 @@ func main() {
 	apiV1.HandleFunc("/auth/otp/verify", authHandler.VerifyOTP).Methods(http.MethodPost)
 	apiV1.HandleFunc("/auth/otp/refresh", authHandler.Refresh).Methods(http.MethodPost)
 
-	// public invite preview
 	apiV1.HandleFunc("/invite/{code}", inviteHandler.GetPreview).Methods(http.MethodGet)
 
-	// authenticated routes
 	authenticated := apiV1.PathPrefix("").Subrouter()
 	authenticated.Use(authMiddleware.Authenticate)
 
@@ -119,7 +113,6 @@ func main() {
 	authenticated.HandleFunc("/users/me/opks", userHandler.ReplenishOPKs).Methods(http.MethodPost)
 	authenticated.HandleFunc("/users/me/opks/count", userHandler.GetOPKCount).Methods(http.MethodGet)
 
-	// album routes
 	authenticated.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums", albumHandler.ListAlbums).Methods(http.MethodGet)
 	authenticated.HandleFunc("/albums/{id}", albumHandler.GetAlbum).Methods(http.MethodGet)
@@ -128,13 +121,11 @@ func main() {
 	authenticated.HandleFunc("/albums/{id}/rotate-epoch", albumHandler.RotateAlbumEpoch).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/members", albumHandler.AddMember).Methods(http.MethodPost)
 
-	// invite routes
 	authenticated.HandleFunc("/albums/{id}/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/invite-blob", inviteHandler.CreateInviteBlob).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/invite-blob", inviteHandler.GetInviteBlob).Methods(http.MethodGet)
 	authenticated.HandleFunc("/invite/{code}/join", inviteHandler.JoinAlbum).Methods(http.MethodPost)
 
-	// media routes
 	authenticated.HandleFunc("/albums/{id}/media/upload-url", mediaHandler.RequestUploadURL).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/media/confirm", mediaHandler.ConfirmUpload).Methods(http.MethodPost)
 	authenticated.HandleFunc("/albums/{id}/media", mediaHandler.ListMedia).Methods(http.MethodGet)
@@ -144,9 +135,11 @@ func main() {
 		fmt.Fprintf(w, "OK")
 	}).Methods(http.MethodGet)
 
+	rootHandler := middleware.Recover(middleware.RequestID(middleware.CORS(r)))
+
 	srv := &http.Server{
 		Addr:           ":" + cfg.Port,
-		Handler:        middleware.CORS(r),
+		Handler:        rootHandler,
 		ReadTimeout:    5 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		IdleTimeout:    120 * time.Second,
