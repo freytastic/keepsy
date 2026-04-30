@@ -1,6 +1,6 @@
 import 'dart:convert';
-import '../models/album_model.dart';
-import '../services/api_client.dart';
+import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/api/api_client.dart';
 
 class AlbumService {
   final ApiClient _client = ApiClient();

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_state.dart';
-import '../core/app_theme.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
 // ui element: orbs glowing in the background
 class GlowOrbs extends StatefulWidget {
   final List<Color> colors;

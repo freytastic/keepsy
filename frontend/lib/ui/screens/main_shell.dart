@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_state.dart';
-import '../core/app_theme.dart';
-import 'home_screen.dart';
-import 'notifications_screen.dart';
-import 'create_album_screen.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/screens/home_screen.dart';
+import 'package:keepsy/ui/screens/notifications_screen.dart';
+import 'package:keepsy/ui/screens/create_album_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});

@@ -1,12 +1,12 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/album_model.dart';
-import '../providers/app_state.dart';
-import '../services/album_service.dart';
-import '../core/app_theme.dart';
-import '../widgets/shared_widgets.dart';
-import 'profile_screen.dart';
+import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/widgets/shared_widgets.dart';
+import 'package:keepsy/ui/screens/profile_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});

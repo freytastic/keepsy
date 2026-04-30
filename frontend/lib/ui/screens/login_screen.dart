@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_state.dart';
-import '../core/app_theme.dart';
-import '../widgets/shared_widgets.dart';
-import 'main_shell.dart';
-import '../services/auth_service.dart';
-import '../services/user_service.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/widgets/shared_widgets.dart';
+import 'package:keepsy/ui/screens/main_shell.dart';
+import 'package:keepsy/data/api/auth_api.dart';
+import 'package:keepsy/data/api/user_api.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});

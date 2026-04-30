@@ -4,8 +4,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:keepsy/services/api_error.dart';
-import 'package:keepsy/services/error_mapper.dart';
+import 'package:keepsy/data/api/api_error.dart';
+import 'package:keepsy/data/api/error_mapper.dart';
 
 http.Response _resp(int status, String body) => http.Response(body, status,
     headers: {'content-type': 'application/json; charset=utf-8'});

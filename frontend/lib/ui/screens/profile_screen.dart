@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_state.dart';
-import '../core/app_theme.dart';
-import '../services/user_service.dart';
-import '../widgets/shared_widgets.dart';
-import 'login_screen.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/data/api/user_api.dart';
+import 'package:keepsy/ui/widgets/shared_widgets.dart';
+import 'package:keepsy/ui/screens/login_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});

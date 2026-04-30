@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../core/constants.dart';
-import '../services/storage_service.dart';
+import 'package:keepsy/data/constants.dart';
+import 'package:keepsy/data/storage/storage_service.dart';
 
 class AuthService {
   final StorageService _storage = StorageService();
