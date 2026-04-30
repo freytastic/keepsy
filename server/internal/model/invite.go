@@ -6,30 +6,25 @@ import (
 	"github.com/google/uuid"
 )
 
-type InviteLink struct {
-	ID        uuid.UUID  `json:"id" db:"id"`
-	AlbumID   uuid.UUID  `json:"album_id" db:"album_id"`
-	CreatedBy uuid.UUID  `json:"created_by" db:"created_by"`
-	Code      string     `json:"code" db:"code"`
-	MaxUses   *int       `json:"max_uses" db:"max_uses"`
-	UseCount  int        `json:"use_count" db:"use_count"`
-	ExpiresAt *time.Time `json:"expires_at" db:"expires_at"`
-	IsActive  bool       `json:"is_active" db:"is_active"`
-	CreatedAt time.Time  `json:"created_at" db:"created_at"`
-}
-
-// InvitePreview is what we show a guest before they join
-type InvitePreview struct {
-	AlbumName   string `json:"album_name"`
-	CreatorName string `json:"creator_name"`
-	MemberCount int    `json:"member_count"`
-}
-
 type InviteBlob struct {
-	ID        uuid.UUID `json:"id" db:"id"`
-	AlbumID   uuid.UUID `json:"album_id" db:"album_id"`
-	Payload   string    `json:"payload" db:"payload"`
-	Signature string    `json:"signature" db:"signature"`
-	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	ID          uuid.UUID  `json:"id"`
+	AlbumID     uuid.UUID  `json:"album_id"`
+	Payload     []byte     `json:"payload"`
+	SignerToken []byte     `json:"signer_token"`
+	Signature   []byte     `json:"signature"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	ConsumedAt  *time.Time `json:"consumed_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type InviteLink struct {
+	Code      string    `json:"code"`
+	BlobID    uuid.UUID `json:"blob_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type InvitePreview struct {
+	AlbumID   uuid.UUID `json:"album_id"`
+	ExpiresAt time.Time `json:"expires_at"`
 }

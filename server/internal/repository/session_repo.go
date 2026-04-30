@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/google/uuid"
@@ -22,33 +21,32 @@ func (r *SessionRepository) Create(ctx context.Context, session *model.Session) 
 	if session.ID == uuid.Nil {
 		session.ID = uuid.New()
 	}
-	query := `INSERT INTO sessions (id, user_id, token_hash, device_info, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())`
-	_, err := r.DB.Exec(ctx, query, session.ID, session.UserID, session.TokenHash, session.DeviceInfo, session.ExpiresAt)
+	_, err := r.DB.Exec(ctx,
+		`INSERT INTO sessions (id, user_id, token_hash, device_info, expires_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		session.ID, session.UserID, session.TokenHash, session.DeviceInfo, session.ExpiresAt)
 	return err
 }
 
-func HashToken(token string) string {
-	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
+func HashToken(token string) []byte {
+	h := sha256.Sum256([]byte(token))
+	return h[:]
 }
 
 func (r *SessionRepository) GetByToken(ctx context.Context, token string) (*model.Session, error) {
-	var session model.Session
-	tokenHash := HashToken(token)
-	query := `SELECT id, user_id, token_hash, device_info, expires_at, created_at FROM sessions WHERE token_hash = $1`
-	err := r.DB.QueryRow(ctx, query, tokenHash).Scan(
-		&session.ID, &session.UserID, &session.TokenHash, &session.DeviceInfo, &session.ExpiresAt, &session.CreatedAt,
-	)
+	var s model.Session
+	err := r.DB.QueryRow(ctx,
+		`SELECT id, user_id, token_hash, device_info, expires_at, created_at
+		 FROM sessions WHERE token_hash = $1`,
+		HashToken(token),
+	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.DeviceInfo, &s.ExpiresAt, &s.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
-	return &session, nil
+	return &s, nil
 }
 
 func (r *SessionRepository) DeleteByToken(ctx context.Context, token string) error {
-	tokenHash := HashToken(token)
-	query := `DELETE FROM sessions WHERE token_hash = $1`
-	_, err := r.DB.Exec(ctx, query, tokenHash)
+	_, err := r.DB.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, HashToken(token))
 	return err
 }
