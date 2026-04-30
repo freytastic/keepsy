@@ -1,5 +1,5 @@
 import 'dart:convert';
-import '../services/api_client.dart';
+import 'package:keepsy/data/api/api_client.dart';
 
 class MediaService {
   final ApiClient _client = ApiClient();

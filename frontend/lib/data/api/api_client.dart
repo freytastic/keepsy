@@ -1,14 +1,10 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import '../core/constants.dart';
-import '../services/storage_service.dart';
+import 'package:keepsy/data/constants.dart';
+import 'package:keepsy/data/storage/storage_service.dart';
 import 'api_error.dart';
 
 class ApiClient {
-  static final GlobalKey<NavigatorState> navigatorKey =
-      GlobalKey<NavigatorState>();
-
   final StorageService _storage = StorageService();
   static Future<bool>? _refreshFuture;
 
@@ -63,22 +59,16 @@ class ApiClient {
 
     if (response.statusCode == 401) {
       final refreshSuccess = await _handleRefresh();
-
       if (refreshSuccess) {
         response = await requestAction();
       } else {
         await _storage.deleteAuth();
-        navigatorKey.currentState?.pushNamedAndRemoveUntil(
-          '/login',
-          (_) => false,
-        );
       }
     }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return response;
     }
-
     throw ApiError.fromResponse(response);
   }
 

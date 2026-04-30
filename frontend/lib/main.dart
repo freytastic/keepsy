@@ -1,20 +1,22 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'providers/app_state.dart';
-import 'screens/login_screen.dart';
-import 'screens/landing_screen.dart';
-import 'services/api_client.dart';
-import 'services/api_error.dart';
-import 'services/error_mapper.dart';
-import 'core/app_theme.dart';
+import 'package:keepsy/data/api/api_error.dart';
+import 'package:keepsy/data/api/error_mapper.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/screens/landing_screen.dart';
+import 'package:keepsy/ui/screens/login_screen.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+
+// Top-level so the global error boundary in this file can resolve a
+// messenger and route. Lives in ui/ — the data layer must not see it.
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Global error boundary : any uncaught error inside a Flutter widget tree
-  // bubbles up here.. we render a banner via ScaffoldMessenger so the user
-  // never sees a red Flutter error frame in production
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     final err = details.exception;
@@ -45,11 +47,7 @@ void main() async {
 
 void _showApiError(ApiError err) {
   final ux = mapApiError(err);
-  final messengerCtx = ApiClient.navigatorKey.currentContext;
-  if (messengerCtx == null) return;
-  final messenger = ScaffoldMessenger.maybeOf(messengerCtx);
-  if (messenger == null) return;
-  messenger.showSnackBar(
+  rootMessengerKey.currentState?.showSnackBar(
     SnackBar(
       content: Text(ux.userMessage),
       duration: ux.isTransient
@@ -58,9 +56,8 @@ void _showApiError(ApiError err) {
       behavior: SnackBarBehavior.floating,
     ),
   );
-
   if (ux.action == ErrorRecovery.abortAndReauth) {
-    ApiClient.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+    rootNavigatorKey.currentState?.pushNamedAndRemoveUntil(
       '/login',
       (_) => false,
     );
@@ -78,10 +75,8 @@ class KeepsyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Keepsy',
       debugShowCheckedModeBanner: false,
-      navigatorKey: ApiClient.navigatorKey,
-      // ScaffoldMessenger key tied to navigatorKey so _showApiError can
-      // resolve a messenger from anywhere in the app
-      scaffoldMessengerKey: GlobalKey<ScaffoldMessengerState>(),
+      navigatorKey: rootNavigatorKey,
+      scaffoldMessengerKey: rootMessengerKey,
       theme: K.theme(isDark, accent),
       home: const LandingPage(),
       routes: {

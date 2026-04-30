@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/app_state.dart';
-import '../services/storage_service.dart';
-import '../services/user_service.dart';
-import '../services/album_service.dart';
-import 'login_screen.dart';
-import 'main_shell.dart';
+import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/data/api/user_api.dart';
+import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/ui/screens/login_screen.dart';
+import 'package:keepsy/ui/screens/main_shell.dart';
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});

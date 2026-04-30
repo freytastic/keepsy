@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../core/app_theme.dart';
-import '../models/album_model.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/data/models/album_model.dart';
 
 class AppState extends ChangeNotifier {
   // only accent color for now cuz the login screen needs it
