@@ -25,10 +25,7 @@ type UserService struct {
 }
 
 func NewUserService(userRepo UserStore, prekeyRepo PrekeyStore) *UserService {
-	return &UserService{
-		userRepo:   userRepo,
-		prekeyRepo: prekeyRepo,
-	}
+	return &UserService{userRepo: userRepo, prekeyRepo: prekeyRepo}
 }
 
 func (s *UserService) GetUserByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
@@ -40,12 +37,10 @@ func (s *UserService) GetPrekeyBundle(ctx context.Context, userID uuid.UUID) (*m
 	if err != nil {
 		return nil, err
 	}
-
-	if user.IKPub == nil || user.SPKPub == nil {
+	if len(user.IKPub) == 0 || len(user.SPKPub) == 0 {
 		return nil, errors.New("user has not completed E2EE setup")
 	}
 
-	// Atomically fetch and consume one OPK
 	opk, err := s.prekeyRepo.PopRandom(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -53,33 +48,36 @@ func (s *UserService) GetPrekeyBundle(ctx context.Context, userID uuid.UUID) (*m
 
 	bundle := &model.PrekeyBundle{
 		UserID: user.ID,
-		IKPub:  *user.IKPub,
-		LKPub:  *user.LKPub,
-		SPKPub: *user.SPKPub,
-		SPKSig: *user.SPKSig,
-		SPKTs:  *user.SPKTs,
+		IKPub:  user.IKPub,
+		LKPub:  user.LKPub,
+		SPKPub: user.SPKPub,
+		SPKSig: user.SPKSig,
 	}
-
+	if user.SPKTs != nil {
+		bundle.SPKTs = *user.SPKTs
+	}
 	if opk != nil {
 		bundle.OPK = &struct {
-			ID         uuid.UUID `json:"id"`
-			KeyContent string    `json:"key_content"`
-		}{
-			ID:         opk.ID,
-			KeyContent: opk.KeyContent,
-		}
+			Idx    int    `json:"idx"`
+			KeyPub []byte `json:"key_pub"`
+		}{Idx: opk.OPKIdx, KeyPub: opk.KeyPub}
 	}
-
 	return bundle, nil
 }
 
-func (s *UserService) ReplenishOPKs(ctx context.Context, userID uuid.UUID, keys []string) error {
-	opks := make([]model.OneTimePrekey, len(keys))
-	for i, key := range keys {
+type OPKUpload struct {
+	Idx    int
+	KeyPub []byte
+}
+
+func (s *UserService) ReplenishOPKs(ctx context.Context, userID uuid.UUID, uploads []OPKUpload) error {
+	opks := make([]model.OneTimePrekey, len(uploads))
+	for i, u := range uploads {
 		opks[i] = model.OneTimePrekey{
-			ID:         uuid.New(),
-			UserID:     userID,
-			KeyContent: key,
+			ID:     uuid.New(),
+			UserID: userID,
+			OPKIdx: u.Idx,
+			KeyPub: u.KeyPub,
 		}
 	}
 	return s.prekeyRepo.CreateBatch(ctx, opks)
@@ -89,42 +87,48 @@ func (s *UserService) GetOPKCount(ctx context.Context, userID uuid.UUID) (int, e
 	return s.prekeyRepo.Count(ctx, userID)
 }
 
-func (s *UserService) UpdateUser(ctx context.Context, id uuid.UUID, name *string, accentColor string, theme string, ikPub, lkPub, spkPub, spkSig *string, spkTs *int64) (*model.User, error) {
-	user, err := s.userRepo.GetByID(ctx, id)
+type UserUpdate struct {
+	Name        *string
+	AccentColor string
+	Theme       string
+	IKPub       []byte
+	LKPub       []byte
+	SPKPub      []byte
+	SPKSig      []byte
+	SPKTs       *int64
+}
+
+func (s *UserService) UpdateUser(ctx context.Context, id uuid.UUID, in UserUpdate) (*model.User, error) {
+	u, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-
-	if name != nil {
-		user.Name = name
+	if in.Name != nil {
+		u.Name = in.Name
 	}
-	if accentColor != "" {
-		user.AccentColor = accentColor
+	if in.AccentColor != "" {
+		u.AccentColor = in.AccentColor
 	}
-	if theme != "" {
-		user.Theme = theme
+	if in.Theme != "" {
+		u.Theme = in.Theme
 	}
-
-	if ikPub != nil {
-		user.IKPub = ikPub
+	if len(in.IKPub) > 0 {
+		u.IKPub = in.IKPub
 	}
-	if lkPub != nil {
-		user.LKPub = lkPub
+	if len(in.LKPub) > 0 {
+		u.LKPub = in.LKPub
 	}
-	if spkPub != nil {
-		user.SPKPub = spkPub
+	if len(in.SPKPub) > 0 {
+		u.SPKPub = in.SPKPub
 	}
-	if spkSig != nil {
-		user.SPKSig = spkSig
+	if len(in.SPKSig) > 0 {
+		u.SPKSig = in.SPKSig
 	}
-	if spkTs != nil {
-		user.SPKTs = spkTs
+	if in.SPKTs != nil {
+		u.SPKTs = in.SPKTs
 	}
-
-	err = s.userRepo.Update(ctx, user)
-	if err != nil {
+	if err := s.userRepo.Update(ctx, u); err != nil {
 		return nil, err
 	}
-
-	return user, nil
+	return u, nil
 }

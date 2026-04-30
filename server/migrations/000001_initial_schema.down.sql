@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS invite_links;
+DROP TABLE IF EXISTS invite_blobs;
+DROP TABLE IF EXISTS manifests;
+DROP TABLE IF EXISTS media;
+DROP TABLE IF EXISTS album_epoch_wraps;
+DROP TABLE IF EXISTS album_epochs;
+DROP TABLE IF EXISTS album_members;
+DROP TABLE IF EXISTS album_member_identities;
+DROP TABLE IF EXISTS albums;
+DROP TABLE IF EXISTS one_time_prekeys;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;

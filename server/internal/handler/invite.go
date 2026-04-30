@@ -1,163 +1,36 @@
 package handler
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
-	"time"
 
 	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/service"
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 )
 
-type InviteHandler struct {
-	inviteService *service.InviteService
-}
+// Invite handlers are in P0.2 (acc to implementation plan)
+// Existing user X3DH MK delivery lands in P6.1 , new user invite-blob + deep
+// link lands in P6.2, join_complete receipts in P6.3. All against the new
+// invite_blobs / invite_links schema with signer_token + Ed25519 signatures.
 
-func NewInviteHandler(inviteService *service.InviteService) *InviteHandler {
-	return &InviteHandler{inviteService: inviteService}
-}
+type InviteHandler struct{}
+
+func NewInviteHandler() *InviteHandler { return &InviteHandler{} }
 
 func (h *InviteHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.GetUserID(r.Context())
-	if !ok {
-		apierr.Write(w, r, apierr.Auth("authentication required"))
-		return
-	}
-
-	vars := mux.Vars(r)
-	albumID, err := uuid.Parse(vars["id"])
-	if err != nil {
-		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
-		return
-	}
-
-	var req struct {
-		MaxUses   *int       `json:"max_uses"`
-		ExpiresAt *time.Time `json:"expires_at"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// optional body , bad JSON shouldnt kill the call, fall through with zero values
-		_ = err
-	}
-
-	invite, err := h.inviteService.CreateInvite(r.Context(), albumID, userID, req.MaxUses, req.ExpiresAt)
-	if err != nil {
-		if errors.Is(err, service.ErrUnauthorized) {
-			apierr.Write(w, r, apierr.NotMember("not a member of this album"))
-			return
-		}
-		apierr.Write(w, r, apierr.Internal("failed to create invite").WithCause(err))
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(invite)
+	apierr.Write(w, r, apierr.NotImplemented("invite creation lands in P6.2"))
 }
 
 func (h *InviteHandler) GetPreview(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	code := vars["code"]
-
-	preview, err := h.inviteService.GetInvitePreview(r.Context(), code)
-	if err != nil {
-		if errors.Is(err, repository.ErrInviteNotFound) {
-			apierr.Write(w, r, apierr.NotFound("invite not found"))
-			return
-		}
-		apierr.Write(w, r, apierr.Internal("failed to fetch invite preview").WithCause(err))
-		return
-	}
-
-	json.NewEncoder(w).Encode(preview)
+	apierr.Write(w, r, apierr.NotImplemented("invite preview lands in P6.2"))
 }
 
 func (h *InviteHandler) JoinAlbum(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.MustGetUserID(w, r)
-	if !ok {
-		return
-	}
-
-	vars := mux.Vars(r)
-	code := vars["code"]
-
-	err := h.inviteService.JoinByInvite(r.Context(), code, userID)
-	if err != nil {
-		if errors.Is(err, repository.ErrInviteNotFound) {
-			apierr.Write(w, r, apierr.InviteExpired("invite invalid or expired"))
-			return
-		}
-		if errors.Is(err, service.ErrAlbumFull) {
-			apierr.Write(w, r, apierr.AlbumFull(err.Error()))
-			return
-		}
-		apierr.Write(w, r, apierr.Internal("failed to join album").WithCause(err))
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+	apierr.Write(w, r, apierr.NotImplemented("join via invite lands in P6.2"))
 }
 
 func (h *InviteHandler) CreateInviteBlob(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.MustGetUserID(w, r)
-	if !ok {
-		return
-	}
-
-	vars := mux.Vars(r)
-	albumID, err := uuid.Parse(vars["id"])
-	if err != nil {
-		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
-		return
-	}
-
-	var req struct {
-		Payload   string    `json:"payload"`
-		Signature string    `json:"signature"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
-		return
-	}
-
-	blob, err := h.inviteService.CreateInviteBlob(r.Context(), albumID, userID, req.Payload, req.Signature, req.ExpiresAt)
-	if err != nil {
-		if errors.Is(err, service.ErrUnauthorized) {
-			apierr.Write(w, r, apierr.Forbidden("only admin or co-admin can create an invite blob"))
-			return
-		}
-		apierr.Write(w, r, apierr.Internal("failed to create invite blob").WithCause(err))
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(blob)
+	apierr.Write(w, r, apierr.NotImplemented("invite blob creation lands in P6.2"))
 }
 
 func (h *InviteHandler) GetInviteBlob(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	albumID, err := uuid.Parse(vars["id"])
-	if err != nil {
-		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
-		return
-	}
-
-	blob, err := h.inviteService.GetInviteBlob(r.Context(), albumID)
-	if err != nil {
-		apierr.Write(w, r, apierr.Internal("failed to fetch invite blob").WithCause(err))
-		return
-	}
-
-	if blob == nil {
-		apierr.Write(w, r, apierr.NotFound("invite blob not found"))
-		return
-	}
-
-	json.NewEncoder(w).Encode(blob)
+	apierr.Write(w, r, apierr.NotImplemented("invite blob fetch lands in P6.2"))
 }

@@ -17,68 +17,53 @@ func NewPrekeyRepository(db *pgxpool.Pool) *PrekeyRepository {
 	return &PrekeyRepository{DB: db}
 }
 
-// CreateBatch inserts a list of OPKs for a user
 func (r *PrekeyRepository) CreateBatch(ctx context.Context, opks []model.OneTimePrekey) error {
 	if len(opks) == 0 {
 		return nil
 	}
-
 	batch := &pgx.Batch{}
-	query := `INSERT INTO one_time_prekeys (id, user_id, key_content) VALUES ($1, $2, $3)`
-
-	for _, opk := range opks {
-		id := opk.ID
+	for _, o := range opks {
+		id := o.ID
 		if id == uuid.Nil {
 			id = uuid.New()
 		}
-		batch.Queue(query, id, opk.UserID, opk.KeyContent)
+		batch.Queue(
+			`INSERT INTO one_time_prekeys (id, user_id, opk_idx, key_pub)
+			 VALUES ($1, $2, $3, $4)`,
+			id, o.UserID, o.OPKIdx, o.KeyPub)
 	}
-
-	results := r.DB.SendBatch(ctx, batch)
-	return results.Close()
+	return r.DB.SendBatch(ctx, batch).Close()
 }
 
-// PopRandom fetches one random OPK for a user and deletes it atomically
+// PopRandom marks one unconsumed OPK as consumed and returns it. Atomic via
+// FOR UPDATE SKIP LOCKED so concurrent prekey bundle fetches never claim the
+// same row. acc to L3: consumed is a BOOLEAN flag, no consumed_by_user/at metadata
 func (r *PrekeyRepository) PopRandom(ctx context.Context, userID uuid.UUID) (*model.OneTimePrekey, error) {
-	tx, err := r.DB.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	var opk model.OneTimePrekey
-	// Using SKIP LOCKED to handle concurrent requests,
-	// tho serializing on the same userID is more likely
-	query := `
-		DELETE FROM one_time_prekeys
+	var o model.OneTimePrekey
+	err := r.DB.QueryRow(ctx, `
+		UPDATE one_time_prekeys SET consumed = TRUE
 		WHERE id = (
 			SELECT id FROM one_time_prekeys
-			WHERE user_id = $1
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
+			WHERE user_id = $1 AND consumed = FALSE
+			LIMIT 1 FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, key_content, created_at
-	`
-
-	err = tx.QueryRow(ctx, query, userID).Scan(&opk.ID, &opk.UserID, &opk.KeyContent, &opk.CreatedAt)
+		RETURNING id, user_id, opk_idx, key_pub, consumed, created_at`,
+		userID,
+	).Scan(&o.ID, &o.UserID, &o.OPKIdx, &o.KeyPub, &o.Consumed, &o.CreatedAt)
 	if err == pgx.ErrNoRows {
-		return nil, nil // No OPKs left
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &opk, nil
+	return &o, nil
 }
 
 func (r *PrekeyRepository) Count(ctx context.Context, userID uuid.UUID) (int, error) {
-	var count int
-	query := `SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = $1`
-	err := r.DB.QueryRow(ctx, query, userID).Scan(&count)
-	return count, err
+	var c int
+	err := r.DB.QueryRow(ctx,
+		`SELECT COUNT(*) FROM one_time_prekeys WHERE user_id = $1 AND consumed = FALSE`,
+		userID,
+	).Scan(&c)
+	return c, err
 }

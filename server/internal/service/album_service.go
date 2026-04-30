@@ -14,17 +14,17 @@ var (
 	ErrAlbumFull    = errors.New("album has reached the maximum number of members")
 )
 
-const MaxAlbumMembers = 10 // for now lets say 10
+const MaxAlbumMembers = 10
 
 type AlbumStore interface {
-	CreateWithMember(ctx context.Context, album *model.Album) error
+	CreateWithAdmin(ctx context.Context, nameCT []byte, creatorUserID uuid.UUID) (*model.Album, []byte, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Album, error)
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error)
-	GetMember(ctx context.Context, albumID, userID uuid.UUID) (*model.AlbumMember, error)
-	Update(ctx context.Context, album *model.Album) error
+	LookupMember(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error)
+	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error)
+	CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error)
+	UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) error
-	CountMembers(ctx context.Context, albumID uuid.UUID) (int, error)
 }
 
 type AlbumService struct {
@@ -35,29 +35,25 @@ func NewAlbumService(albumRepo AlbumStore) *AlbumService {
 	return &AlbumService{albumRepo: albumRepo}
 }
 
-func (s *AlbumService) CreateAlbum(ctx context.Context, name, description string, creatorID uuid.UUID, widgetConfig map[string]interface{}) (*model.Album, error) {
-	if widgetConfig == nil {
-		widgetConfig = make(map[string]interface{})
-	}
+type CreateAlbumResult struct {
+	Album       *model.Album
+	MemberToken []byte
+	Role        string
+}
 
-	album := &model.Album{
-		Name:         name,
-		Description:  description,
-		CreatorID:    creatorID,
-		WidgetConfig: widgetConfig,
+func (s *AlbumService) CreateAlbum(ctx context.Context, nameCT []byte, creatorID uuid.UUID) (*CreateAlbumResult, error) {
+	if len(nameCT) == 0 {
+		return nil, errors.New("name_ct is required")
 	}
-
-	err := s.albumRepo.CreateWithMember(ctx, album)
+	a, token, err := s.albumRepo.CreateWithAdmin(ctx, nameCT, creatorID)
 	if err != nil {
 		return nil, err
 	}
-
-	return album, nil
+	return &CreateAlbumResult{Album: a, MemberToken: token, Role: "admin"}, nil
 }
 
 func (s *AlbumService) GetAlbum(ctx context.Context, albumID, userID uuid.UUID) (*model.AlbumWithMemberInfo, error) {
-	// check if user is a member
-	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
+	token, role, err := s.albumRepo.LookupMember(ctx, userID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMemberNotFound) {
 			return nil, ErrUnauthorized
@@ -65,102 +61,59 @@ func (s *AlbumService) GetAlbum(ctx context.Context, albumID, userID uuid.UUID) 
 		return nil, err
 	}
 
-	// get album details
-	album, err := s.albumRepo.GetByID(ctx, albumID)
+	a, err := s.albumRepo.GetByID(ctx, albumID)
 	if err != nil {
 		return nil, err
 	}
-
-	return &model.AlbumWithMemberInfo{
-		Album:    *album,
-		UserRole: member.Role,
-	}, nil
+	return &model.AlbumWithMemberInfo{Album: *a, UserRole: role, MemberToken: token}, nil
 }
 
 func (s *AlbumService) ListUserAlbums(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error) {
 	return s.albumRepo.ListForUser(ctx, userID)
 }
 
-func (s *AlbumService) UpdateAlbum(ctx context.Context, albumID, userID uuid.UUID, name, description string, widgetConfig map[string]interface{}) error {
-	//only owner can update
-	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
+func (s *AlbumService) UpdateAlbum(ctx context.Context, albumID, userID uuid.UUID, nameCT []byte) error {
+	_, role, err := s.albumRepo.LookupMember(ctx, userID, albumID)
 	if err != nil {
 		return ErrUnauthorized
 	}
-	if member.Role != "owner" {
+	if role != "admin" && role != "co-admin" {
 		return ErrUnauthorized
 	}
-
-	// get and update
-	album, err := s.albumRepo.GetByID(ctx, albumID)
-	if err != nil {
-		return err
+	if len(nameCT) == 0 {
+		return errors.New("name_ct is required")
 	}
-
-	album.Name = name
-	album.Description = description
-	if widgetConfig != nil {
-		album.WidgetConfig = widgetConfig
-	}
-
-	return s.albumRepo.Update(ctx, album)
-}
-
-func (s *AlbumService) RotateAlbumEpoch(ctx context.Context, albumID, userID uuid.UUID) (int, error) {
-	// Only owner or co-owner can rotate epoch
-	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
-	if err != nil {
-		return 0, ErrUnauthorized
-	}
-	if member.Role != "owner" && member.Role != "co-owner" {
-		return 0, ErrUnauthorized
-	}
-
-	album, err := s.albumRepo.GetByID(ctx, albumID)
-	if err != nil {
-		return 0, err
-	}
-
-	album.CurrentEpoch++
-	err = s.albumRepo.Update(ctx, album)
-	if err != nil {
-		return 0, err
-	}
-
-	return album.CurrentEpoch, nil
+	return s.albumRepo.UpdateName(ctx, albumID, nameCT)
 }
 
 func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUID) error {
-	//only owner can delete
-	member, err := s.albumRepo.GetMember(ctx, albumID, userID)
+	_, role, err := s.albumRepo.LookupMember(ctx, userID, albumID)
 	if err != nil {
 		return ErrUnauthorized
 	}
-	if member.Role != "owner" {
+	if role != "admin" {
 		return ErrUnauthorized
 	}
-
 	return s.albumRepo.Delete(ctx, albumID)
 }
 
-func (s *AlbumService) AddMember(ctx context.Context, albumID, requesterID, newUserID uuid.UUID) error {
-	// Only owner or co-owner can add others directly
-	member, err := s.albumRepo.GetMember(ctx, albumID, requesterID)
+// AddMember (P0.2): adds a new member at role='member' with a fresh
+// member_token. The full E2EE invite flow (X3DH MK delivery) lands in P6.
+// Until then this is admin only and returns the new token to the caller.
+func (s *AlbumService) AddMember(ctx context.Context, albumID, requesterID, newUserID uuid.UUID) ([]byte, error) {
+	_, role, err := s.albumRepo.LookupMember(ctx, requesterID, albumID)
 	if err != nil {
-		return ErrUnauthorized
+		return nil, ErrUnauthorized
 	}
-	if member.Role != "owner" && member.Role != "co-owner" {
-		return ErrUnauthorized
+	if role != "admin" && role != "co-admin" {
+		return nil, ErrUnauthorized
 	}
-
-	// check member limit
-	count, err := s.albumRepo.CountMembers(ctx, albumID)
+	count, err := s.albumRepo.CountActiveMembers(ctx, albumID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if count >= MaxAlbumMembers {
-		return ErrAlbumFull
+		return nil, ErrAlbumFull
 	}
-
 	return s.albumRepo.AddMember(ctx, albumID, newUserID, "member")
 }
