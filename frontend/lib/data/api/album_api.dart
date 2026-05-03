@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/data/api/api_client.dart';
 
 class AlbumService {
@@ -30,19 +31,13 @@ class AlbumService {
     }
   }
 
-  Future<AlbumModel?> createAlbum(
-    String name,
-    String description,
-    Map<String, dynamic>? widgetConfig,
-  ) async {
+  Future<AlbumModel?> createAlbum(String name) async {
     try {
+      // todo (p1): replace with real AES-GCM encrypted name_ct
+      final nameCt = base64.encode(utf8.encode(name));
       final response = await _client.post(
         '/albums',
-        body: {
-          'name': name,
-          'description': description,
-          'widget_config': widgetConfig ?? {},
-        },
+        body: {'name_ct': nameCt},
       );
       if (response.statusCode == 201) {
         return AlbumModel.fromJson(jsonDecode(response.body));
@@ -56,6 +51,30 @@ class AlbumService {
   Future<bool> deleteAlbum(String id) async {
     try {
       final response = await _client.delete('/albums/$id');
+      return response.statusCode == 204;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<AlbumMember>> listMembers(String albumId) async {
+    try {
+      final response = await _client.get('/albums/$albumId/members');
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        return data.map((j) => AlbumMember.fromJson(j)).toList();
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // removeMember stub , full implementation in p7.1
+  Future<bool> removeMember(String albumId, String memberToken) async {
+    try {
+      final response =
+          await _client.delete('/albums/$albumId/members/$memberToken');
       return response.statusCode == 204;
     } catch (_) {
       return false;
