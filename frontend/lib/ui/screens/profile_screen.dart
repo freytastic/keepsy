@@ -46,8 +46,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final state = context.watch<AppState>();
     final dark = state.isDark;
     final accent = state.accent;
-    final totalPhotos =
-    state.albums.fold(0, (int s, dynamic a) => s + a.totalPhotos as int);
 
     return Scaffold(
       backgroundColor: K.bg(dark),
@@ -174,20 +172,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           label: 'Albums',
                           value: '${state.albums.length}',
                           icon: Icons.photo_album_outlined,
-                          dark: dark,
-                          accent: accent),
-                      const SizedBox(width: 10),
-                      _StatCard(
-                          label: 'Photos',
-                          value: '$totalPhotos',
-                          icon: Icons.photo_library_outlined,
-                          dark: dark,
-                          accent: accent),
-                      const SizedBox(width: 10),
-                      _StatCard(
-                          label: 'People',
-                          value: _uniqueCollabCount(state).toString(),
-                          icon: Icons.people_outline_rounded,
                           dark: dark,
                           accent: accent),
                     ],
@@ -348,16 +332,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
-  }
-
-  int _uniqueCollabCount(AppState state) {
-    final names = <String>{};
-    for (final a in state.albums) {
-      for (final c in a.collaborators) {
-        names.add(c.name);
-      }
-    }
-    return names.length;
   }
 }
 

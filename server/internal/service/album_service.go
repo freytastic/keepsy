@@ -21,6 +21,7 @@ type AlbumStore interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Album, error)
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error)
 	LookupMember(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error)
+	ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error)
 	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error)
 	CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error)
 	UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error
@@ -95,6 +96,10 @@ func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUI
 		return ErrUnauthorized
 	}
 	return s.albumRepo.Delete(ctx, albumID)
+}
+
+func (s *AlbumService) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
+	return s.albumRepo.ListMembers(ctx, albumID)
 }
 
 // AddMember (P0.2): adds a new member at role='member' with a fresh

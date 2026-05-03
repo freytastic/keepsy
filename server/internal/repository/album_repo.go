@@ -178,6 +178,46 @@ func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UU
 	return token, nil
 }
 
+func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
+	rows, err := r.DB.Query(ctx, `
+		SELECT
+			am.member_token,
+			am.role,
+			am.revoked_at IS NOT NULL,
+			ami.joined_at,
+			u.ik_pub,
+			u.name,
+			u.avatar_key
+		FROM album_members am
+		JOIN album_member_identities ami ON ami.member_token = am.member_token
+		JOIN users u ON u.id = ami.user_id
+		WHERE am.album_id = $1
+		ORDER BY ami.joined_at ASC`,
+		albumID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.MemberWithProfile
+	for rows.Next() {
+		var m model.MemberWithProfile
+		if err := rows.Scan(
+			&m.MemberToken,
+			&m.Role,
+			&m.Revoked,
+			&m.JoinedAt,
+			&m.Profile.IKPub,
+			&m.Profile.Name,
+			&m.Profile.AvatarKey,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
 func (r *AlbumRepository) CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error) {
 	var n int
 	err := r.DB.QueryRow(ctx,

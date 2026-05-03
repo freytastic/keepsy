@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/models/album_model.dart';
@@ -6,6 +5,7 @@ import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/ui/widgets/shared_widgets.dart';
+import 'package:keepsy/ui/screens/album_detail_screen.dart';
 import 'package:keepsy/ui/screens/profile_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -139,7 +139,7 @@ class _GreetingBar extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '${state.albums.length} albums · ${state.albums.fold(0, (int s, dynamic a) => s + a.totalPhotos as int)} memories',
+            '${state.albums.length} albums',
             style: TextStyle(color: K.t3(dark), fontSize: 13),
           ),
         ],
@@ -318,28 +318,23 @@ class _AlbumCardState extends State<_AlbumCard> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = K.gradColors(widget.album.gradientColors);
-    final hasPhoto = widget.album.coverPhotoUrl != null &&
-        widget.album.coverPhotoUrl!.isNotEmpty;
+    // Default dark gradient fallback
+    final colors = [const Color(0xFF2F3336), const Color(0xFF1E2022)];
 
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) {
         setState(() => _pressed = false);
-
-        // this will be used later when the album detail screen is implemented
-        //   Navigator.of(context).push(PageRouteBuilder(
-        //     pageBuilder: (_, __, ___) =>
-        //         AlbumDetailScreen(albumId: widget.album.id),
-        //     transitionsBuilder: (_, a, __, child) => SlideTransition(
-        //       position: Tween<Offset>(
-        //           begin: const Offset(1, 0), end: Offset.zero)
-        //           .animate(
-        //           CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
-        //       child: child,
-        //     ),
-        //     transitionDuration: const Duration(milliseconds: 380),
-        //   ));
+        Navigator.of(context).push(PageRouteBuilder(
+          pageBuilder: (_, __, ___) => AlbumDetailScreen(album: widget.album),
+          transitionsBuilder: (_, a, __, child) => SlideTransition(
+            position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                .animate(
+                    CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+            child: child,
+          ),
+          transitionDuration: const Duration(milliseconds: 380),
+        ));
       },
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
@@ -351,11 +346,7 @@ class _AlbumCardState extends State<_AlbumCard> {
             fit: StackFit.expand,
             children: [
               // Background
-              hasPhoto
-                  ? Image.network(widget.album.coverPhotoUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _Gradient(colors: colors))
-                  : _Gradient(colors: colors),
+              _Gradient(colors: colors),
 
               // Vignette
               Container(
@@ -372,15 +363,6 @@ class _AlbumCardState extends State<_AlbumCard> {
                 ),
               ),
 
-              // Emoji when no photo
-              if (!hasPhoto)
-                Positioned(
-                  top: 18,
-                  right: 18,
-                  child: Text(widget.album.emoji,
-                      style: const TextStyle(fontSize: 32)),
-                ),
-
               // Info
               Positioned(
                 left: 14,
@@ -390,11 +372,6 @@ class _AlbumCardState extends State<_AlbumCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (widget.album.collaborators.isNotEmpty) ...[
-                      _CollabStack(
-                          collabs: widget.album.collaborators.take(3).toList()),
-                      const SizedBox(height: 6),
-                    ],
                     Text(
                       widget.album.name,
                       style: const TextStyle(
@@ -407,34 +384,12 @@ class _AlbumCardState extends State<_AlbumCard> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        const Icon(Icons.photo_library_outlined,
-                            color: Colors.white54, size: 11),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${widget.album.totalPhotos} photos',
-                          style: const TextStyle(
-                              color: Colors.white54,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w400),
-                        ),
-                        if (widget.album.collaborators.isNotEmpty) ...[
-                          const SizedBox(width: 8),
-                          const Text('·',
-                              style: TextStyle(
-                                  color: Colors.white38, fontSize: 11)),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.people_outline_rounded,
-                              color: Colors.white54, size: 11),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${widget.album.collaborators.length}',
-                            style: const TextStyle(
-                                color: Colors.white54, fontSize: 11),
-                          ),
-                        ],
-                      ],
+                    const Text(
+                      'E2EE Album',
+                      style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w400),
                     ),
                   ],
                 ),
@@ -461,44 +416,6 @@ class _Gradient extends StatelessWidget {
           ),
         ),
       );
-}
-
-class _CollabStack extends StatelessWidget {
-  final List<Collaborator> collabs;
-  const _CollabStack({required this.collabs});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 22,
-      width: math.min(collabs.length * 16.0 + 6, 54),
-      child: Stack(
-        children: List.generate(collabs.length, (i) {
-          final c = collabs[i];
-          return Positioned(
-            left: i * 16.0,
-            child: Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient:
-                    LinearGradient(colors: K.gradColors(c.gradientColors)),
-                border: Border.all(color: Colors.black, width: 1.5),
-              ),
-              child: Center(
-                child: Text(c.initials[0],
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700)),
-              ),
-            ),
-          );
-        }),
-      ),
-    );
-  }
 }
 
 class _Empty extends StatelessWidget {
