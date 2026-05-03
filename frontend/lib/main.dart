@@ -1,8 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/data/api/error_mapper.dart';
+import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
 import 'package:keepsy/ui/screens/login_screen.dart';
@@ -34,11 +36,13 @@ void main() async {
   };
 
   final appState = AppState();
+  final realtimeService = RealtimeService(ApiClient());
 
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: appState),
+        Provider.value(value: realtimeService),
       ],
       child: const KeepsyApp(),
     ),

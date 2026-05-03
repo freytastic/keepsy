@@ -9,6 +9,7 @@ type Config struct {
 	RedisURL     string
 	Port         string
 	ResendAPIKey string
+	DevMode      bool // enables /test/* endpoints: never true in production
 
 	// S3 / R2 configs
 	S3Endpoint   string
@@ -25,6 +26,7 @@ func Load() *Config {
 		RedisURL:     getEnv("REDIS_URL", "localhost:6379"),
 		Port:         getEnv("PORT", "8080"),
 		ResendAPIKey: getEnv("RESEND_API_KEY", ""),
+		DevMode:      getEnv("APP_ENV", "") == "dev",
 		S3Endpoint:   getEnv("S3_ENDPOINT", "http://localhost:9000"),
 		S3AccessKey:  getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:  getEnv("S3_SECRET_KEY", "minioadmin"),

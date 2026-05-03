@@ -1,8 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/api/realtime_service.dart';
 
 class AppState extends ChangeNotifier {
+  StreamSubscription<RealtimeEvent>? _realtimeSub;
+
   // only accent color for now cuz the login screen needs it
   Color _accent = K.defaultAccent;
   bool _isDark = true;
@@ -35,7 +39,7 @@ class AppState extends ChangeNotifier {
   String? get avatarKey => _avatarKey;
   String get profileName => _profileName;
 
-  // forward proxy for the avatar explicit URL 
+  // forward proxy for the avatar explicit URL
   String? get avatarUrl => _avatarKey;
 
   void setUserData(Map<String, dynamic> data) {
@@ -43,7 +47,7 @@ class AppState extends ChangeNotifier {
     _email = data['email'];
     _profileName = data['name'] ?? 'User';
     _avatarKey = data['avatar_key'];
-    
+
     if (data['accent_color'] != null) {
       _accent = K.hexColor(data['accent_color']);
     }
@@ -62,7 +66,7 @@ class AppState extends ChangeNotifier {
     _isDark = dark;
     notifyListeners();
   }
-  
+
   void setProfileName(String name) {
     _profileName = name;
     notifyListeners();
@@ -71,5 +75,29 @@ class AppState extends ChangeNotifier {
   void setProfileAvatar(String url) {
     _avatarKey = url;
     notifyListeners();
+  }
+
+  // Called after a successful login to start receiving push events.
+  // Dispatchers are stubs , populated in Phase 4+ as E2EE protocol layers land
+  void startRealtime(Stream<RealtimeEvent> events) {
+    _realtimeSub?.cancel();
+    _realtimeSub = events.listen(_onRealtimeEvent);
+  }
+
+  void _onRealtimeEvent(RealtimeEvent event) {
+    switch (event.type) {
+      case 'e2ee.epoch_changed': // todo (p4): trigger MK refresh
+      case 'e2ee.manifest_updated': // todo (p8): re-verify manifest
+      case 'e2ee.member_added': // todo (p 7): refresh member list
+      case 'e2ee.member_revoked': // todo (p7): refresh member list
+      case 'e2ee.opk_low': // todo (p2): replenish OPKs
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
   }
 }
