@@ -15,8 +15,10 @@ import (
 	"github.com/freytastic/keepsy/internal/config"
 	"github.com/freytastic/keepsy/internal/handler"
 	"github.com/freytastic/keepsy/internal/middleware"
+	"github.com/freytastic/keepsy/internal/notifications"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -64,11 +66,17 @@ func main() {
 	userService := service.NewUserService(userRepo, prekeyRepo)
 	albumService := service.NewAlbumService(albumRepo)
 
+	hub := ws.NewHub()
+	ticketStore := ws.NewTicketStore(rdb)
+	notifRepo := notifications.NewRepo(dbPool)
+	_ = notifications.NewService(notifRepo, hub) // wired into epoch/manifest services in later phases
+
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	albumHandler := handler.NewAlbumHandler(albumService)
 	mediaHandler := handler.NewMediaHandler()
 	inviteHandler := handler.NewInviteHandler()
+	wsHandler := handler.NewWSHandler(hub, ticketStore)
 
 	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
 	requireMember := middleware.RequireMember(albumRepo, "id")
@@ -81,9 +89,13 @@ func main() {
 	apiV1.HandleFunc("/auth/otp/refresh", authHandler.Refresh).Methods(http.MethodPost)
 	apiV1.HandleFunc("/invite/{code}", inviteHandler.GetPreview).Methods(http.MethodGet)
 
+	// WS endpoint authenticates via ticket, not bearer , must be outside authed subrouter
+	apiV1.HandleFunc("/ws", wsHandler.ServeWS).Methods(http.MethodGet)
+
 	authed := apiV1.PathPrefix("").Subrouter()
 	authed.Use(authMiddleware.Authenticate)
 
+	authed.HandleFunc("/ws-ticket", wsHandler.IssueTicket).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
 	authed.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
 	authed.HandleFunc("/users/{id}/prekey-bundle", userHandler.GetPrekeyBundle).Methods(http.MethodGet)
@@ -113,6 +125,10 @@ func main() {
 	r.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "OK")
 	}).Methods(http.MethodGet)
+
+	if cfg.DevMode {
+		r.HandleFunc("/test/emit-event", wsHandler.TestEmitEvent).Methods(http.MethodPost)
+	}
 
 	r.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.NotFound("route not found"))
