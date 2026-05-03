@@ -32,3 +32,17 @@ type AlbumWithMemberInfo struct {
 	UserRole    string `json:"user_role"`
 	MemberToken []byte `json:"member_token"`
 }
+
+type MemberProfile struct {
+	IKPub     []byte  `json:"ik_pub"`
+	Name      *string `json:"name,omitempty"`
+	AvatarKey *string `json:"avatar_key,omitempty"`
+}
+
+type MemberWithProfile struct {
+	MemberToken []byte        `json:"member_token"`
+	Role        string        `json:"role"`
+	Revoked     bool          `json:"revoked"`
+	JoinedAt    time.Time     `json:"joined_at"`
+	Profile     MemberProfile `json:"profile"`
+}
