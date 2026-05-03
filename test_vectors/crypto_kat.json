@@ -1,0 +1,181 @@
+{
+  "_about": "Cross language Known Answer Tests for keepsy crypto. Both flutter test test/crypto/ and go test ./internal/crypto/... read this file. If either side fails on a vector, the implementation diverged from the spec and BYTE-LEVEL parity is broken. Vectors are sourced from RFC standards where they exist; AES-GCM vectors are from Test Case 13/14 of the McGrew-Viega GCM specification (also in NIST SP 800-38D).",
+
+  "aead_aes_gcm_decrypt": [
+    {
+      "name": "256-bit zero key, zero IV, empty PT/AAD (McGrew-Viega Test Case 13)",
+      "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "nonce_hex": "000000000000000000000000",
+      "aad_hex": "",
+      "ct_hex": "",
+      "tag_hex": "530f8afbc74536b9a963b4f1c4cb738b",
+      "pt_hex": ""
+    },
+    {
+      "name": "256-bit zero key, zero IV, single zero block (McGrew-Viega Test Case 14)",
+      "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "nonce_hex": "000000000000000000000000",
+      "aad_hex": "",
+      "ct_hex": "cea7403d4d606b6e074ec5d3baf39d18",
+      "tag_hex": "d0d1c8a799996bf0265b98b5d48ab919",
+      "pt_hex": "00000000000000000000000000000000"
+    }
+  ],
+
+  "aead_chacha_poly_decrypt": [
+    {
+      "name": "RFC 8439 §2.8.2",
+      "key_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce_hex": "070000004041424344454647",
+      "aad_hex": "50515253c0c1c2c3c4c5c6c7",
+      "ct_hex": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+      "tag_hex": "1ae10b594f09e26a7e902ecbd0600691",
+      "pt_hex": "4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e"
+    }
+  ],
+
+  "hkdf_sha256": [
+    {
+      "name": "RFC 5869 Test Case 1",
+      "ikm_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "salt_hex": "000102030405060708090a0b0c",
+      "info_hex": "f0f1f2f3f4f5f6f7f8f9",
+      "length": 42,
+      "okm_hex": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    },
+    {
+      "name": "RFC 5869 Test Case 3 (zero-len salt and info)",
+      "ikm_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "salt_hex": "",
+      "info_hex": "",
+      "length": 42,
+      "okm_hex": "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+    }
+  ],
+
+  "x25519": [
+    {
+      "name": "RFC 7748 §6.1 Alice→Bob",
+      "scalar_hex": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+      "u_hex": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+      "shared_hex": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+    },
+    {
+      "name": "RFC 7748 §6.1 Bob→Alice (same shared secret)",
+      "scalar_hex": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+      "u_hex": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+      "shared_hex": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+    }
+  ],
+
+  "ed25519": [
+    {
+      "name": "RFC 8032 §7.1 TEST 1 (empty message)",
+      "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+      "pubkey_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "msg_hex": "",
+      "sig_hex": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+    },
+    {
+      "name": "RFC 8032 §7.1 TEST 2 (1-byte message 0x72)",
+      "seed_hex": "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+      "pubkey_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "msg_hex": "72",
+      "sig_hex": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
+    }
+  ],
+
+  "x3dh_4dh": [
+    {
+      "name": "fixed seeds, 4-DH (with OPK)",
+      "lk_a_seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "ek_a_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "lk_b_seed_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "spk_b_seed_hex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "opk_b_seed_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "album_id_hex": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "lk_a_pub_hex": "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
+      "lk_b_pub_hex": "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a",
+      "ek_a_pub_hex": "605a725d2a4adfeeb1a29e17edd621c1b7593ee8cdbc44ac6c4ab6e2f805d23c",
+      "spk_b_pub_hex": "675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52f",
+      "opk_b_pub_hex": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d",
+      "shared_secret_hex": "ecbcdd9e6955c3cdea63a5f8ec8ed54148b21eb0431725964df43fae7799da41"
+    }
+  ],
+
+  "x3dh_3dh": [
+    {
+      "name": "fixed seeds, 3-DH (OPK exhausted)",
+      "lk_a_seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "ek_a_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "lk_b_seed_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "spk_b_seed_hex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "album_id_hex": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "lk_a_pub_hex": "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
+      "lk_b_pub_hex": "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a",
+      "ek_a_pub_hex": "605a725d2a4adfeeb1a29e17edd621c1b7593ee8cdbc44ac6c4ab6e2f805d23c",
+      "spk_b_pub_hex": "675dd574ed7789310b3d2e7681f3790b466c773b1521fecf36577958371ea52f",
+      "shared_secret_hex": "1a470172698d308276381c6b40a2bf489c99a456ceee6d7a0d5ec3e10967bd87"
+    }
+  ],
+
+  "safety_numbers": [
+    {
+      "name": "low pub byte vs high pub byte (sort_lex picks low first)",
+      "ik_pub_a_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "ik_pub_b_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "album_id_hex": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "digits": "100218185615945376523606699761"
+    },
+    {
+      "name": "reversed input order (must be symmetric)",
+      "ik_pub_a_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "ik_pub_b_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "album_id_hex": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "digits": "100218185615945376523606699761"
+    }
+  ],
+
+  "canonical_json": [
+    {
+      "name": "empty object",
+      "input_json": "{}",
+      "expected_utf8": "{}"
+    },
+    {
+      "name": "primitive types",
+      "input_json": "{\"b\":true,\"f\":false,\"n\":null,\"i\":-42}",
+      "expected_utf8": "{\"b\":true,\"f\":false,\"i\":-42,\"n\":null}"
+    },
+    {
+      "name": "key sort by UTF-8 byte order (capitals before lowercase)",
+      "input_json": "{\"b\":1,\"a\":2,\"B\":3,\"A\":4}",
+      "expected_utf8": "{\"A\":4,\"B\":3,\"a\":2,\"b\":1}"
+    },
+    {
+      "name": "nested map: inner keys also sorted",
+      "input_json": "{\"outer\":{\"z\":1,\"a\":2},\"prefix\":\"x\"}",
+      "expected_utf8": "{\"outer\":{\"a\":2,\"z\":1},\"prefix\":\"x\"}"
+    },
+    {
+      "name": "list preserves insertion order",
+      "input_json": "[3,1,2]",
+      "expected_utf8": "[3,1,2]"
+    },
+    {
+      "name": "string escapes: only minimum JSON escapes",
+      "input_json": "{\"s\":\"a\\\"b\\\\c\\nd\\te\"}",
+      "expected_utf8": "{\"s\":\"a\\\"b\\\\c\\nd\\te\"}"
+    },
+    {
+      "name": "control char escapes (U+0001)",
+      "input_json": "{\"x\":\"\\u0001\"}",
+      "expected_utf8": "{\"x\":\"\\u0001\"}"
+    },
+    {
+      "name": "non-ASCII preserved as raw UTF-8",
+      "input_json": "{\"x\":\"héllo\"}",
+      "expected_utf8": "{\"x\":\"héllo\"}"
+    }
+  ]
+}
