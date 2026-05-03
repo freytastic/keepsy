@@ -180,6 +180,48 @@ func (h *AlbumHandler) DeleteAlbum(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func optBase64(b []byte) *string {
+	if len(b) == 0 {
+		return nil
+	}
+	s := base64.StdEncoding.EncodeToString(b)
+	return &s
+}
+
+func (h *AlbumHandler) ListAlbumMembers(w http.ResponseWriter, r *http.Request) {
+	albumID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
+		return
+	}
+	members, err := h.albumService.ListMembers(r.Context(), albumID)
+	if err != nil {
+		apierr.Write(w, r, apierr.Internal("failed to list members").WithCause(err))
+		return
+	}
+	out := make([]map[string]any, len(members))
+	for i, m := range members {
+		out[i] = map[string]any{
+			"member_token": base64.StdEncoding.EncodeToString(m.MemberToken),
+			"role":         m.Role,
+			"revoked":      m.Revoked,
+			"joined_at":    m.JoinedAt,
+			"profile": map[string]any{
+				"ik_pub":     optBase64(m.Profile.IKPub),
+				"name":       m.Profile.Name,
+				"avatar_key": m.Profile.AvatarKey,
+			},
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// RemoveAlbumMember stub , full implementation in p7.1
+func (h *AlbumHandler) RemoveAlbumMember(w http.ResponseWriter, r *http.Request) {
+	apierr.Write(w, r, apierr.NotImplemented("member removal not yet implemented"))
+}
+
 func (h *AlbumHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.MustGetUserID(w, r)
 	if !ok {
