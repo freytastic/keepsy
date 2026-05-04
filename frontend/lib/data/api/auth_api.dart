@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:keepsy/data/constants.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/e2ee/identity.dart';
 
 class AuthService {
   final StorageService _storage = StorageService();
@@ -21,9 +22,18 @@ class AuthService {
     }
   }
 
-  // verify OTP & persist credentials 
-  /// Returns `true` on success (token saved), `false` otherwise.
-  Future<bool> verifyOtp(String email, String code) async {
+  // verify OTP & persist credentials, then block on E2EE bootstrap (D4)
+  // Returns 'true' once token is saved AND IdentityService.bootstrap() has
+  // either run or confirmed the user is already bootstrapped. Bootstrap
+  // failure : returns 'false' so the UI can surface "encryption setup failed"
+  // instead of pretending login succeeded
+
+  // BootstrapAccountConflictException is rethrown verbatim : it signals an
+  // unrecoverable mismatch (server has different IK than what this device
+  // can produce) and the UI must show a distinct message rather than hint
+  // at "wrong OTP"
+  Future<bool> verifyOtp(
+      String email, String code, IdentityService identity) async {
     try {
       final url = Uri.parse('${AppConstants.baseURL}/auth/otp/verify');
       final response = await http.post(
@@ -40,10 +50,19 @@ class AuthService {
 
         if (token != null && refreshToken != null && expiresAt != null) {
           await _storage.saveAuth(token, refreshToken, expiresAt);
+          // D4 : hard block login completion until the E2EE identity is
+          // published. bootstrap() is idempotent + resumable, so retried
+          // logins after a partial failure pick up where the last attempt
+          // stopped instead of wedging on E_IDENTITY_ALREADY_SET
+          if (!await identity.isBootstrapped()) {
+            await identity.bootstrap();
+          }
           return true;
         }
       }
       return false;
+    } on BootstrapAccountConflictException {
+      rethrow;
     } catch (_) {
       return false;
     }

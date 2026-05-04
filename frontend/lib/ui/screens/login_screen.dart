@@ -7,6 +7,7 @@ import 'package:keepsy/ui/widgets/shared_widgets.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/data/api/auth_api.dart';
 import 'package:keepsy/data/api/user_api.dart';
+import 'package:keepsy/e2ee/identity.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -23,6 +24,9 @@ class _LoginScreenState extends State<LoginScreen>
   final _emailFocus = FocusNode();
   bool _otpMode = false;
   bool _loading = false;
+  // D4: surfaces the "Setting up encryption…" message while
+  // IdentityService.bootstrap() runs inside verifyOtp
+  bool _bootstrapping = false;
 
   @override
   void dispose() {
@@ -37,7 +41,6 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  // ── Navigate to MainShell – wipe entire nav stack ─────────────────────────
   void _goHome() {
     Navigator.of(context).pushAndRemoveUntil(
       PageRouteBuilder(
@@ -106,11 +109,25 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
 
-      setState(() => _loading = true);
+      final identity = context.read<IdentityService>();
+      setState(() {
+        _loading = true;
+        _bootstrapping = false;
+      });
 
       try {
-        // verifyOtp now returns bool and saves token+expiry internally
-        final ok = await authService.verifyOtp(_emailCtrl.text.trim(), otpCode);
+        // OTP verify includes the E2EE bootstrap : flip the loader copy after
+        // server returns 200 so the slow part is visible to the user
+        final verifyFuture =
+            authService.verifyOtp(_emailCtrl.text.trim(), otpCode, identity);
+        // Best effort UI hint : if bootstrap is running, show the message
+        // after a short tick so fast paths dont flicker it
+        Future.delayed(const Duration(milliseconds: 250), () {
+          if (mounted && _loading) {
+            setState(() => _bootstrapping = true);
+          }
+        });
+        final ok = await verifyFuture;
 
         if (ok) {
           final userService = UserService();
@@ -118,17 +135,46 @@ class _LoginScreenState extends State<LoginScreen>
           if (userData != null && mounted) {
             context.read<AppState>().setUserData(userData);
           }
-          setState(() => _loading = false);
+          setState(() {
+            _loading = false;
+            _bootstrapping = false;
+          });
           _goHome();
         } else {
-          for (final c in _otpCtrls) { c.clear(); }
-          setState(() => _loading = false);
+          for (final c in _otpCtrls) {
+            c.clear();
+          }
+          setState(() {
+            _loading = false;
+            _bootstrapping = false;
+          });
           _otpFoci[0].requestFocus();
           _showError("Invalid OTP code. Try again.");
         }
+      } on BootstrapAccountConflictException catch (_) {
+        // Server already has a different IK on file for this account. The
+        // local device cannot recover from this : retrying the OTP would
+        // just re trip the same 409. Surface a distinct message so the user
+        // doesnt keep typing OTPs forever
+        for (final c in _otpCtrls) {
+          c.clear();
+        }
+        setState(() {
+          _loading = false;
+          _bootstrapping = false;
+        });
+        _showError(
+          "This account's encryption keys are already registered on another device. "
+          "Contact support or use account recovery to continue here.",
+        );
       } catch (e) {
-        for (final c in _otpCtrls) { c.clear(); }
-        setState(() => _loading = false);
+        for (final c in _otpCtrls) {
+          c.clear();
+        }
+        setState(() {
+          _loading = false;
+          _bootstrapping = false;
+        });
         _otpFoci[0].requestFocus();
         _showError("Something went wrong. Please try again.");
       }
@@ -303,7 +349,9 @@ class _LoginScreenState extends State<LoginScreen>
                       const SizedBox(height: 16),
 
                       PrimaryButton(
-                        label: _otpMode ? 'Verify & Sign In' : 'Continue',
+                        label: _bootstrapping
+                            ? 'Setting up encryption…'
+                            : (_otpMode ? 'Verify & Sign In' : 'Continue'),
                         loading: _loading,
                         onTap: _handleContinue,
                       ),
@@ -314,18 +362,16 @@ class _LoginScreenState extends State<LoginScreen>
                       Row(children: [
                         Expanded(
                             child: Container(
-                                height: 0.5,
-                                color: K.borderCol(dark))),
+                                height: 0.5, color: K.borderCol(dark))),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: Text('or continue with',
-                              style: TextStyle(
-                                  color: K.t3(dark), fontSize: 13)),
+                              style:
+                                  TextStyle(color: K.t3(dark), fontSize: 13)),
                         ),
                         Expanded(
                             child: Container(
-                                height: 0.5,
-                                color: K.borderCol(dark))),
+                                height: 0.5, color: K.borderCol(dark))),
                       ]),
 
                       const SizedBox(height: 24),
@@ -339,8 +385,7 @@ class _LoginScreenState extends State<LoginScreen>
                             decoration: BoxDecoration(
                               color: K.glassCol(dark),
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                  color: K.borderCol(dark)),
+                              border: Border.all(color: K.borderCol(dark)),
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -363,9 +408,7 @@ class _LoginScreenState extends State<LoginScreen>
 
                       Text(
                         'By continuing, you agree to our Terms & Privacy Policy',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: K.t3(dark)),
+                        style: TextStyle(fontSize: 12, color: K.t3(dark)),
                         textAlign: TextAlign.center,
                       ),
 
@@ -451,8 +494,7 @@ class _OtpRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('  Enter the code sent to your email',
-            style: TextStyle(
-                color: K.t3(dark), fontSize: 12)),
+            style: TextStyle(color: K.t3(dark), fontSize: 12)),
         const SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,

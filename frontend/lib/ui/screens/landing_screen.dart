@@ -4,6 +4,7 @@ import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/ui/screens/login_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 
@@ -33,7 +34,7 @@ class _LandingPageState extends State<LandingPage> {
         userService.getMe(),
         albumService.getMyAlbums(),
       ]);
-      
+
       final userData = responses[0] as Map<String, dynamic>?;
       final userAlbums = responses[1] as List<dynamic>?;
 
@@ -44,6 +45,18 @@ class _LandingPageState extends State<LandingPage> {
         if (userAlbums != null) {
           context.read<AppState>().setAlbums(userAlbums.cast());
         }
+
+        // D5 + D9 cold-start hygiene : rotate SPK if ≥30d and refill OPKs
+        // if the pool dropped below the trigger. Both are best effort and
+        // must never block landing : a network blip shouldn't bounce the
+        // user back to login
+        final identity = context.read<IdentityService>();
+        try {
+          await identity.ensureSpkRotated();
+        } catch (_) {/* logged elsewhere; landing must not gate */}
+        try {
+          await identity.replenishOpks();
+        } catch (_) {/* same */}
       }
     }
 
