@@ -1,0 +1,29 @@
+{
+  "category": "spk_rotate",
+  "vectors": [
+    {
+      "name": "rotate-spk basic",
+      "ik_seed": "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0",
+      "spk_pub": "b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0",
+      "spk_ts": 1714838400,
+      "expected_msg": "726f746174652d73706b2d7631b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd00000000066365b80",
+      "expected_rotation_sig": "133758e6a0897557a799a4eea79f8d3d37fb188ab43e7adb3836b26c11032872a961096aa946135466f0c81b7e466bb70628676ae74c33d485d14089f068610b"
+    },
+    {
+      "name": "rotate-spk +1d",
+      "ik_seed": "b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1",
+      "spk_pub": "c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1",
+      "spk_ts": 1714924800,
+      "expected_msg": "726f746174652d73706b2d7631c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1000000006637ad00",
+      "expected_rotation_sig": "befd1011296904fba95ad68b64d9729180421fc5bb5e4cf83d520865d7bf47440df2b812ebcbf37229de57caa3560cff8e2b726c89d926bfbb56480c392e030b"
+    },
+    {
+      "name": "rotate-spk +2d",
+      "ik_seed": "c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2",
+      "spk_pub": "d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2",
+      "spk_ts": 1715011200,
+      "expected_msg": "726f746174652d73706b2d7631d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2000000006638fe80",
+      "expected_rotation_sig": "66728471abe7725194dfc807b24b20b9e4441911e890579090de68b9099a0c43291b7492fdaeefcf1c9af35df769246601a1baa32bfd59580f34ff9ab8240b00"
+    }
+  ]
+}

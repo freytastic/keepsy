@@ -109,6 +109,26 @@ func RateLimited(message string) *APIError {
 	return &APIError{Code: "E_RATE_LIMITED", HTTPStatus: http.StatusTooManyRequests, Message: message}
 }
 
+func TsSkew(message string) *APIError {
+	return &APIError{Code: "E_TS_SKEW", HTTPStatus: http.StatusBadRequest, Message: message}
+}
+
+func TsNotMonotonic(message string) *APIError {
+	return &APIError{Code: "E_TS_NOT_MONOTONIC", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func IdentityAlreadySet(message string) *APIError {
+	return &APIError{Code: "E_IDENTITY_ALREADY_SET", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func IdentityNotSet(message string) *APIError {
+	return &APIError{Code: "E_IDENTITY_NOT_SET", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func OPKIndexTaken(message string) *APIError {
+	return &APIError{Code: "E_OPK_INDEX_TAKEN", HTTPStatus: http.StatusConflict, Message: message}
+}
+
 func Internal(message string) *APIError {
 	return &APIError{Code: "E_INTERNAL", HTTPStatus: http.StatusInternalServerError, Message: message}
 }

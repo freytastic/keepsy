@@ -43,7 +43,8 @@ class AndroidKeystore implements SecureKeyStore {
     final r = await _invoke<List>('list', {'labelPrefix': labelPrefix});
     return r.map((e) {
       final m = e as Map;
-      return KeyHandle(id: m['handleId'] as String, label: m['label'] as String);
+      return KeyHandle(
+          id: m['handleId'] as String, label: m['label'] as String);
     }).toList();
   }
 
@@ -59,6 +60,5 @@ class AndroidKeystore implements SecureKeyStore {
     } on PlatformException catch (e) {
       throw KeyStoreException.fromPlatform(method, e);
     }
-  }
   }
 }

@@ -52,22 +52,16 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User
 	return &user, nil
 }
 
+// Update writes profile fields only. E2EE columns are owned by internal/e2ee/prekey
+// and updated via PUT /users/me/keys + POST /users/me/spk
 func (r *UserRepository) Update(ctx context.Context, user *model.User) error {
-	query := `UPDATE users SET 
-		name = $1, 
-		accent_color = $2, 
-		theme = $3, 
-		ik_pub = $4,
-		lk_pub = $5,
-		spk_pub = $6,
-		spk_sig = $7,
-		spk_ts = $8,
-		updated_at = NOW() 
-	WHERE id = $9`
-	_, err := r.DB.Exec(ctx, query,
-		user.Name, user.AccentColor, user.Theme,
-		user.IKPub, user.LKPub, user.SPKPub, user.SPKSig, user.SPKTs,
-		user.ID)
+	query := `UPDATE users SET
+		name = $1,
+		accent_color = $2,
+		theme = $3,
+		updated_at = NOW()
+	WHERE id = $4`
+	_, err := r.DB.Exec(ctx, query, user.Name, user.AccentColor, user.Theme, user.ID)
 	return err
 }
 
@@ -76,8 +70,8 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 		user.ID = uuid.New()
 	}
 	query := `INSERT INTO users (
-			id, email, name, accent_color, theme, 
-			ik_pub, lk_pub, spk_pub, spk_sig, spk_ts, 
+			id, email, name, accent_color, theme,
+			ik_pub, lk_pub, spk_pub, spk_sig, spk_ts,
 			created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
 		RETURNING created_at, updated_at`

@@ -5,6 +5,7 @@ package repository_test
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,14 +19,29 @@ var allowedUserFKTables = map[string]bool{
 	"one_time_prekeys":        true,
 	"album_member_identities": true,
 	"notifications":           true,
+	"spk_rotations":           true,
 }
 
 func TestMigrationsRespectUserFKAllowlist(t *testing.T) {
-	data, err := os.ReadFile("../../migrations/000001_initial_schema.up.sql")
+	// every *.up.sql under migrations/ contributes tables : the allowlist must
+	// stay closed across the whole history, not just the initial schema
+	matches, err := filepath.Glob("../../migrations/*.up.sql")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("glob migrations: %v", err)
 	}
-	tables := splitCreateTableBlocks(string(data))
+	if len(matches) == 0 {
+		t.Fatal("no up.sql migrations found")
+	}
+	tables := map[string]string{}
+	for _, p := range matches {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		for k, v := range splitCreateTableBlocks(string(data)) {
+			tables[k] = v
+		}
+	}
 	if len(tables) == 0 {
 		t.Fatal("no CREATE TABLE blocks parsed")
 	}
