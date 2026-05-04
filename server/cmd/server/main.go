@@ -13,6 +13,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/config"
+	"github.com/freytastic/keepsy/internal/e2ee/prekey"
 	"github.com/freytastic/keepsy/internal/handler"
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/notifications"
@@ -63,13 +64,19 @@ func main() {
 
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
-	userService := service.NewUserService(userRepo, prekeyRepo)
+	userService := service.NewUserService(userRepo)
 	albumService := service.NewAlbumService(albumRepo)
 
 	hub := ws.NewHub()
 	ticketStore := ws.NewTicketStore(rdb)
 	notifRepo := notifications.NewRepo(dbPool)
-	_ = notifications.NewService(notifRepo, hub) // wired into epoch/manifest services in later phases
+	notifService := notifications.NewService(notifRepo, hub)
+
+	prekeyEx := prekey.NewRepo(dbPool, prekeyRepo)
+	prekeyService := prekey.NewService(prekeyEx)
+	prekeyHandler := prekey.NewHandler(prekeyService, notifService)
+
+	rateLimiter := middleware.NewRateLimiter(rdb)
 
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
@@ -98,9 +105,16 @@ func main() {
 	authed.HandleFunc("/ws-ticket", wsHandler.IssueTicket).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
 	authed.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
-	authed.HandleFunc("/users/{id}/prekey-bundle", userHandler.GetPrekeyBundle).Methods(http.MethodGet)
-	authed.HandleFunc("/users/me/opks", userHandler.ReplenishOPKs).Methods(http.MethodPost)
-	authed.HandleFunc("/users/me/opks/count", userHandler.GetOPKCount).Methods(http.MethodGet)
+	authed.HandleFunc("/users/me/keys", prekeyHandler.UpsertIdentity).Methods(http.MethodPut)
+	authed.HandleFunc("/users/me/spk", prekeyHandler.RotateSPK).Methods(http.MethodPost)
+	authed.HandleFunc("/users/me/opks", prekeyHandler.ReplenishOPKs).Methods(http.MethodPost)
+	authed.HandleFunc("/users/me/opks/count", prekeyHandler.GetOPKCount).Methods(http.MethodGet)
+	// peer bundle fetch is rate limited per requesting user : key is the user_id
+	// extracted from auth ctx, so we register the wrapper after auth middleware
+	authed.Handle(
+		"/users/{id}/prekey-bundle",
+		rateLimiter.Middleware(prekey.KeyByUserID, 5, 60*time.Second)(http.HandlerFunc(prekeyHandler.GetPrekeyBundle)),
+	).Methods(http.MethodGet)
 
 	authed.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
 	authed.HandleFunc("/albums", albumHandler.ListAlbums).Methods(http.MethodGet)
