@@ -7,6 +7,7 @@ import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
+import 'package:keepsy/e2ee/prekey_bundle.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 import 'identity_label_map_test_helpers.dart';
@@ -77,6 +78,11 @@ class _StubPrekeyApi implements PrekeyApi {
       'spk_sig': Uint8List.fromList(spkSig),
       'spk_ts': spkTs,
     };
+  }
+
+  @override
+  Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
+    throw UnimplementedError('fetchPrekeyBundle not used by IdentityService');
   }
 }
 

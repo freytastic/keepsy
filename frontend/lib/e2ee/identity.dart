@@ -368,6 +368,46 @@ class IdentityService {
       return Sign.sign(kp, msg);
     });
   }
+
+  // Pass through to SecureKeyStore.use<T> for the IK / LK / SPK.current handles
+  // so callers (X3dhSession et al) dont need SecureKeyStore + IdentityLabelMap
+  // refs. Throws StateError when the label isnt set : caller is using a
+  // non bootstrapped identity, which is a bug not an expected path
+  Future<T> useIk<T>(Future<T> Function(Uint8List seed) fn) {
+    final id = _labels.handleId(kLabelIK);
+    if (id == null) {
+      throw StateError(
+          'IK not bootstrapped : IdentityService.bootstrap() first');
+    }
+    return _store.use<T>(KeyHandle(id: id, label: kLabelIK), fn);
+  }
+
+  Future<T> useLk<T>(Future<T> Function(Uint8List priv) fn) {
+    final id = _labels.handleId(kLabelLK);
+    if (id == null) {
+      throw StateError(
+          'LK not bootstrapped : IdentityService.bootstrap() first');
+    }
+    return _store.use<T>(KeyHandle(id: id, label: kLabelLK), fn);
+  }
+
+  Future<T> useSpk<T>(Future<T> Function(Uint8List priv) fn) {
+    final id = _labels.handleId(kLabelSpkCurrent);
+    if (id == null) {
+      throw StateError(
+          'SPK.current not bootstrapped : IdentityService.bootstrap() first');
+    }
+    return _store.use<T>(KeyHandle(id: id, label: kLabelSpkCurrent), fn);
+  }
+
+  // Responder side OPK access. Returns null (not StateError) when the label
+  // is missing : caller decides between OpkNotFoundException and 3-DH (D5)
+  Future<T>? tryUseOpk<T>(int idx, Future<T> Function(Uint8List priv) fn) {
+    final label = '$kLabelOpkPrefix$idx';
+    final id = _labels.handleId(label);
+    if (id == null) return null;
+    return _store.use<T>(KeyHandle(id: id, label: label), fn);
+  }
 }
 
 // Internal struct shared across the bootstrap stages
