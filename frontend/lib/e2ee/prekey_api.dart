@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'prekey_bundle.dart';
+
 // Thin wire format wrapper for the §4 prekey/SPK/OPK endpoints. Stays inside
 // lib/e2ee/ : depends only on a tiny PrekeyJsonClient surface that the
 // composition root wires to ApiClient. Server expects standard base64 (not
@@ -59,6 +61,10 @@ abstract class PrekeyApi {
   });
 
   Future<int> opkCount();
+
+  // GET /users/{id}/prekey-bundle. Returns the raw bytes-in/bytes-out value
+  // type : caller MUST gate on PrekeyBundle.verify() before X3dhSession.initiate
+  Future<PrekeyBundle> fetchPrekeyBundle(String userId);
 }
 
 class HttpPrekeyApi implements PrekeyApi {
@@ -114,5 +120,11 @@ class HttpPrekeyApi implements PrekeyApi {
   Future<int> opkCount() async {
     final body = await _client.getJson('/users/me/opks/count');
     return body['count'] as int;
+  }
+
+  @override
+  Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
+    final body = await _client.getJson('/users/$userId/prekey-bundle');
+    return PrekeyBundle.fromJson(body);
   }
 }
