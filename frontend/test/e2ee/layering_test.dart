@@ -3,13 +3,17 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 // Mirror of test/secure_store/layering_test.dart : nothing in lib/e2ee/ is
-// allowed to leak raw private bytes. Allowlist is empty : every operation
-// goes through SecureKeyStore.use<T>
+// allowed to leak raw private bytes. Allowlist scopes per file the few public
+// surfaces that intentionally hand a 32B shared secret to a caller (D10 :
+// caller owns the lifetime, must zero after use)
 final _leakRe = RegExp(
   r'Future<[^>]*Uint8List[^>]*>\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
 );
 
-const _allow = <(String, String)>{};
+// X3dhSession.derive : 32B X3DH shared secret. Public per spec §5.2 / D10 (ts just for me)
+const _allow = <(String, String)>{
+  ('x3dh_session.dart', 'derive'),
+};
 
 void main() {
   group('lib/e2ee layering', () {
