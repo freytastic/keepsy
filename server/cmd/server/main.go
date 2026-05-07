@@ -13,6 +13,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/config"
+	"github.com/freytastic/keepsy/internal/e2ee/epoch"
 	"github.com/freytastic/keepsy/internal/e2ee/prekey"
 	"github.com/freytastic/keepsy/internal/handler"
 	"github.com/freytastic/keepsy/internal/middleware"
@@ -76,6 +77,10 @@ func main() {
 	prekeyService := prekey.NewService(prekeyEx)
 	prekeyHandler := prekey.NewHandler(prekeyService, notifService)
 
+	epochRepo := epoch.NewRepo(dbPool)
+	epochService := epoch.NewService(epochRepo)
+	epochHandler := epoch.NewHandler(epochService, epochRepo, notifService)
+
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
 	authHandler := handler.NewAuthHandler(authService)
@@ -135,6 +140,9 @@ func main() {
 	scoped.HandleFunc("/media/confirm", mediaHandler.ConfirmUpload).Methods(http.MethodPost)
 	scoped.HandleFunc("/media", mediaHandler.ListMedia).Methods(http.MethodGet)
 	scoped.HandleFunc("/media/{mid}", mediaHandler.DeleteMedia).Methods(http.MethodDelete)
+	scoped.HandleFunc("/epoch", epochHandler.SetEpoch).Methods(http.MethodPost)
+	scoped.HandleFunc("/epoch", epochHandler.GetCurrent).Methods(http.MethodGet)
+	scoped.HandleFunc("/epoch/{n}/wrap", epochHandler.GetWrap).Methods(http.MethodGet)
 
 	r.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "OK")
