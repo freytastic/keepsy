@@ -89,6 +89,10 @@ func EpochReplay(message string) *APIError {
 	return &APIError{Code: "E_EPOCH_REPLAY", HTTPStatus: http.StatusConflict, Message: message}
 }
 
+func MemberSetDrift(message string) *APIError {
+	return &APIError{Code: "E_MEMBER_SET_DRIFT", HTTPStatus: http.StatusConflict, Message: message}
+}
+
 func InviteExpired(message string) *APIError {
 	return &APIError{Code: "E_INVITE_EXPIRED", HTTPStatus: http.StatusGone, Message: message}
 }
