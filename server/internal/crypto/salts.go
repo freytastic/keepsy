@@ -12,6 +12,7 @@ var (
 	SaltKeyConfirm    = []byte("key-confirm-v1")
 	SaltManifest      = []byte("manifest-v1")
 	SaltSpkRotate     = []byte("rotate-spk-v1")
+	SaltEpochSet      = []byte("epoch-set-v1")
 	SaltPromote       = []byte("promote-v1")
 	SaltJoinComplete  = []byte("join-complete-v1")
 	SaltAlbumNameHint = []byte("album-name-v1")
