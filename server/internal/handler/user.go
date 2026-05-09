@@ -28,13 +28,13 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// E2EE columns are not surfaced here : clients fetch peer bundles via
-	// GET /users/{id}/prekey-bundle and track their own publish state locally
+	// GET /users/{id}/prekey-bundle and track their own publish state locally.
+	// Email + name + avatar intentionally absent : server stores email_hmac
+	// (M8), display name lives encrypted per album in album_members.name_ct
+	// (M7), avatar comes back in Phase 5. Client persists own email + name
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":           u.ID,
-		"email":        u.Email,
-		"name":         u.Name,
-		"avatar_key":   u.AvatarKey,
 		"accent_color": u.AccentColor,
 		"theme":        u.Theme,
 		"created_at":   u.CreatedAt,
@@ -42,11 +42,12 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// UpdateUserRequest is profile only : E2EE columns ship via PUT /users/me/keys
+// UpdateUserRequest is profile only. Name + avatar deliberately not in this
+// endpoint (M7) : name lives in album_members.name_ct via PUT /albums/{id}/
+// members/me/profile-ct : avatars come back in Phase 5 via the media pipeline
 type UpdateUserRequest struct {
-	Name        *string `json:"name"`
-	AccentColor string  `json:"accent_color"`
-	Theme       string  `json:"theme"`
+	AccentColor string `json:"accent_color"`
+	Theme       string `json:"theme"`
 }
 
 func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
@@ -54,24 +55,29 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Reject E2EE keys in this endpoint : theyre owned by /users/me/keys + /spk
 	var raw map[string]json.RawMessage
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&raw); err != nil {
 		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
 		return
 	}
+	// Reject E2EE keys : theyre owned by /users/me/keys + /spk
 	for _, k := range []string{"ik_pub", "lk_pub", "spk_pub", "spk_sig", "spk_ts"} {
 		if _, present := raw[k]; present {
 			apierr.Write(w, r, apierr.Validation("E2EE fields are uploaded via PUT /users/me/keys"))
 			return
 		}
 	}
+	// Reject M7 fields explicitly so a stale client surfaces a clear error
+	// instead of silently dropping the rename
+	for _, k := range []string{"name", "avatar_key"} {
+		if _, present := raw[k]; present {
+			apierr.Write(w, r, apierr.Validation(k+" is no longer accepted here ; use the album scoped name endpoint"))
+			return
+		}
+	}
 
 	var req UpdateUserRequest
-	if v, ok := raw["name"]; ok {
-		_ = json.Unmarshal(v, &req.Name)
-	}
 	if v, ok := raw["accent_color"]; ok {
 		_ = json.Unmarshal(v, &req.AccentColor)
 	}
@@ -79,12 +85,10 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(v, &req.Theme)
 	}
 
-	in := service.UserUpdate{
-		Name:        req.Name,
+	u, err := h.userService.UpdateUser(r.Context(), userID, service.UserUpdate{
 		AccentColor: req.AccentColor,
 		Theme:       req.Theme,
-	}
-	u, err := h.userService.UpdateUser(r.Context(), userID, in)
+	})
 	if err != nil {
 		apierr.Write(w, r, apierr.Internal("failed to update user").WithCause(err))
 		return
@@ -92,8 +96,6 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":           u.ID,
-		"email":        u.Email,
-		"name":         u.Name,
 		"accent_color": u.AccentColor,
 		"theme":        u.Theme,
 	})

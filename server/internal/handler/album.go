@@ -207,15 +207,48 @@ func (h *AlbumHandler) ListAlbumMembers(w http.ResponseWriter, r *http.Request) 
 			"revoked":      m.Revoked,
 			"joined_at":    m.JoinedAt,
 			"profile": map[string]any{
-				"ik_pub":     optBase64(m.Profile.IKPub),
-				"lk_pub":     optBase64(m.Profile.LKPub),
-				"name":       m.Profile.Name,
-				"avatar_key": m.Profile.AvatarKey,
+				"ik_pub":  optBase64(m.Profile.IKPub),
+				"lk_pub":  optBase64(m.Profile.LKPub),
+				"name_ct": optBase64(m.Profile.NameCT),
 			},
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// UpdateMyProfileCT handles PUT /albums/{id}/members/me/profile-ct
+// Body: {"name_ct": base64}. Server stores the bytes opaquely : decryption
+// happens client side under the album's MK_current. Caller must already be
+// a member (RequireMember middleware enforces and resolves member_token)
+func (h *AlbumHandler) UpdateMyProfileCT(w http.ResponseWriter, r *http.Request) {
+	albumID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
+		return
+	}
+	memberToken, ok := middleware.MustGetMemberToken(r)
+	if !ok {
+		apierr.Write(w, r, apierr.Auth("member token missing in context"))
+		return
+	}
+	var req struct {
+		NameCT string `json:"name_ct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
+		return
+	}
+	nameCT, err := decodeBase64(req.NameCT)
+	if err != nil || len(nameCT) == 0 {
+		apierr.Write(w, r, apierr.Validation("name_ct must be base64-encoded ciphertext"))
+		return
+	}
+	if err := h.albumService.UpdateMemberNameCT(r.Context(), albumID, memberToken, nameCT); err != nil {
+		apierr.Write(w, r, apierr.Internal("failed to update name_ct").WithCause(err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // RemoveAlbumMember stub , full implementation in p7.1

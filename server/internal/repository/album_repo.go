@@ -179,6 +179,8 @@ func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UU
 }
 
 func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
+	// name_ct may be NULL until the member publishes their encrypted display
+	// name (M7) : clients render a placeholder for that case
 	rows, err := r.DB.Query(ctx, `
 		SELECT
 			am.member_token,
@@ -187,8 +189,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			ami.joined_at,
 			u.ik_pub,
 			u.lk_pub,
-			u.name,
-			u.avatar_key
+			am.name_ct
 		FROM album_members am
 		JOIN album_member_identities ami ON ami.member_token = am.member_token
 		JOIN users u ON u.id = ami.user_id
@@ -210,14 +211,24 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			&m.JoinedAt,
 			&m.Profile.IKPub,
 			&m.Profile.LKPub,
-			&m.Profile.Name,
-			&m.Profile.AvatarKey,
+			&m.Profile.NameCT,
 		); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// UpdateMemberNameCT writes the caller's encrypted display name for one album
+// Caller must already be a member (RequireMember middleware enforces). Bytes
+// are opaque to the server : it stores the wrap, never decrypts
+func (r *AlbumRepository) UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error {
+	_, err := r.DB.Exec(ctx,
+		`UPDATE album_members SET name_ct = $1 WHERE album_id = $2 AND member_token = $3`,
+		nameCT, albumID, memberToken,
+	)
+	return err
 }
 
 func (r *AlbumRepository) CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error) {

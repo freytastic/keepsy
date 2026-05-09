@@ -24,9 +24,10 @@ func (s *UserService) GetUserByID(ctx context.Context, id uuid.UUID) (*model.Use
 	return s.userRepo.GetByID(ctx, id)
 }
 
-// UserUpdate is the profile only update bag : E2EE columns moved to internal/e2ee/prekey
+// UserUpdate is the profile only update bag. Name is now per album in
+// album_members.name_ct (M7) and lives client side : E2EE columns moved to
+// internal/e2ee/prekey
 type UserUpdate struct {
-	Name        *string
 	AccentColor string
 	Theme       string
 }
@@ -35,9 +36,6 @@ func (s *UserService) UpdateUser(ctx context.Context, id uuid.UUID, in UserUpdat
 	u, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-	if in.Name != nil {
-		u.Name = in.Name
 	}
 	if in.AccentColor != "" {
 		u.AccentColor = in.AccentColor

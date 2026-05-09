@@ -61,14 +61,15 @@ func TestUpdateMe_AcceptsProfileFields(t *testing.T) {
 	id := uuid.New()
 	store := &stubUserStore{
 		getByIDFn: func(_ context.Context, _ uuid.UUID) (*model.User, error) {
-			return &model.User{ID: id, Email: "x@y.com", AccentColor: "#000", Theme: "dark"}, nil
+			return &model.User{ID: id, AccentColor: "#000", Theme: "dark"}, nil
 		},
 		updateFn: func(_ context.Context, _ *model.User) error { return nil },
 	}
 	svc := service.NewUserService(store)
 	h := NewUserHandler(svc)
 
-	body := []byte(`{"name":"Alice","accent_color":"#fff","theme":"light"}`)
+	// name + avatar deliberately absent : M7 moved them off the user row
+	body := []byte(`{"accent_color":"#fff","theme":"light"}`)
 	req := httptest.NewRequest(http.MethodPatch, "/users/me", bytes.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, id))
 	rec := httptest.NewRecorder()
@@ -77,5 +78,30 @@ func TestUpdateMe_AcceptsProfileFields(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// TestUpdateMe_RejectsName : M7 moved display name to album_members.name_ct :
+// a stale client sending name= must surface a clear error
+func TestUpdateMe_RejectsName(t *testing.T) {
+	id := uuid.New()
+	store := &stubUserStore{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*model.User, error) {
+			return &model.User{ID: id, AccentColor: "#000", Theme: "dark"}, nil
+		},
+		updateFn: func(_ context.Context, _ *model.User) error { return nil },
+	}
+	svc := service.NewUserService(store)
+	h := NewUserHandler(svc)
+
+	body := []byte(`{"name":"Alice","theme":"light"}`)
+	req := httptest.NewRequest(http.MethodPatch, "/users/me", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, id))
+	rec := httptest.NewRecorder()
+
+	h.UpdateMe(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }

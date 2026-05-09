@@ -45,7 +45,10 @@ func (m *mockAlbumStore) CountActiveMembers(_ context.Context, _ uuid.UUID) (int
 	return 0, nil
 }
 func (m *mockAlbumStore) UpdateName(_ context.Context, _ uuid.UUID, _ []byte) error { return nil }
-func (m *mockAlbumStore) Delete(_ context.Context, _ uuid.UUID) error               { return nil }
+func (m *mockAlbumStore) UpdateMemberNameCT(_ context.Context, _ uuid.UUID, _, _ []byte) error {
+	return nil
+}
+func (m *mockAlbumStore) Delete(_ context.Context, _ uuid.UUID) error { return nil }
 
 func membersRouter(store *mockAlbumStore) http.Handler {
 	svc := service.NewAlbumService(store)
@@ -60,7 +63,6 @@ func membersRouter(store *mockAlbumStore) http.Handler {
 func TestListAlbumMembers_MemberGets200WithList(t *testing.T) {
 	albumID := uuid.New()
 	callerToken := []byte("callertoken12345678901234567890ab")
-	name := "Alice"
 
 	store := &mockAlbumStore{
 		lookupMemberFn: func(_ context.Context, _, _ uuid.UUID) ([]byte, string, error) {
@@ -73,7 +75,7 @@ func TestListAlbumMembers_MemberGets200WithList(t *testing.T) {
 					Role:        "admin",
 					Revoked:     false,
 					JoinedAt:    time.Now(),
-					Profile:     model.MemberProfile{Name: &name},
+					Profile:     model.MemberProfile{},
 				},
 			}, nil
 		},
