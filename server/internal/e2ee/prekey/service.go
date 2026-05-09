@@ -92,8 +92,6 @@ type RotateSPKInput struct {
 	SPKSig      []byte
 	SPKTs       int64
 	RotationSig []byte
-	IP          string
-	UserAgent   string
 }
 
 // RotateSPK enforces the spec §4.2 ordering: lengths → ts-skew → state → spk_sig
@@ -129,10 +127,8 @@ func (s *Service) RotateSPK(ctx context.Context, userID uuid.UUID, in RotateSPKI
 		return apierr.TsNotMonotonic("spk_ts must be strictly greater than current spk_ts")
 	}
 	return s.repo.RotateSPK(ctx, userID, in.SPKPub, in.SPKSig, in.SPKTs, SpkRotation{
-		OldSpkTs:  cur.SPKTs,
-		NewSpkTs:  in.SPKTs,
-		IP:        in.IP,
-		UserAgent: in.UserAgent,
+		OldSpkTs: cur.SPKTs,
+		NewSpkTs: in.SPKTs,
 	})
 }
 

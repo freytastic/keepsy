@@ -61,12 +61,12 @@ func (r *Repo) UpsertIdentity(ctx context.Context, userID uuid.UUID, ikPub, lkPu
 	return err
 }
 
-// SpkRotation captures the audit row written alongside an SPK update
+// SpkRotation captures the audit row written alongside an SPK update.
+// IP + User Agent intentionally absent : per audit M2 they built a long term
+// IP/device fingerprint per user with no offsetting product value
 type SpkRotation struct {
-	OldSpkTs  *int64
-	NewSpkTs  int64
-	IP        string
-	UserAgent string
+	OldSpkTs *int64
+	NewSpkTs int64
 }
 
 // RotateSPK updates users.spk_* and inserts one spk_rotations audit row in a
@@ -85,18 +85,10 @@ func (r *Repo) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig [
 		return err
 	}
 
-	var ip any
-	if audit.IP != "" {
-		ip = audit.IP
-	}
-	var ua any
-	if audit.UserAgent != "" {
-		ua = audit.UserAgent
-	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO spk_rotations (user_id, old_spk_ts, new_spk_ts, ip, user_agent)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		userID, audit.OldSpkTs, audit.NewSpkTs, ip, ua,
+		`INSERT INTO spk_rotations (user_id, old_spk_ts, new_spk_ts)
+		 VALUES ($1, $2, $3)`,
+		userID, audit.OldSpkTs, audit.NewSpkTs,
 	); err != nil {
 		return err
 	}

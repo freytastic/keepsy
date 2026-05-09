@@ -116,8 +116,6 @@ func (h *Handler) RotateSPK(w http.ResponseWriter, r *http.Request) {
 		SPKSig:      sig,
 		SPKTs:       req.SPKTs,
 		RotationSig: rsig,
-		IP:          clientIP(r),
-		UserAgent:   r.UserAgent(),
 	}); err != nil {
 		apierr.Write(w, r, err)
 		return
@@ -251,11 +249,4 @@ func decodeB64(s, field string) ([]byte, error) {
 		return nil, apierr.Validation(field + " must be base64").WithCause(err)
 	}
 	return b, nil
-}
-
-func clientIP(r *http.Request) string {
-	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		return xf
-	}
-	return r.RemoteAddr
 }

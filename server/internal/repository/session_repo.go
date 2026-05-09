@@ -22,9 +22,9 @@ func (r *SessionRepository) Create(ctx context.Context, session *model.Session) 
 		session.ID = uuid.New()
 	}
 	_, err := r.DB.Exec(ctx,
-		`INSERT INTO sessions (id, user_id, token_hash, device_info, expires_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		session.ID, session.UserID, session.TokenHash, session.DeviceInfo, session.ExpiresAt)
+		`INSERT INTO sessions (id, user_id, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		session.ID, session.UserID, session.TokenHash, session.ExpiresAt)
 	return err
 }
 
@@ -36,10 +36,10 @@ func HashToken(token string) []byte {
 func (r *SessionRepository) GetByToken(ctx context.Context, token string) (*model.Session, error) {
 	var s model.Session
 	err := r.DB.QueryRow(ctx,
-		`SELECT id, user_id, token_hash, device_info, expires_at, created_at
+		`SELECT id, user_id, token_hash, expires_at, created_at
 		 FROM sessions WHERE token_hash = $1`,
 		HashToken(token),
-	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.DeviceInfo, &s.ExpiresAt, &s.CreatedAt)
+	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.ExpiresAt, &s.CreatedAt)
 	if err != nil {
 		return nil, err
 	}

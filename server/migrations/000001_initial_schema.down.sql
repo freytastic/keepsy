@@ -1,4 +1,5 @@
-DROP TABLE IF EXISTS notifications;
+DROP INDEX IF EXISTS idx_spk_rotations_user;
+DROP TABLE IF EXISTS spk_rotations;
 DROP TABLE IF EXISTS invite_links;
 DROP TABLE IF EXISTS invite_blobs;
 DROP TABLE IF EXISTS manifests;

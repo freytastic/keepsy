@@ -24,12 +24,11 @@ type User struct {
 }
 
 type Session struct {
-	ID         uuid.UUID `json:"id" db:"id"`
-	UserID     uuid.UUID `json:"user_id" db:"user_id"`
-	TokenHash  []byte    `json:"token_hash" db:"token_hash"`
-	DeviceInfo string    `json:"device_info" db:"device_info"`
-	ExpiresAt  time.Time `json:"expires_at" db:"expires_at"`
-	CreatedAt  time.Time `json:"created_at" db:"created_at"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	UserID    uuid.UUID `json:"user_id" db:"user_id"`
+	TokenHash []byte    `json:"token_hash" db:"token_hash"`
+	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
 type OneTimePrekey struct {

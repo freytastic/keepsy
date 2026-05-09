@@ -54,10 +54,12 @@ func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo Sessio
 }
 
 func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
-	// check rate limit
+	// Internal failure logs intentionally drop the email + OTP : the server is
+	// the one place these two are joinable to a real identity, and a leaked
+	// log line should never become a re identification attack
 	allowed, err := s.OTPRepo.CheckRateLimit(ctx, email)
 	if err != nil {
-		log.Printf("Error checking rate limit: %v", err)
+		log.Printf("RequestOTP: rate limit check failed: %v", err)
 		return err
 	}
 	if !allowed {
@@ -66,103 +68,86 @@ func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
 
 	otp, err := generateOTP(6)
 	if err != nil {
-		log.Printf("Error generating OTP: %v", err)
+		log.Printf("RequestOTP: generate failed: %v", err)
 		return err
 	}
 
-	// store OTP in Redis with 5 mins TTL
-	err = s.OTPRepo.SetOTP(ctx, email, otp, 5*time.Minute)
-	if err != nil {
-		log.Printf("Error storing OTP in Redis: %v", err)
+	if err := s.OTPRepo.SetOTP(ctx, email, otp, 5*time.Minute); err != nil {
+		log.Printf("RequestOTP: store failed: %v", err)
 		return err
 	}
 
-	// send the email
-	err = s.EmailService.SendOTP(email, otp)
-	if err != nil {
-		log.Printf("Error sending email: %v", err)
+	if err := s.EmailService.SendOTP(email, otp); err != nil {
+		log.Printf("RequestOTP: send failed: %v", err)
 		return err
 	}
 
 	return nil
 }
 
-func (s *AuthService) VerifyOTP(ctx context.Context, email, otp, deviceInfo string) (string, error) {
+func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string, error) {
 	storedOTP, err := s.OTPRepo.GetOTP(ctx, email)
 	if err != nil {
-		log.Printf("VerifyOTP: OTP not found in Redis for %s: %v", email, err)
+		// Intentionally no email/otp in the log line
 		return "", ErrInvalidOTP
 	}
 
 	if storedOTP != otp {
-		log.Printf("VerifyOTP: OTP mismatch for %s. Expected %s, got %s", email, storedOTP, otp)
+		// Same : no email, never the OTP value
 		return "", ErrInvalidOTP
 	}
 
-	// success, del OTP from redis so it cant be used again
 	_ = s.OTPRepo.DeleteOTP(ctx, email)
 
-	// OTP verified, check if user exists or create new one
 	user, err := s.UserRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
-			log.Printf("VerifyOTP: Creating new user for %s", email)
-			// create new user
 			user = &model.User{
 				Email:       email,
 				AccentColor: "#2dd4bf",
 				Theme:       "dark",
 			}
-			err = s.UserRepo.Create(ctx, user)
-			if err != nil {
-				log.Printf("VerifyOTP: Failed to create user: %v", err)
+			if err := s.UserRepo.Create(ctx, user); err != nil {
+				log.Printf("VerifyOTP: user create failed: %v", err)
 				return "", err
 			}
 		} else {
-			log.Printf("VerifyOTP: Database error fetching user: %v", err)
+			log.Printf("VerifyOTP: user fetch failed: %v", err)
 			return "", err
 		}
 	}
 
-	// create session
 	token, err := generateToken(32)
 	if err != nil {
 		return "", err
 	}
 
 	session := &model.Session{
-		UserID:     user.ID,
-		TokenHash:  repository.HashToken(token),
-		DeviceInfo: deviceInfo,
-		ExpiresAt:  time.Now().Add(30 * 24 * time.Hour), // 30 days
+		UserID:    user.ID,
+		TokenHash: repository.HashToken(token),
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
 
-	err = s.SessionRepo.Create(ctx, session)
-	if err != nil {
-		log.Printf("VerifyOTP: Failed to create session: %v", err)
+	if err := s.SessionRepo.Create(ctx, session); err != nil {
+		log.Printf("VerifyOTP: session create failed: %v", err)
 		return "", err
 	}
 
 	return token, nil
 }
 
-func (s *AuthService) RefreshSession(ctx context.Context, refreshToken, deviceInfo string) (string, string, time.Time, error) {
+func (s *AuthService) RefreshSession(ctx context.Context, refreshToken string) (string, string, time.Time, error) {
 	session, err := s.SessionRepo.GetByToken(ctx, refreshToken)
-
 	if err != nil {
-		log.Printf("RefreshSession: session not found or db error: %v", err)
 		return "", "", time.Time{}, errors.New("unauthorized")
 	}
 
 	if time.Now().After(session.ExpiresAt) {
-		log.Printf("RefreshSession: session expired")
 		return "", "", time.Time{}, errors.New("unauthorized")
 	}
 
-	// delete old session
 	_ = s.SessionRepo.DeleteByToken(ctx, refreshToken)
 
-	// create new session sliding it by another 30 days
 	newToken, err := generateToken(32)
 	if err != nil {
 		return "", "", time.Time{}, err
@@ -170,15 +155,13 @@ func (s *AuthService) RefreshSession(ctx context.Context, refreshToken, deviceIn
 
 	newExpiresAt := time.Now().Add(30 * 24 * time.Hour)
 	newSession := &model.Session{
-		UserID:     session.UserID,
-		TokenHash:  repository.HashToken(newToken),
-		DeviceInfo: deviceInfo,
-		ExpiresAt:  newExpiresAt,
+		UserID:    session.UserID,
+		TokenHash: repository.HashToken(newToken),
+		ExpiresAt: newExpiresAt,
 	}
 
-	err = s.SessionRepo.Create(ctx, newSession)
-	if err != nil {
-		log.Printf("RefreshSession: failed to create new session: %v", err)
+	if err := s.SessionRepo.Create(ctx, newSession); err != nil {
+		log.Printf("RefreshSession: session create failed: %v", err)
 		return "", "", time.Time{}, err
 	}
 

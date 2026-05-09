@@ -162,7 +162,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewAuthService(tt.mockOTP(), tt.mockUser(), tt.mockSession(), &MockEmailService{})
 
-			token, err := s.VerifyOTP(context.Background(), email, tt.otp, "test-device")
+			token, err := s.VerifyOTP(context.Background(), email, tt.otp)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {

@@ -17,7 +17,6 @@ import (
 	"github.com/freytastic/keepsy/internal/e2ee/prekey"
 	"github.com/freytastic/keepsy/internal/handler"
 	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/notifications"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/freytastic/keepsy/internal/ws"
@@ -70,16 +69,14 @@ func main() {
 
 	hub := ws.NewHub()
 	ticketStore := ws.NewTicketStore(rdb)
-	notifRepo := notifications.NewRepo(dbPool)
-	notifService := notifications.NewService(notifRepo, hub)
 
 	prekeyEx := prekey.NewRepo(dbPool, prekeyRepo)
 	prekeyService := prekey.NewService(prekeyEx)
-	prekeyHandler := prekey.NewHandler(prekeyService, notifService)
+	prekeyHandler := prekey.NewHandler(prekeyService, hub)
 
 	epochRepo := epoch.NewRepo(dbPool)
 	epochService := epoch.NewService(epochRepo)
-	epochHandler := epoch.NewHandler(epochService, epochRepo, notifService)
+	epochHandler := epoch.NewHandler(epochService, epochRepo, hub)
 
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
