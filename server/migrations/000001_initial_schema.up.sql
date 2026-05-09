@@ -1,5 +1,13 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- All DEFAULT timestamps are quantized to the hour. Per second precision on
+-- joined_at/started_at/created_at/etc. lets a snapshot adversary correlate
+-- "Alice and Bob joined within 90 seconds" or "Ghost_A always uploads on
+-- Friday 21:14":  hour precision preserves rough chronology + diurnal patterns
+-- without that correlation power. Call sites that pass an explicit timestamp
+-- (e.g. sessions.expires_at = now()+30d) keep their precision until the call
+-- site itself is quantized
+
 CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email           TEXT UNIQUE NOT NULL,
@@ -12,17 +20,16 @@ CREATE TABLE users (
     spk_pub         BYTEA,
     spk_sig         BYTEA,
     spk_ts          BIGINT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 
 CREATE TABLE sessions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     token_hash      BYTEA NOT NULL UNIQUE,
-    device_info     TEXT,
     expires_at      TIMESTAMPTZ NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 CREATE INDEX idx_sessions_user ON sessions(user_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
@@ -33,7 +40,7 @@ CREATE TABLE one_time_prekeys (
     opk_idx         INT NOT NULL,
     key_pub         BYTEA NOT NULL,
     consumed        BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     UNIQUE (user_id, opk_idx)
 );
 CREATE INDEX idx_opk_user_unconsumed ON one_time_prekeys(user_id) WHERE consumed = FALSE;
@@ -41,15 +48,15 @@ CREATE INDEX idx_opk_user_unconsumed ON one_time_prekeys(user_id) WHERE consumed
 CREATE TABLE albums (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name_ct         BYTEA NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 
 CREATE TABLE album_member_identities (
     member_token    BYTEA PRIMARY KEY,
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
-    joined_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    joined_at       TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     UNIQUE (user_id, album_id)
 );
 CREATE INDEX idx_amid_user ON album_member_identities(user_id);
@@ -69,7 +76,7 @@ CREATE TABLE album_members (
 CREATE TABLE album_epochs (
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
     epoch           INT NOT NULL,
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     epoch_sig       BYTEA,
     PRIMARY KEY (album_id, epoch)
 );
@@ -84,7 +91,7 @@ CREATE TABLE album_epoch_wraps (
     wrap_tag_ct     BYTEA NOT NULL,
     sender_token    BYTEA NOT NULL REFERENCES album_member_identities(member_token),
     sender_sig      BYTEA NOT NULL,
-    delivered_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivered_at    TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     PRIMARY KEY (album_id, epoch, recipient_token)
 );
 
@@ -100,7 +107,7 @@ CREATE TABLE media (
     blob_size       BIGINT NOT NULL,
     blob_sha256     BYTEA NOT NULL,
     media_type      TEXT NOT NULL CHECK (media_type IN ('photo', 'video')),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 CREATE INDEX idx_media_album ON media(album_id, created_at DESC);
 
@@ -113,7 +120,7 @@ CREATE TABLE manifests (
     prev_hash       BYTEA,
     signer_token    BYTEA NOT NULL REFERENCES album_member_identities(member_token),
     signature       BYTEA NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
     PRIMARY KEY (album_id, version)
 );
 
@@ -125,22 +132,24 @@ CREATE TABLE invite_blobs (
     signature       BYTEA NOT NULL,
     expires_at      TIMESTAMPTZ NOT NULL,
     consumed_at     TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 
 CREATE TABLE invite_links (
     code            TEXT PRIMARY KEY,
     blob_id         UUID NOT NULL REFERENCES invite_blobs(id) ON DELETE CASCADE,
     expires_at      TIMESTAMPTZ NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 
-CREATE TABLE notifications (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type            TEXT NOT NULL,
-    payload         JSONB NOT NULL DEFAULT '{}',
-    is_read         BOOLEAN NOT NULL DEFAULT false,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+-- spk_rotations : append only audit of monthly SPK turnover. IP + User-Agent
+-- intentionally absent : per privacy audit M2 they built a long term
+-- IP/device fingerprint per user with no offsetting product value
+CREATE TABLE spk_rotations (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    old_spk_ts  BIGINT,
+    new_spk_ts  BIGINT NOT NULL,
+    rotated_at  TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
-CREATE INDEX idx_notif_user_unread ON notifications(user_id, is_read, created_at DESC);
+CREATE INDEX idx_spk_rotations_user ON spk_rotations(user_id, rotated_at DESC);
