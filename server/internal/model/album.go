@@ -33,11 +33,13 @@ type AlbumWithMemberInfo struct {
 	MemberToken []byte `json:"member_token"`
 }
 
+// MemberProfile : public bytes other album members need to render the member
+// Name lives encrypted as NameCT (locked under the album's MK so only members
+// can read it). Avatar comes back in Phase 5 via the encrypted media pipeline
 type MemberProfile struct {
-	IKPub     []byte  `json:"ik_pub"`
-	LKPub     []byte  `json:"lk_pub"`
-	Name      *string `json:"name,omitempty"`
-	AvatarKey *string `json:"avatar_key,omitempty"`
+	IKPub  []byte `json:"ik_pub"`
+	LKPub  []byte `json:"lk_pub"`
+	NameCT []byte `json:"name_ct,omitempty"`
 }
 
 type MemberWithProfile struct {

@@ -25,6 +25,7 @@ type AlbumStore interface {
 	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error)
 	CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error)
 	UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error
+	UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -100,6 +101,20 @@ func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUI
 
 func (s *AlbumService) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
 	return s.albumRepo.ListMembers(ctx, albumID)
+}
+
+// UpdateMemberNameCT writes the caller's encrypted name for one album. The
+// caller's member_token is resolved by the RequireMember middleware : the
+// service only validates payload shape and forwards. Bytes are opaque to
+// the server (encrypted under the album's MK on the client)
+func (s *AlbumService) UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error {
+	if len(memberToken) == 0 {
+		return ErrUnauthorized
+	}
+	if len(nameCT) == 0 {
+		return errors.New("name_ct is required")
+	}
+	return s.albumRepo.UpdateMemberNameCT(ctx, albumID, memberToken, nameCT)
 }
 
 // AddMember (P0.2): adds a new member at role='member' with a fresh

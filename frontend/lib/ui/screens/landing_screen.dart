@@ -43,12 +43,24 @@ class _LandingPageState extends State<LandingPage> {
       final userData = responses[0] as Map<String, dynamic>?;
       final userAlbums = responses[1] as List<dynamic>?;
 
+      // Server doesnt return email or display name (M8 + M7) : load both from
+      // local storage written at login. Null on a brand new install that came
+      // straight to landing without going through login : harmless
+      final cachedEmail = await storage.getEmail();
+      final cachedName = await storage.getName();
       if (mounted) {
+        final appState = context.read<AppState>();
         if (userData != null) {
-          context.read<AppState>().setUserData(userData);
+          appState.setUserData(userData);
+        }
+        if (cachedEmail != null) {
+          appState.setEmail(cachedEmail);
+        }
+        if (cachedName != null) {
+          appState.setProfileName(cachedName);
         }
         if (userAlbums != null) {
-          context.read<AppState>().setAlbums(userAlbums.cast());
+          appState.setAlbums(userAlbums.cast());
         }
 
         // D5 + D9 + §4.2 §9 cold start hygiene : rotate SPK if ≥30d, refill

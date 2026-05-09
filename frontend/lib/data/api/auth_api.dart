@@ -50,6 +50,9 @@ class AuthService {
 
         if (token != null && refreshToken != null && expiresAt != null) {
           await _storage.saveAuth(token, refreshToken, expiresAt);
+          // M8 privacy : server stores email_hmac, not the plaintext, so the
+          // client persists its own email for profile screen display
+          await _storage.saveEmail(email);
           // D4 : hard block login completion until the E2EE identity is
           // published. bootstrap() is idempotent + resumable, so retried
           // logins after a partial failure pick up where the last attempt

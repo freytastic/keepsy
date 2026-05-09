@@ -22,12 +22,12 @@ AlbumModel _fakeAlbum() => AlbumModel(
       updatedAt: DateTime.now(),
     );
 
-AlbumMember _fakeMember(String name, String role) => AlbumMember(
-      memberToken: 'tok${name.toLowerCase()}',
+AlbumMember _fakeMember(String token, String role) => AlbumMember(
+      memberToken: token,
       role: role,
       revoked: false,
       joinedAt: DateTime(2024),
-      profile: MemberProfile(name: name),
+      profile: MemberProfile(),
     );
 
 Widget _wrap(Widget child) => ChangeNotifierProvider(
@@ -37,19 +37,21 @@ Widget _wrap(Widget child) => ChangeNotifierProvider(
 
 void main() {
   testWidgets('AlbumDetailScreen shows member chips', (tester) async {
+    // M7 : member display name is the first 8 chars of the pseudonymous token
+    // until name_ct decryption wires up in Phase 5
     await tester.pumpWidget(_wrap(
       AlbumDetailScreen(
         album: _fakeAlbum(),
         albumService: _MockAlbumService([
-          _fakeMember('Alice', 'admin'),
-          _fakeMember('Bob', 'member'),
+          _fakeMember('alicetoken123', 'admin'),
+          _fakeMember('bobtoken456', 'member'),
         ]),
       ),
     ));
     await tester.pump();
 
-    expect(find.text('Alice'), findsOneWidget);
-    expect(find.text('Bob'), findsOneWidget);
+    expect(find.text('alicetok'), findsOneWidget);
+    expect(find.text('bobtoken'), findsOneWidget);
     expect(find.text('admin'), findsOneWidget);
     expect(find.text('member'), findsOneWidget);
   });

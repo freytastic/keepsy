@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -51,6 +52,36 @@ func (r *RateLimiter) Allow(ctx context.Context, cfg LimitConfig) (bool, int, er
 		return false, current, nil
 	}
 	return true, current, nil
+}
+
+// ProbeDistinctMiddleware tracks distinct values per key over a window and
+// logs a warning when the distinct count exceeds threshold. Useful for
+// detecting "one user fetching many different targets" probing patterns
+// where a sliding window count alone wouldnt notice (eg 5/min per pair
+// is fine, but 50 distinct pairs/hr from one requester is sus)
+func (r *RateLimiter) ProbeDistinctMiddleware(
+	keyFn func(*http.Request) (key, member string),
+	threshold int,
+	window time.Duration,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			key, member := keyFn(req)
+			if key != "" && member != "" {
+				pipe := r.rdb.TxPipeline()
+				addCmd := pipe.SAdd(req.Context(), key, member)
+				pipe.Expire(req.Context(), key, window)
+				cardCmd := pipe.SCard(req.Context(), key)
+				if _, err := pipe.Exec(req.Context()); err == nil {
+					if addCmd.Val() > 0 && int(cardCmd.Val()) > threshold {
+						slog.Default().Warn("ratelimit: probe threshold exceeded",
+							"key", key, "distinct", cardCmd.Val(), "threshold", threshold)
+					}
+				}
+			}
+			next.ServeHTTP(w, req)
+		})
+	}
 }
 
 // Middleware returns an http middleware that applies the limiter

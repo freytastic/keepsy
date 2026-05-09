@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
-import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/ui/theme/app_theme.dart';
 
 class AppState extends ChangeNotifier {
   StreamSubscription<RealtimeEvent>? _realtimeSub;
@@ -43,10 +44,13 @@ class AppState extends ChangeNotifier {
   String? get avatarUrl => _avatarKey;
 
   void setUserData(Map<String, dynamic> data) {
+    // Email intentionally absent : server stores email_hmac per M8 privacy
+    // audit, never the plaintext. Client owns its own email cache via
+    // StorageService.saveEmail and pushes it via setEmail()
+    // Name + avatar absent for the same reason (M7) : name lives encrypted
+    // per album in album_members.name_ct, client caches its own typed name
+    // via StorageService.saveName + setProfileName
     _userId = data['id'];
-    _email = data['email'];
-    _profileName = data['name'] ?? 'User';
-    _avatarKey = data['avatar_key'];
 
     if (data['accent_color'] != null) {
       _accent = K.hexColor(data['accent_color']);
@@ -54,6 +58,11 @@ class AppState extends ChangeNotifier {
     if (data['theme'] != null) {
       _isDark = data['theme'] == 'dark';
     }
+    notifyListeners();
+  }
+
+  void setEmail(String? email) {
+    _email = email;
     notifyListeners();
   }
 
@@ -69,6 +78,9 @@ class AppState extends ChangeNotifier {
 
   void setProfileName(String name) {
     _profileName = name;
+    // Persist locally so the profile screen still shows the right name on
+    // next cold start. Per album name_ct publishing wires up in Phase 5
+    unawaited(StorageService().saveName(name));
     notifyListeners();
   }
 
