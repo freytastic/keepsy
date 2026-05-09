@@ -63,7 +63,7 @@ func main() {
 	albumRepo := repository.NewAlbumRepository(dbPool)
 
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
-	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService)
+	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService, cfg.EmailHMACKey)
 	userService := service.NewUserService(userRepo)
 	albumService := service.NewAlbumService(albumRepo)
 
@@ -111,11 +111,17 @@ func main() {
 	authed.HandleFunc("/users/me/spk", prekeyHandler.RotateSPK).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks", prekeyHandler.ReplenishOPKs).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks/count", prekeyHandler.GetOPKCount).Methods(http.MethodGet)
-	// peer bundle fetch is rate limited per requesting user : key is the user_id
-	// extracted from auth ctx, so we register the wrapper after auth middleware
+	// peer bundle fetch : per (requester, target) rate limit (5/min/pair)
+	// chained with a per requester distinct probe tracker (warn at >20 distinct
+	// targets/hr). The pair limit makes legitimate retries cheap : the probe
+	// tracker catches enumeration that hides under the pair limit
 	authed.Handle(
 		"/users/{id}/prekey-bundle",
-		rateLimiter.Middleware(prekey.KeyByUserID, 5, 60*time.Second)(http.HandlerFunc(prekeyHandler.GetPrekeyBundle)),
+		rateLimiter.Middleware(prekey.KeyByRequesterAndTarget, 5, 60*time.Second)(
+			rateLimiter.ProbeDistinctMiddleware(prekey.KeyByRequesterTargetHourly, 20, time.Hour)(
+				http.HandlerFunc(prekeyHandler.GetPrekeyBundle),
+			),
+		),
 	).Methods(http.MethodGet)
 
 	authed.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
@@ -129,6 +135,7 @@ func main() {
 	scoped.HandleFunc("", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
 	scoped.HandleFunc("/members", albumHandler.ListAlbumMembers).Methods(http.MethodGet)
 	scoped.HandleFunc("/members", albumHandler.AddMember).Methods(http.MethodPost)
+	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
 	scoped.HandleFunc("/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)
 	scoped.HandleFunc("/invite-blob", inviteHandler.CreateInviteBlob).Methods(http.MethodPost)

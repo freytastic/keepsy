@@ -308,13 +308,13 @@ func TestPrekeyBundle_RateLimit(t *testing.T) {
 	r := mux.NewRouter()
 	r.Handle(
 		"/users/{id}/prekey-bundle",
-		limiter.Middleware(KeyByUserID, 5, 60*time.Second)(http.HandlerFunc(h.GetPrekeyBundle)),
+		limiter.Middleware(KeyByRequesterAndTarget, 5, 60*time.Second)(http.HandlerFunc(h.GetPrekeyBundle)),
 	).Methods(http.MethodGet)
 
 	requester := uuid.New()
 	target := uuid.New()
 	// Wipe limiter slot from any prior test run
-	_ = rdb.Del(context.Background(), "prekey-bundle:"+requester.String()).Err()
+	_ = rdb.Del(context.Background(), "prekey-bundle:"+requester.String()+":"+target.String()).Err()
 
 	for i := range 5 {
 		rec := httptest.NewRecorder()

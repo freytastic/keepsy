@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
@@ -229,15 +231,36 @@ func (h *Handler) GetPrekeyBundle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// KeyByUserID is the ratelimit key extractor for GET /users/{id}/prekey-bundle
-// Returns "" when no user is in context (auth middleware will already have
-// rejected, so the limiter middleware passes through harmlessly)
-func KeyByUserID(r *http.Request) string {
+// KeyByRequesterAndTarget keys the per pair rate limit. Pre M10 the key was
+// per requester only : that allowed 5/min probing across distinct targets,
+// trivially enumerable as 7,200/day. Per pair makes legitimate "Im inviting
+// person X to album Y" repeats cheap while making target enumeration costly
+func KeyByRequesterAndTarget(r *http.Request) string {
 	uid, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		return ""
 	}
-	return "prekey-bundle:" + uid.String()
+	target := mux.Vars(r)["id"]
+	if target == "" {
+		return ""
+	}
+	return "prekey-bundle:" + uid.String() + ":" + target
+}
+
+// KeyByRequesterTargetHourly returns (set_key, member) for the distinct
+// target probe tracker. The key rolls each hour so the window is naturally
+// bounded : the member is the target user_id being probed
+func KeyByRequesterTargetHourly(r *http.Request) (string, string) {
+	uid, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		return "", ""
+	}
+	target := mux.Vars(r)["id"]
+	if target == "" {
+		return "", ""
+	}
+	hour := time.Now().UTC().Unix() / 3600
+	return fmt.Sprintf("prekey-probe:%s:%d", uid.String(), hour), target
 }
 
 func decodeB64(s, field string) ([]byte, error) {
