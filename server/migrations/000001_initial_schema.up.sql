@@ -8,11 +8,20 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- (e.g. sessions.expires_at = now()+30d) keep their precision until the call
 -- site itself is quantized
 
+-- email_hmac : HMAC-SHA256(KEEPSY_EMAIL_HMAC_KEY, lower(trim(email))). The
+-- raw email never lands on disk : it passes through the OTP send path in
+-- memory only, then drops. Lookup goes via the HMAC. Loses the "is this
+-- email registered?" oracle (intended) and the "email already taken" UX
+-- (intended : matches Blind ID design)
+
+-- name + avatar_key intentionally absent (M7) : display names live encrypted
+-- per album in album_members.name_ct, locked under that album's MK so only
+-- members can read them. Avatars come back in Phase 5 wired through the
+-- encrypted media pipeline. Client owns its own typed name locally for the
+-- profile screen (StorageService.saveName)
 CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email           TEXT UNIQUE NOT NULL,
-    name            TEXT,
-    avatar_key      TEXT,
+    email_hmac      BYTEA UNIQUE NOT NULL,
     accent_color    TEXT NOT NULL DEFAULT '#2dd4bf',
     theme           TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('dark', 'light')),
     ik_pub          BYTEA,
@@ -62,11 +71,16 @@ CREATE TABLE album_member_identities (
 CREATE INDEX idx_amid_user ON album_member_identities(user_id);
 CREATE INDEX idx_amid_album ON album_member_identities(album_id);
 
+-- name_ct : member's display name encrypted under MK_current of THIS album
+-- The wire format is the §1.1 wrap (VER ‖ NONCE ‖ TAG ‖ CT). Server treats
+-- it as opaque bytes : only members holding the album's MK can decrypt
+-- NULL until the member publishes (placeholder shown by client until then)
 CREATE TABLE album_members (
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
     member_token    BYTEA NOT NULL REFERENCES album_member_identities(member_token) ON DELETE CASCADE,
     role            TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'co-admin', 'member')),
     revoked_at      TIMESTAMPTZ,
+    name_ct         BYTEA,
     PRIMARY KEY (album_id, member_token)
 );
 
