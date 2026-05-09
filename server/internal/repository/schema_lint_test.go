@@ -18,7 +18,6 @@ var allowedUserFKTables = map[string]bool{
 	"sessions":                true,
 	"one_time_prekeys":        true,
 	"album_member_identities": true,
-	"notifications":           true,
 	"spk_rotations":           true,
 }
 
