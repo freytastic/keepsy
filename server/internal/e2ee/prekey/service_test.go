@@ -171,7 +171,6 @@ func TestRotateSPK_AuditRowWritten(t *testing.T) {
 
 	err := svc.RotateSPK(context.Background(), uuid.New(), RotateSPKInput{
 		SPKPub: spk, SPKSig: sig, SPKTs: fixedTs, RotationSig: rsig,
-		IP: "10.0.0.1", UserAgent: "test/1.0",
 	})
 	if err != nil {
 		t.Fatalf("RotateSPK: %v", err)
@@ -184,9 +183,6 @@ func TestRotateSPK_AuditRowWritten(t *testing.T) {
 	}
 	if got.OldSpkTs == nil || *got.OldSpkTs != cur {
 		t.Errorf("OldSpkTs = %v, want %d", got.OldSpkTs, cur)
-	}
-	if got.IP != "10.0.0.1" || got.UserAgent != "test/1.0" {
-		t.Errorf("audit metadata not propagated: %+v", got)
 	}
 }
 
