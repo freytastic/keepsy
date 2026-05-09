@@ -30,12 +30,12 @@ func (m *MockOTPStore) CheckRateLimit(ctx context.Context, e string) (bool, erro
 }
 
 type MockUserStore struct {
-	GetByEmailFunc func(ctx context.Context, email string) (*model.User, error)
-	CreateFunc     func(ctx context.Context, user *model.User) error
+	GetByEmailHMACFunc func(ctx context.Context, hmac []byte) (*model.User, error)
+	CreateFunc         func(ctx context.Context, user *model.User) error
 }
 
-func (m *MockUserStore) GetByEmail(ctx context.Context, e string) (*model.User, error) {
-	return m.GetByEmailFunc(ctx, e)
+func (m *MockUserStore) GetByEmailHMAC(ctx context.Context, h []byte) (*model.User, error) {
+	return m.GetByEmailHMACFunc(ctx, h)
 }
 func (m *MockUserStore) Create(ctx context.Context, u *model.User) error { return m.CreateFunc(ctx, u) }
 
@@ -67,6 +67,9 @@ type MockEmailService struct {
 
 func (m *MockEmailService) SendOTP(e, o string) error { return m.SendOTPFunc(e, o) }
 
+// testHMACKey : 32 bytes, deterministic so tests are reproducible
+var testHMACKey = []byte("test-email-hmac-key-32-bytes!!!!")
+
 func TestAuthService_VerifyOTP(t *testing.T) {
 	email := "test@example.com"
 	correctOTP := "123456"
@@ -91,8 +94,8 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			},
 			mockUser: func() *MockUserStore {
 				return &MockUserStore{
-					GetByEmailFunc: func(ctx context.Context, e string) (*model.User, error) {
-						return &model.User{ID: uuid.New(), Email: email}, nil
+					GetByEmailHMACFunc: func(ctx context.Context, _ []byte) (*model.User, error) {
+						return &model.User{ID: uuid.New()}, nil
 					},
 				}
 			},
@@ -115,7 +118,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			},
 			mockUser: func() *MockUserStore {
 				return &MockUserStore{
-					GetByEmailFunc: func(ctx context.Context, e string) (*model.User, error) {
+					GetByEmailHMACFunc: func(ctx context.Context, _ []byte) (*model.User, error) {
 						return nil, repository.ErrUserNotFound
 					},
 					CreateFunc: func(ctx context.Context, u *model.User) error {
@@ -160,7 +163,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewAuthService(tt.mockOTP(), tt.mockUser(), tt.mockSession(), &MockEmailService{})
+			s := NewAuthService(tt.mockOTP(), tt.mockUser(), tt.mockSession(), &MockEmailService{}, testHMACKey)
 
 			token, err := s.VerifyOTP(context.Background(), email, tt.otp)
 

@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"log"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/freytastic/keepsy/internal/model"
@@ -27,7 +30,7 @@ type OTPStore interface {
 }
 
 type AuthUserStore interface {
-	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	GetByEmailHMAC(ctx context.Context, hmac []byte) (*model.User, error)
 	Create(ctx context.Context, user *model.User) error
 }
 
@@ -42,15 +45,29 @@ type AuthService struct {
 	UserRepo     AuthUserStore
 	SessionRepo  SessionStore
 	EmailService EmailService
+	emailHMACKey []byte
 }
 
-func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo SessionStore, emailService EmailService) *AuthService {
+func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo SessionStore, emailService EmailService, emailHMACKey []byte) *AuthService {
+	if len(emailHMACKey) < 32 {
+		panic("auth service: emailHMACKey must be >= 32 bytes")
+	}
 	return &AuthService{
 		OTPRepo:      otpRepo,
 		UserRepo:     userRepo,
 		SessionRepo:  sessionRepo,
 		EmailService: emailService,
+		emailHMACKey: emailHMACKey,
 	}
+}
+
+// HashEmail computes HMAC-SHA256(emailHMACKey, lower(trim(email))). The
+// caller must pass the user supplied email exactly once : after the HMAC
+// is in hand the plaintext can be discarded
+func (s *AuthService) HashEmail(email string) []byte {
+	mac := hmac.New(sha256.New, s.emailHMACKey)
+	mac.Write([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return mac.Sum(nil)
 }
 
 func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
@@ -99,11 +116,12 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 
 	_ = s.OTPRepo.DeleteOTP(ctx, email)
 
-	user, err := s.UserRepo.GetByEmail(ctx, email)
+	emailHMAC := s.HashEmail(email)
+	user, err := s.UserRepo.GetByEmailHMAC(ctx, emailHMAC)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			user = &model.User{
-				Email:       email,
+				EmailHMAC:   emailHMAC,
 				AccentColor: "#2dd4bf",
 				Theme:       "dark",
 			}
