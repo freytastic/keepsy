@@ -51,9 +51,8 @@ func (h *AuthHandler) RequestOTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type VerifyOTPPayload struct {
-	Email      string `json:"email"`
-	OTP        string `json:"otp"`
-	DeviceInfo string `json:"device_info"`
+	Email string `json:"email"`
+	OTP   string `json:"otp"`
 }
 
 func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +68,7 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP, payload.DeviceInfo)
+	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidOTP) {
 			apierr.Write(w, r, apierr.Auth("invalid or expired OTP"))
@@ -89,7 +88,6 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 type RefreshRequest struct {
 	RefreshToken string `json:"refreshToken"`
-	DeviceInfo   string `json:"deviceInfo"`
 }
 
 type RefreshResponse struct {
@@ -110,7 +108,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newToken, newRefreshToken, expiresAt, err := h.AuthService.RefreshSession(r.Context(), payload.RefreshToken, payload.DeviceInfo)
+	newToken, newRefreshToken, expiresAt, err := h.AuthService.RefreshSession(r.Context(), payload.RefreshToken)
 	if err != nil {
 		apierr.Write(w, r, apierr.Auth("invalid or expired refresh token").WithCause(err))
 		return
