@@ -1,12 +1,17 @@
 class MemberProfile {
   final String? ikPub;
+  // §4.2 D1 : lk_pub is required by the X3DH responder. Tolerated as null in
+  // the decoder for transition compat, but fetches against a current server
+  // will populate it
+  final String? lkPub;
   final String? name;
   final String? avatarKey;
 
-  MemberProfile({this.ikPub, this.name, this.avatarKey});
+  MemberProfile({this.ikPub, this.lkPub, this.name, this.avatarKey});
 
   factory MemberProfile.fromJson(Map<String, dynamic> json) => MemberProfile(
         ikPub: json['ik_pub'] as String?,
+        lkPub: json['lk_pub'] as String?,
         name: json['name'] as String?,
         avatarKey: json['avatar_key'] as String?,
       );
