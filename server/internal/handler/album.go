@@ -208,6 +208,7 @@ func (h *AlbumHandler) ListAlbumMembers(w http.ResponseWriter, r *http.Request) 
 			"joined_at":    m.JoinedAt,
 			"profile": map[string]any{
 				"ik_pub":     optBase64(m.Profile.IKPub),
+				"lk_pub":     optBase64(m.Profile.LKPub),
 				"name":       m.Profile.Name,
 				"avatar_key": m.Profile.AvatarKey,
 			},

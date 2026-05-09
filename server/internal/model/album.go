@@ -35,6 +35,7 @@ type AlbumWithMemberInfo struct {
 
 type MemberProfile struct {
 	IKPub     []byte  `json:"ik_pub"`
+	LKPub     []byte  `json:"lk_pub"`
 	Name      *string `json:"name,omitempty"`
 	AvatarKey *string `json:"avatar_key,omitempty"`
 }
