@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +8,7 @@ import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/ui/widgets/shared_widgets.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/data/api/auth_api.dart';
+import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/e2ee/identity.dart';
 
@@ -134,6 +137,11 @@ class _LoginScreenState extends State<LoginScreen>
           final userData = await userService.getMe();
           if (userData != null && mounted) {
             context.read<AppState>().setUserData(userData);
+          }
+          if (mounted) {
+            // Idempotent ('if (_active) return') : also hit on landing for
+            // returning users : this covers the fresh login path
+            unawaited(context.read<RealtimeService>().connect());
           }
           setState(() {
             _loading = false;

@@ -1,9 +1,14 @@
+import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/ui/screens/login_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
@@ -46,17 +51,35 @@ class _LandingPageState extends State<LandingPage> {
           context.read<AppState>().setAlbums(userAlbums.cast());
         }
 
-        // D5 + D9 cold-start hygiene : rotate SPK if ≥30d and refill OPKs
-        // if the pool dropped below the trigger. Both are best effort and
-        // must never block landing : a network blip shouldn't bounce the
-        // user back to login
+        // D5 + D9 + §4.2 §9 cold start hygiene : rotate SPK if ≥30d, refill
+        // OPKs if pool dropped below trigger, catch up missed epoch_changed
+        // events. All best effort and must never block landing : a network
+        // blip shouldn't bounce the user back to login
+        // Capture providers up front so the post await dispatch doesnt re
+        // read context across async gaps
         final identity = context.read<IdentityService>();
+        final epochProcessor = context.read<EpochProcessor>();
+        // Idempotent ('if (_active) return'); safe to call on every landing
+        unawaited(context.read<RealtimeService>().connect());
         try {
           await identity.ensureSpkRotated();
         } catch (_) {/* logged elsewhere; landing must not gate */}
         try {
           await identity.replenishOpks();
         } catch (_) {/* same */}
+
+        if (userAlbums != null && userAlbums.isNotEmpty) {
+          final ids = <Uint8List>[];
+          for (final a in userAlbums) {
+            final b = _uuidStringToBytes((a as AlbumModel).id);
+            if (b != null) ids.add(b);
+          }
+          if (ids.isNotEmpty) {
+            try {
+              await epochProcessor.catchUpAll(ids);
+            } catch (_) {/* same hygiene as SPK/OPK */}
+          }
+        }
       }
     }
 
@@ -74,6 +97,20 @@ class _LandingPageState extends State<LandingPage> {
         ),
       ),
     );
+  }
+
+  // 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
+  // so callers (best effort cold start) skip the album rather than throw
+  Uint8List? _uuidStringToBytes(String s) {
+    final hex = s.replaceAll('-', '');
+    if (hex.length != 32) return null;
+    final out = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      final v = int.tryParse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+      if (v == null) return null;
+      out[i] = v;
+    }
+    return out;
   }
 
   @override

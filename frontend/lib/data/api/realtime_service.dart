@@ -13,6 +13,7 @@ class RealtimeEvent {
 class RealtimeService {
   final ApiClient _api;
   final _controller = StreamController<RealtimeEvent>.broadcast();
+  final _connectedController = StreamController<void>.broadcast();
 
   WebSocketChannel? _channel;
   bool _active = false;
@@ -20,6 +21,12 @@ class RealtimeService {
   RealtimeService(this._api);
 
   Stream<RealtimeEvent> get stream => _controller.stream;
+
+  // Fires once per successful WS open (initial connect + every reconnect after
+  // a flap). Subscribers use it to catch up on events they may have missed
+  // while the socket was down. May emit spuriously if the upgrade fails right
+  // after connect() returns : consumers should make catch up idempotent
+  Stream<void> get connected => _connectedController.stream;
 
   Future<void> connect() async {
     if (_active) return;
@@ -48,6 +55,7 @@ class RealtimeService {
 
     _channel =
         WebSocketChannel.connect(buildWsUri(AppConstants.baseURL, ticket));
+    _connectedController.add(null);
 
     await for (final raw in _channel!.stream) {
       if (!_active) break;
@@ -83,5 +91,6 @@ class RealtimeService {
   void dispose() {
     disconnect();
     _controller.close();
+    _connectedController.close();
   }
 }
