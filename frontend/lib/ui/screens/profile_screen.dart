@@ -129,8 +129,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       color: K.t3(dark)),
                                 ),
                                 onSubmitted: (v) async {
+                                  // M7 : name is not stored on the server
+                                  // anymore. setProfileName persists locally ;
+                                  // per album name_ct publishing wires in
+                                  // Phase 5 alongside encrypted media display
                                   state.setProfileName(v);
-                                  UserService().updateMe({'name': v});
                                   setState(
                                           () => _editingName = false);
                                 },

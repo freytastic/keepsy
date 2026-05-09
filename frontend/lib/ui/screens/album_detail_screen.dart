@@ -157,7 +157,9 @@ class _MemberChip extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            member.profile.name ?? member.memberToken.substring(0, 8),
+            // M7 : displayName falls back to a token slice until name_ct
+            // decryption wires up in Phase 5
+            member.displayName,
             style: TextStyle(
                 color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
           ),

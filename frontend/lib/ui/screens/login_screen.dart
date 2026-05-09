@@ -139,6 +139,9 @@ class _LoginScreenState extends State<LoginScreen>
             context.read<AppState>().setUserData(userData);
           }
           if (mounted) {
+            // Server no longer returns email (M8) : push the typed plaintext
+            // into AppState directly so the profile screen renders it
+            context.read<AppState>().setEmail(_emailCtrl.text.trim());
             // Idempotent ('if (_active) return') : also hit on landing for
             // returning users : this covers the fresh login path
             unawaited(context.read<RealtimeService>().connect());
