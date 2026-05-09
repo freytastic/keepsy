@@ -1,7 +1,19 @@
 import 'package:test/test.dart';
+import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 
 void main() {
+  group('RealtimeService.connected', () {
+    // Surface only test : the controller is broadcast (multiple subscribers
+    // tolerated) and dispose() closes it. The actual emit on connect is
+    // exercised end to end by manual verification + the connect loop in prod
+    test('exposes a broadcast stream', () {
+      final svc = RealtimeService(ApiClient());
+      expect(svc.connected.isBroadcast, isTrue);
+      svc.dispose();
+    });
+  });
+
   group('RealtimeService.buildWsUri', () {
     test('converts http to ws scheme', () {
       final uri =

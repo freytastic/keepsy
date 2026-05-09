@@ -1,0 +1,32 @@
+{
+  "category": "signed_payload",
+  "vectors": [
+    {
+      "name": "signed_payload basic",
+      "ik_seed_hex": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "album_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "epoch": 0,
+      "wrap_blob_hex": "01111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "expected_msg_hex": "d99249f5270a781a63b2b0fe3a2e0450416d8b10325f93ec1cbf78b4af5bb640",
+      "expected_sig_hex": "ca1ae7669801a701c3b90f7a425ad8203a1d36b53ffdee8ad093a4ace4a55600433c6ef5f85d8e6b358b4971dcd34a3b623e9311e5f83c071d98eae8e6384405"
+    },
+    {
+      "name": "signed_payload epoch=1",
+      "ik_seed_hex": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+      "album_id_hex": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "epoch": 1,
+      "wrap_blob_hex": "01222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+      "expected_msg_hex": "a53bbd726e37e35b1b8dde4b2045c936cb5e3c3bea36631a4bca97e9c514272b",
+      "expected_sig_hex": "b962bdbfdbf54a36d613ef20030a2ff45cdfde7a504acd8a95cbafe13a6beaad80e2b0fd0ffdae5ab42493f8105f3950bbae15b29a385e1013aae3d2177a3c04"
+    },
+    {
+      "name": "signed_payload epoch=7",
+      "ik_seed_hex": "f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3",
+      "album_id_hex": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "epoch": 7,
+      "wrap_blob_hex": "01333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333",
+      "expected_msg_hex": "154165f9e5dc389da7217a4b29d072940774e5b10a571450dfa71cf470647ff0",
+      "expected_sig_hex": "f839bc5e43acab695ac06f61eeab15cd827fd30cdb140182fdd29da8e6f5445fd46a6243fb5e881821d5320007ab7cd27b497eac155c42beec3aec7a5ba8a508"
+    }
+  ]
+}

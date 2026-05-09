@@ -1,13 +1,22 @@
+import 'dart:convert';
+import 'dart:developer' as developer;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/api_error.dart';
+import 'package:keepsy/data/api/epoch_api.dart' as data_epoch;
 import 'package:keepsy/data/api/error_mapper.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/epoch_api.dart';
+import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
+import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
@@ -58,12 +67,76 @@ void main() async {
     api: prekeyApi,
   );
 
-  //WS e2ee.opk_low → replenishOpks. Service level mutex collapses
-  // bursts to one in flight call so bouncing connections dont fan out
+  // §4.2 client lane wiring: AlbumKeyStore (MK by epoch), MemberDirectory
+  // (sender_token → ik/lk pubs via ListMembers), HttpEpochApi (current epoch
+  // + per recipient wrap fetch), EpochProcessor (X3DH responder + AEAD +
+  // installVerified). MemberDirectory's fetcher closure is the single point
+  // where the e2ee/ layer touches lib/data/api/album_api.dart
+  final albumKeyStore = AlbumKeyStore(secureKeyStore);
+  final albumService = AlbumService();
+  final memberDirectory = MemberDirectory((albumId) async {
+    final members =
+        await albumService.listMembers(_uuidStringFromBytes(albumId));
+    final out = <MemberRecord>[];
+    for (final m in members) {
+      if (m.revoked) continue;
+      final ik = m.profile.ikPub;
+      final lk = m.profile.lkPub;
+      if (ik == null || lk == null) continue;
+      out.add(MemberRecord(
+        memberToken: base64Decode(m.memberToken),
+        ikPub: base64Decode(ik),
+        lkPub: base64Decode(lk),
+      ));
+    }
+    return out;
+  });
+  final epochApi = HttpEpochApi(data_epoch.ApiClientEpochJsonClient(apiClient));
+  final epochProcessor = EpochProcessor(
+    api: epochApi,
+    identity: identityService,
+    store: albumKeyStore,
+    directory: memberDirectory,
+  );
+
+  // WS dispatcher: e2ee.opk_low → replenishOpks (service level mutex
+  // collapses bursts), e2ee.epoch_changed → EpochProcessor.handleEvent
+  // (per album mutex serialises events). OpkNotFoundException + verification
+  // failures are logged + swallowed at the dispatch boundary so the listener
+  // chain doesnt die on a single bad event
   realtimeService.stream.listen((ev) {
     if (ev.type == 'e2ee.opk_low') {
       identityService.replenishOpks();
+    } else if (ev.type == 'e2ee.epoch_changed') {
+      final albumStr = ev.payload['album_id'] as String?;
+      final epoch = ev.payload['epoch'];
+      if (albumStr == null || epoch is! int) return;
+      final albumId = _uuidStringToBytes(albumStr);
+      if (albumId == null) return;
+      epochProcessor
+          .handleEvent(albumId: albumId, epoch: epoch)
+          .catchError((Object e, StackTrace s) {
+        developer.log('epoch_changed handler failed',
+            name: 'keepsy.e2ee', error: e, stackTrace: s);
+      });
     }
+  });
+
+  // WS reconnect catch up : every successful WS open replays the cold start
+  // catchUpAll so any e2ee.epoch_changed events that fired while the socket
+  // was down get resolved. catchUpAll is per album resilient + idempotent so
+  // overlap with landing_screen's call is harmless
+  realtimeService.connected.listen((_) {
+    final ids = <Uint8List>[];
+    for (final a in appState.albums) {
+      final b = _uuidStringToBytes(a.id);
+      if (b != null) ids.add(b);
+    }
+    if (ids.isEmpty) return;
+    epochProcessor.catchUpAll(ids).catchError((Object e, StackTrace s) {
+      developer.log('reconnect catchUpAll failed',
+          name: 'keepsy.e2ee', error: e, stackTrace: s);
+    });
   });
 
   runApp(
@@ -73,10 +146,36 @@ void main() async {
         Provider.value(value: realtimeService),
         Provider<IdentityLabelMap>.value(value: labelMap),
         Provider<IdentityService>.value(value: identityService),
+        Provider<AlbumKeyStore>.value(value: albumKeyStore),
+        Provider<MemberDirectory>.value(value: memberDirectory),
+        Provider<EpochProcessor>.value(value: epochProcessor),
       ],
       child: const KeepsyApp(),
     ),
   );
+}
+
+// Canonical 8-4-4-4-12 hex form for raw 16B UUIDs. Inline here so main.dart
+// doesnt pull package:uuid for one tiny conversion
+String _uuidStringFromBytes(Uint8List b) {
+  if (b.length != 16) {
+    throw ArgumentError('albumId must be 16 bytes, got ${b.length}');
+  }
+  final s = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
+      '-${s.substring(16, 20)}-${s.substring(20)}';
+}
+
+Uint8List? _uuidStringToBytes(String s) {
+  final hex = s.replaceAll('-', '');
+  if (hex.length != 32) return null;
+  final out = Uint8List(16);
+  for (var i = 0; i < 16; i++) {
+    final v = int.tryParse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    if (v == null) return null;
+    out[i] = v;
+  }
+  return out;
 }
 
 void _showApiError(ApiError err) {

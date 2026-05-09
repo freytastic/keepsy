@@ -186,6 +186,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			am.revoked_at IS NOT NULL,
 			ami.joined_at,
 			u.ik_pub,
+			u.lk_pub,
 			u.name,
 			u.avatar_key
 		FROM album_members am
@@ -208,6 +209,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			&m.Revoked,
 			&m.JoinedAt,
 			&m.Profile.IKPub,
+			&m.Profile.LKPub,
 			&m.Profile.Name,
 			&m.Profile.AvatarKey,
 		); err != nil {

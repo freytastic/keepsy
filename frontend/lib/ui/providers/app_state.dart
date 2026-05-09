@@ -85,12 +85,13 @@ class AppState extends ChangeNotifier {
   }
 
   void _onRealtimeEvent(RealtimeEvent event) {
+    // §4.2 e2ee.epoch_changed + §2.2 e2ee.opk_low both dispatched in main.dart
+    // alongside the rest of the E2EE composition root. UI side stays a stub
+    // for the manifest / membership events until p7 / p8 land
     switch (event.type) {
-      case 'e2ee.epoch_changed': // todo (p4): trigger MK refresh
       case 'e2ee.manifest_updated': // todo (p8): re-verify manifest
-      case 'e2ee.member_added': // todo (p 7): refresh member list
+      case 'e2ee.member_added': // todo (p7): refresh member list
       case 'e2ee.member_revoked': // todo (p7): refresh member list
-      case 'e2ee.opk_low': // todo (p2): replenish OPKs
         break;
     }
   }

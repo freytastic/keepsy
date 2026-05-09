@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -94,6 +96,60 @@ func TestListAlbumMembers_MemberGets200WithList(t *testing.T) {
 	}
 	if body[0]["role"] != "admin" {
 		t.Errorf("role = %v, want admin", body[0]["role"])
+	}
+}
+
+// TestListAlbumMembers_ProfileRoundTripsLKPub pins the §4.2 wire shape: ik_pub
+// and lk_pub flow through the handler as base64 of the raw 32-byte keys
+func TestListAlbumMembers_ProfileRoundTripsLKPub(t *testing.T) {
+	albumID := uuid.New()
+	callerToken := []byte("callertoken12345678901234567890ab")
+	ikPub := bytes.Repeat([]byte{0x21}, 32)
+	lkPub := bytes.Repeat([]byte{0x42}, 32)
+
+	store := &mockAlbumStore{
+		lookupMemberFn: func(_ context.Context, _, _ uuid.UUID) ([]byte, string, error) {
+			return callerToken, "admin", nil
+		},
+		listMembersFn: func(_ context.Context, _ uuid.UUID) ([]model.MemberWithProfile, error) {
+			return []model.MemberWithProfile{
+				{
+					MemberToken: callerToken,
+					Role:        "admin",
+					Revoked:     false,
+					JoinedAt:    time.Now(),
+					Profile:     model.MemberProfile{IKPub: ikPub, LKPub: lkPub},
+				},
+			}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/albums/"+albumID.String()+"/members", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+	membersRouter(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("len = %d, want 1", len(body))
+	}
+	prof, ok := body[0]["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("profile missing or wrong type: %T", body[0]["profile"])
+	}
+	wantIK := base64.StdEncoding.EncodeToString(ikPub)
+	if prof["ik_pub"] != wantIK {
+		t.Errorf("ik_pub = %v, want %v", prof["ik_pub"], wantIK)
+	}
+	wantLK := base64.StdEncoding.EncodeToString(lkPub)
+	if prof["lk_pub"] != wantLK {
+		t.Errorf("lk_pub = %v, want %v", prof["lk_pub"], wantLK)
 	}
 }
 
