@@ -20,13 +20,6 @@ type AlbumMember struct {
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 }
 
-type AlbumMemberIdentity struct {
-	MemberToken []byte    `json:"member_token"`
-	UserID      uuid.UUID `json:"user_id"`
-	AlbumID     uuid.UUID `json:"album_id"`
-	JoinedAt    time.Time `json:"joined_at"`
-}
-
 type AlbumWithMemberInfo struct {
 	Album
 	UserRole    string `json:"user_role"`

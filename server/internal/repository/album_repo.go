@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/freytastic/keepsy/internal/model"
+	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,11 +19,15 @@ var (
 )
 
 type AlbumRepository struct {
-	DB *pgxpool.Pool
+	DB     *pgxpool.Pool
+	linker *userlink.Hasher
 }
 
-func NewAlbumRepository(db *pgxpool.Pool) *AlbumRepository {
-	return &AlbumRepository{DB: db}
+func NewAlbumRepository(db *pgxpool.Pool, linker *userlink.Hasher) *AlbumRepository {
+	if linker == nil {
+		panic("AlbumRepository: linker is required (M-bridge)")
+	}
+	return &AlbumRepository{DB: db, linker: linker}
 }
 
 func newMemberToken() ([]byte, error) {
@@ -57,11 +62,16 @@ func (r *AlbumRepository) CreateWithAdmin(ctx context.Context, nameCT []byte, cr
 	if err != nil {
 		return nil, nil, err
 	}
+	handle := r.linker.Hash(creatorUserID)
+	sealed, err := r.linker.Seal(creatorUserID, token)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO album_member_identities (member_token, user_id, album_id)
-		 VALUES ($1, $2, $3)`,
-		token, creatorUserID, a.ID)
+		`INSERT INTO album_member_identities (member_token, user_handle, user_id_enc, album_id)
+		 VALUES ($1, $2, $3, $4)`,
+		token, handle, sealed, a.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -99,9 +109,9 @@ func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]
 		FROM albums a
 		JOIN album_member_identities ami ON ami.album_id = a.id
 		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
-		WHERE ami.user_id = $1 AND am.revoked_at IS NULL
+		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL
 		ORDER BY a.updated_at DESC`,
-		userID)
+		r.linker.Hash(userID))
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +139,8 @@ func (r *AlbumRepository) LookupMember(ctx context.Context, userID uuid.UUID, al
 		SELECT ami.member_token, am.role, am.revoked_at::text
 		FROM album_member_identities ami
 		JOIN album_members am ON am.album_id = ami.album_id AND am.member_token = ami.member_token
-		WHERE ami.user_id = $1 AND ami.album_id = $2`,
-		userID, albumID,
+		WHERE ami.user_handle = $1 AND ami.album_id = $2`,
+		r.linker.Hash(userID), albumID,
 	).Scan(&token, &role, &revoked)
 	if err == pgx.ErrNoRows {
 		return nil, "", ErrMemberNotFound
@@ -157,10 +167,15 @@ func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UU
 	if err != nil {
 		return nil, err
 	}
+	handle := r.linker.Hash(userID)
+	sealed, err := r.linker.Seal(userID, token)
+	if err != nil {
+		return nil, err
+	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO album_member_identities (member_token, user_id, album_id) VALUES ($1, $2, $3)`,
-		token, userID, albumID)
+		`INSERT INTO album_member_identities (member_token, user_handle, user_id_enc, album_id) VALUES ($1, $2, $3, $4)`,
+		token, handle, sealed, albumID)
 	if err != nil {
 		return nil, err
 	}
@@ -179,45 +194,88 @@ func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UU
 }
 
 func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
-	// name_ct may be NULL until the member publishes their encrypted display
-	// name (M7) : clients render a placeholder for that case
+	// Two pass : the old single query joined users via ami.user_id, but
+	// user_id is sealed in amid.user_id_enc post M-bridge. Pass 1 reads the
+	// album rows + sealed blobs : pass 2 bulk fetches IK/LK for the decoded
+	// user_ids. name_ct may be NULL until the member publishes their
+	// encrypted display name (M7)
 	rows, err := r.DB.Query(ctx, `
 		SELECT
 			am.member_token,
 			am.role,
 			am.revoked_at IS NOT NULL,
 			ami.joined_at,
-			u.ik_pub,
-			u.lk_pub,
+			ami.user_id_enc,
 			am.name_ct
 		FROM album_members am
 		JOIN album_member_identities ami ON ami.member_token = am.member_token
-		JOIN users u ON u.id = ami.user_id
 		WHERE am.album_id = $1
 		ORDER BY ami.joined_at ASC`,
 		albumID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []model.MemberWithProfile
+	type pending struct {
+		idx    int
+		userID uuid.UUID
+	}
+	var members []model.MemberWithProfile
+	var pendings []pending
 	for rows.Next() {
 		var m model.MemberWithProfile
+		var sealed []byte
 		if err := rows.Scan(
 			&m.MemberToken,
 			&m.Role,
 			&m.Revoked,
 			&m.JoinedAt,
-			&m.Profile.IKPub,
-			&m.Profile.LKPub,
+			&sealed,
 			&m.Profile.NameCT,
 		); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		out = append(out, m)
+		userID, err := r.linker.Open(sealed, m.MemberToken)
+		if err != nil {
+			// A row whose seal cant be opened is unreadable for IK/LK lookup :
+			// skip it rather than 500 on the whole list (matches the silent
+			// skip in epoch.UserIDsByMemberTokens)
+			continue
+		}
+		pendings = append(pendings, pending{idx: len(members), userID: userID})
+		members = append(members, m)
 	}
-	return out, nil
+	rows.Close()
+	if len(members) == 0 {
+		return members, nil
+	}
+
+	ids := make([]uuid.UUID, len(pendings))
+	for i, p := range pendings {
+		ids[i] = p.userID
+	}
+	pubRows, err := r.DB.Query(ctx,
+		`SELECT id, ik_pub, lk_pub FROM users WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer pubRows.Close()
+	pubs := make(map[uuid.UUID]struct{ IK, LK []byte }, len(ids))
+	for pubRows.Next() {
+		var id uuid.UUID
+		var ik, lk []byte
+		if err := pubRows.Scan(&id, &ik, &lk); err != nil {
+			return nil, err
+		}
+		pubs[id] = struct{ IK, LK []byte }{ik, lk}
+	}
+	for _, p := range pendings {
+		if pk, ok := pubs[p.userID]; ok {
+			members[p.idx].Profile.IKPub = pk.IK
+			members[p.idx].Profile.LKPub = pk.LK
+		}
+	}
+	return members, nil
 }
 
 // UpdateMemberNameCT writes the caller's encrypted display name for one album

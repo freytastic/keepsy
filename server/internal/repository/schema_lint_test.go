@@ -15,10 +15,9 @@ import (
 // the user→album linkage that the pseudonymous token model is designed to
 // hide. If u need to add a new table, prove the privacy story first
 var allowedUserFKTables = map[string]bool{
-	"sessions":                true,
-	"one_time_prekeys":        true,
-	"album_member_identities": true,
-	"spk_rotations":           true,
+	"sessions":         true,
+	"one_time_prekeys": true,
+	"spk_rotations":    true,
 }
 
 func TestMigrationsRespectUserFKAllowlist(t *testing.T) {
