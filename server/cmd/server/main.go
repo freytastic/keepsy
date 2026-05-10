@@ -19,6 +19,7 @@ import (
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/keepsy/internal/storage"
 	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/golang-migrate/migrate/v4"
@@ -67,6 +68,15 @@ func main() {
 	prekeyRepo := repository.NewPrekeyRepository(dbPool)
 	sessionRepo := repository.NewSessionRepository(dbPool)
 	albumRepo := repository.NewAlbumRepository(dbPool, linker)
+	mediaRepo := repository.NewMediaRepository(dbPool)
+
+	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
+	if err != nil {
+		log.Fatalf("s3 init: %v", err)
+	}
+	if err := s3Client.CreateBucketIfNotExists(context.Background()); err != nil {
+		log.Printf("s3 bucket bootstrap: %v", err) // non fatal : bucket may exist + creds may have only object level perms
+	}
 
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService, cfg.EmailHMACKey)
@@ -84,12 +94,14 @@ func main() {
 	epochService := epoch.NewService(epochRepo)
 	epochHandler := epoch.NewHandler(epochService, epochRepo, hub)
 
+	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client})
+
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	albumHandler := handler.NewAlbumHandler(albumService)
-	mediaHandler := handler.NewMediaHandler()
+	mediaHandler := handler.NewMediaHandler(mediaService)
 	inviteHandler := handler.NewInviteHandler()
 	wsHandler := handler.NewWSHandler(hub, ticketStore)
 
@@ -204,4 +216,25 @@ func main() {
 		}
 		fmt.Println("Server stopped.")
 	}
+}
+
+// s3Adapter bridges *storage.S3Client to service.ObjectStore. The service has
+// its own PresignedUpload type so handler tests can mock without importing
+// internal/storage
+type s3Adapter struct{ c *storage.S3Client }
+
+func (a *s3Adapter) GetPresignedUploadURLWithChecksum(ctx context.Context, key, contentType string, contentLength int64, sha256B64 string, expires time.Duration) (*service.PresignedUpload, error) {
+	pre, err := a.c.GetPresignedUploadURLWithChecksum(ctx, key, contentType, contentLength, sha256B64, expires)
+	if err != nil {
+		return nil, err
+	}
+	return &service.PresignedUpload{URL: pre.URL, RequiredHeader: pre.RequiredHeader}, nil
+}
+
+func (a *s3Adapter) HeadObject(ctx context.Context, key string) (int64, string, error) {
+	return a.c.HeadObject(ctx, key)
+}
+
+func (a *s3Adapter) DeleteObject(ctx context.Context, key string) error {
+	return a.c.DeleteObject(ctx, key)
 }

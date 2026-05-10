@@ -18,6 +18,8 @@ type Media struct {
 	BlobSize      int64     `json:"blob_size"`
 	BlobSHA256    []byte    `json:"blob_sha256"`
 	MediaType     string    `json:"media_type"`
+	MimeType      *string   `json:"mime_type,omitempty"`
+	Confirmed     bool      `json:"confirmed"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
