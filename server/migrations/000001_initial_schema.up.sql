@@ -118,6 +118,11 @@ CREATE TABLE album_epoch_wraps (
     PRIMARY KEY (album_id, epoch, recipient_token)
 );
 
+-- Two phase upload (§5.1) : RequestUploadURL inserts a pending row + returns a
+-- presigned S3 PUT : client uploads : ConfirmUpload HEADs S3 to validate the
+-- size + sha256, then flips confirmed=TRUE. Pending rows whose upload never
+-- completes are GC'd by a periodic sweep (TODOOOO §5.x). storage_key is a server
+-- generated random opaque value (M9) : never carries album_id
 CREATE TABLE media (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
@@ -130,9 +135,12 @@ CREATE TABLE media (
     blob_size       BIGINT NOT NULL,
     blob_sha256     BYTEA NOT NULL,
     media_type      TEXT NOT NULL CHECK (media_type IN ('photo', 'video')),
+    mime_type       TEXT,
+    confirmed       BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
-CREATE INDEX idx_media_album ON media(album_id, created_at DESC);
+CREATE INDEX idx_media_album ON media(album_id, created_at DESC) WHERE confirmed = TRUE;
+CREATE INDEX idx_media_pending ON media(created_at) WHERE confirmed = FALSE;
 
 CREATE TABLE manifests (
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
