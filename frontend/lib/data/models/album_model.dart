@@ -14,9 +14,9 @@ class AlbumModel {
   factory AlbumModel.fromJson(Map<String, dynamic> json) {
     return AlbumModel(
       id: json['id'] ?? '',
-      // Note : server sends 'name_ct' which is currently base64-encoded plaintext
-      // E2EE decryption will land in p1
-      name: json['name_ct'] ?? json['name'] ?? 'Untitled Album',
+      // Server sends 'name_ct' base64. Phase 5 wires actual MK based decrypt :
+      // until then the client renders the base64 ciphertext as a placeholder
+      name: json['name_ct'] ?? 'Untitled Album',
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : DateTime.now(),

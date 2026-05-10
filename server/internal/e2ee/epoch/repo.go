@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,11 +20,15 @@ var (
 )
 
 type Repo struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	linker *userlink.Hasher
 }
 
-func NewRepo(db *pgxpool.Pool) *Repo {
-	return &Repo{db: db}
+func NewRepo(db *pgxpool.Pool, linker *userlink.Hasher) *Repo {
+	if linker == nil {
+		panic("epoch.NewRepo: linker is required (M-bridge)")
+	}
+	return &Repo{db: db, linker: linker}
 }
 
 // CurrentEpoch returns (max_epoch, exists, started_at). exists=false when the
@@ -48,23 +53,32 @@ func (r *Repo) CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, bool, 
 }
 
 // AdminIKByMemberToken resolves a member_token to its owner's IK_pub. Used to
-// verify the envelope_sig on a set_epoch request
+// verify the envelope_sig on a set_epoch request. Two queries bcs the
+// user_id is now sealed in amid.user_id_enc (M bridge) : recover it via
+// linker.Open then lookup the IK
 func (r *Repo) AdminIKByMemberToken(ctx context.Context, memberToken []byte) ([]byte, error) {
-	var ik []byte
+	var sealed []byte
 	err := r.db.QueryRow(ctx,
-		`SELECT u.ik_pub FROM users u
-		 JOIN album_member_identities ami ON ami.user_id = u.id
-		 WHERE ami.member_token = $1`,
+		`SELECT user_id_enc FROM album_member_identities WHERE member_token = $1`,
 		memberToken,
-	).Scan(&ik)
+	).Scan(&sealed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrAdminNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(ik) == 0 {
+	userID, err := r.linker.Open(sealed, memberToken)
+	if err != nil {
 		return nil, ErrAdminNotFound
+	}
+	var ik []byte
+	err = r.db.QueryRow(ctx, `SELECT ik_pub FROM users WHERE id = $1`, userID).Scan(&ik)
+	if errors.Is(err, pgx.ErrNoRows) || len(ik) == 0 {
+		return nil, ErrAdminNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	return ik, nil
 }
@@ -216,14 +230,17 @@ func (r *Repo) GetWrap(ctx context.Context, albumID uuid.UUID, epochN int, recip
 	return &w, nil
 }
 
-// UserIDsByMemberTokens resolves a set of member_tokens to their user_ids in
-// the same order as the input. Missing tokens are silently skipped
+// UserIDsByMemberTokens resolves a set of member_tokens to their user_ids
+// Each row's user_id is sealed in user_id_enc (M-bridge) : we fetch
+// (member_token, user_id_enc) and Open each blob with its own member_token
+// since the AEAD nonce is derived from member_token. Tokens that dont
+// resolve (missing row or invalid seal) are silently skipped
 func (r *Repo) UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uuid.UUID, error) {
 	if len(tokens) == 0 {
 		return nil, nil
 	}
 	rows, err := r.db.Query(ctx,
-		`SELECT user_id FROM album_member_identities WHERE member_token = ANY($1)`,
+		`SELECT member_token, user_id_enc FROM album_member_identities WHERE member_token = ANY($1)`,
 		tokens,
 	)
 	if err != nil {
@@ -232,9 +249,13 @@ func (r *Repo) UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uu
 	defer rows.Close()
 	var out []uuid.UUID
 	for rows.Next() {
-		var u uuid.UUID
-		if err := rows.Scan(&u); err != nil {
+		var tok, sealed []byte
+		if err := rows.Scan(&tok, &sealed); err != nil {
 			return nil, err
+		}
+		u, err := r.linker.Open(sealed, tok)
+		if err != nil {
+			continue
 		}
 		out = append(out, u)
 	}

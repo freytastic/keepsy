@@ -20,6 +20,12 @@ type Config struct {
 	// derives a deterministic placeholder so local stacks just work
 	EmailHMACKey []byte
 
+	// Master key for the userlink package : derives one HMAC subkey for
+	// album_member_identities.user_handle and one AEAD subkey for user_id_enc
+	// Same lifetime semantics as EmailHMACKey : rotating it bricks every
+	// existing membership row
+	UserLinkKey []byte
+
 	// S3 / R2 configs
 	S3Endpoint   string
 	S3AccessKey  string
@@ -38,6 +44,7 @@ func Load() *Config {
 		ResendAPIKey: getEnv("RESEND_API_KEY", ""),
 		DevMode:      devMode,
 		EmailHMACKey: loadEmailHMACKey(devMode),
+		UserLinkKey:  loadKeyOrDevPlaceholder("KEEPSY_USER_LINK_KEY", "keepsy-dev-userlink-placeholder-do-not-deploy", devMode),
 		S3Endpoint:   getEnv("S3_ENDPOINT", "http://localhost:9000"),
 		S3AccessKey:  getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:  getEnv("S3_SECRET_KEY", "minioadmin"),
@@ -48,24 +55,28 @@ func Load() *Config {
 }
 
 func loadEmailHMACKey(devMode bool) []byte {
-	raw := getEnv("KEEPSY_EMAIL_HMAC_KEY", "")
+	return loadKeyOrDevPlaceholder("KEEPSY_EMAIL_HMAC_KEY", "keepsy-dev-email-hmac-placeholder-do-not-deploy", devMode)
+}
+
+// loadKeyOrDevPlaceholder reads a base64 32B+ secret from env. In dev mode a
+// missing env var falls through to a deterministic SHA256 of devSeed so local
+// stacks just work : never deploy to a real environment with APP_ENV=dev
+func loadKeyOrDevPlaceholder(envKey, devSeed string, devMode bool) []byte {
+	raw := getEnv(envKey, "")
 	if raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
-			log.Fatalf("KEEPSY_EMAIL_HMAC_KEY: not valid base64: %v", err)
+			log.Fatalf("%s: not valid base64: %v", envKey, err)
 		}
 		if len(key) < 32 {
-			log.Fatalf("KEEPSY_EMAIL_HMAC_KEY: must decode to >= 32 bytes, got %d", len(key))
+			log.Fatalf("%s: must decode to >= 32 bytes, got %d", envKey, len(key))
 		}
 		return key
 	}
 	if !devMode {
-		log.Fatal("KEEPSY_EMAIL_HMAC_KEY is required in non dev mode")
+		log.Fatalf("%s is required in non dev mode", envKey)
 	}
-	// Deterministic dev placeholder so 'docker compose up' works without
-	// extra setup. Anything signed with this key is trivially forgeable :
-	// never deploy with APP_ENV=dev to a real environment
-	d := sha256.Sum256([]byte("keepsy-dev-email-hmac-placeholder-do-not-deploy"))
+	d := sha256.Sum256([]byte(devSeed))
 	return d[:]
 }
 

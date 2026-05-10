@@ -61,14 +61,23 @@ CREATE TABLE albums (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now())
 );
 
+-- M-bridge : user_id is severed at rest. user_handle is the deterministic
+-- HMAC handle (forward lookups : "is this user a member?", "what albums for
+-- this user?"). user_id_enc is the AEAD blob (reverse lookups : "which user
+-- owns this member_token?" , needed by WS fanout + epoch admin IK lookup)
+-- Both are useless without the live KEEPSY_USER_LINK_KEY, so a stolen DB
+-- snapshot cant reconstruct the social graph. The FK to users(id) is
+-- intentionally absent : ON DELETE CASCADE was the only consumer and a
+-- future user delete flow will compute the handle and DELETE explicitly
 CREATE TABLE album_member_identities (
     member_token    BYTEA PRIMARY KEY,
-    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_handle     BYTEA NOT NULL,
+    user_id_enc     BYTEA NOT NULL,
     album_id        UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
     joined_at       TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now()),
-    UNIQUE (user_id, album_id)
+    UNIQUE (user_handle, album_id)
 );
-CREATE INDEX idx_amid_user ON album_member_identities(user_id);
+CREATE INDEX idx_amid_user_handle ON album_member_identities(user_handle);
 CREATE INDEX idx_amid_album ON album_member_identities(album_id);
 
 -- name_ct : member's display name encrypted under MK_current of THIS album
