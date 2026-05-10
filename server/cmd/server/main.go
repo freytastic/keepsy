@@ -19,6 +19,7 @@ import (
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -56,11 +57,16 @@ func main() {
 	}
 	defer rdb.Close()
 
+	linker, err := userlink.New(cfg.UserLinkKey)
+	if err != nil {
+		log.Fatalf("userlink init: %v", err)
+	}
+
 	otpRepo := repository.NewOTPRepository(rdb)
 	userRepo := repository.NewUserRepository(dbPool)
 	prekeyRepo := repository.NewPrekeyRepository(dbPool)
 	sessionRepo := repository.NewSessionRepository(dbPool)
-	albumRepo := repository.NewAlbumRepository(dbPool)
+	albumRepo := repository.NewAlbumRepository(dbPool, linker)
 
 	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService, cfg.EmailHMACKey)
@@ -74,7 +80,7 @@ func main() {
 	prekeyService := prekey.NewService(prekeyEx)
 	prekeyHandler := prekey.NewHandler(prekeyService, hub)
 
-	epochRepo := epoch.NewRepo(dbPool)
+	epochRepo := epoch.NewRepo(dbPool, linker)
 	epochService := epoch.NewService(epochRepo)
 	epochHandler := epoch.NewHandler(epochService, epochRepo, hub)
 
