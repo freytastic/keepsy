@@ -18,6 +18,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -48,6 +49,7 @@ type testEnv struct {
 	t         *testing.T
 	pool      *pgxpool.Pool
 	albumRepo *repository.AlbumRepository
+	linker    *userlink.Hasher
 	router    http.Handler
 	notifier  *captureNotifier
 	albumID   uuid.UUID
@@ -78,10 +80,15 @@ func mustOpenTestDB(t *testing.T) *pgxpool.Pool {
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	pool := mustOpenTestDB(t)
+	linker, err := userlink.New(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatalf("userlink: %v", err)
+	}
 	env := &testEnv{
 		t:         t,
 		pool:      pool,
-		albumRepo: repository.NewAlbumRepository(pool),
+		albumRepo: repository.NewAlbumRepository(pool, linker),
+		linker:    linker,
 		notifier:  &captureNotifier{ch: make(chan emitted, 8)},
 		users:     make(map[string]testUser),
 	}
@@ -114,7 +121,7 @@ func newEnv(t *testing.T) *testEnv {
 		env.users[role] = withToken(u, token)
 	}
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, env.linker)
 	svc := NewService(repo)
 	h := NewHandler(svc, repo, env.notifier)
 

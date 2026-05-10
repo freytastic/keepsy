@@ -16,8 +16,8 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Notifier mirrors *notifications.Service.EmitToUsers so the handler can be
-// constructed without a hard dep on that package (and tests can stub it)
+// Notifier matches the EmitToUsers method on *ws.Hub so the handler can be
+// constructed without a hard dep on the hub package (and tests can stub it)
 type Notifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }

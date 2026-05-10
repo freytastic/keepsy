@@ -15,7 +15,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Notifier mirrors *notifications.Service.EmitToUsers : an interface so the
+// Notifier matches the EmitToUsers method on *ws.Hub : an interface so the
 // handler tests can stub the fanout
 type Notifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
