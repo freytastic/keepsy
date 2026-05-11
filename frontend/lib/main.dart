@@ -14,6 +14,7 @@ import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
+import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
@@ -98,6 +99,15 @@ void main() async {
     store: albumKeyStore,
     directory: memberDirectory,
   );
+  // EpochRotator : initiator side of an epoch transition. Used rn for the
+  // §5 bootstrap (epoch 0 on album create) : §6 invites + §7 removals will
+  // reuse the same machinery
+  final epochRotator = EpochRotator(
+    epochs: epochApi,
+    prekeys: prekeyApi,
+    identity: identityService,
+    aks: albumKeyStore,
+  );
 
   // WS dispatcher: e2ee.opk_low → replenishOpks (service level mutex
   // collapses bursts), e2ee.epoch_changed → EpochProcessor.handleEvent
@@ -149,6 +159,7 @@ void main() async {
         Provider<AlbumKeyStore>.value(value: albumKeyStore),
         Provider<MemberDirectory>.value(value: memberDirectory),
         Provider<EpochProcessor>.value(value: epochProcessor),
+        Provider<EpochRotator>.value(value: epochRotator),
       ],
       child: const KeepsyApp(),
     ),
