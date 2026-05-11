@@ -161,6 +161,7 @@ func main() {
 	scoped.HandleFunc("/media/upload-url", mediaHandler.RequestUploadURL).Methods(http.MethodPost)
 	scoped.HandleFunc("/media/confirm", mediaHandler.ConfirmUpload).Methods(http.MethodPost)
 	scoped.HandleFunc("/media", mediaHandler.ListMedia).Methods(http.MethodGet)
+	scoped.HandleFunc("/media/{mid}/download-url", mediaHandler.RequestDownloadURL).Methods(http.MethodPost)
 	scoped.HandleFunc("/media/{mid}", mediaHandler.DeleteMedia).Methods(http.MethodDelete)
 	scoped.HandleFunc("/epoch", epochHandler.SetEpoch).Methods(http.MethodPost)
 	scoped.HandleFunc("/epoch", epochHandler.GetCurrent).Methods(http.MethodGet)
@@ -233,6 +234,10 @@ func (a *s3Adapter) GetPresignedUploadURLWithChecksum(ctx context.Context, key, 
 
 func (a *s3Adapter) HeadObject(ctx context.Context, key string) (int64, string, error) {
 	return a.c.HeadObject(ctx, key)
+}
+
+func (a *s3Adapter) GetPresignedDownloadURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return a.c.GetPresignedDownloadURL(ctx, key, expires)
 }
 
 func (a *s3Adapter) DeleteObject(ctx context.Context, key string) error {
