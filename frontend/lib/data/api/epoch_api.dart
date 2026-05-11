@@ -24,4 +24,9 @@ class ApiClientEpochJsonClient implements EpochJsonClient {
       rethrow;
     }
   }
+
+  @override
+  Future<void> postJson(String path, Map<String, dynamic> body) async {
+    await _api.post(path, body: body);
+  }
 }
