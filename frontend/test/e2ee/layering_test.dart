@@ -10,9 +10,14 @@ final _leakRe = RegExp(
   r'Future<[^>]*Uint8List[^>]*>\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
 );
 
-// X3dhSession.derive : 32B X3DH shared secret. Public per spec §5.2 / D10 (ts just for me)
+// X3dhSession.derive : 32B X3DH shared secret. Public per spec §5.2 / D10
+// FileDecryptor.downloadAndDecrypt : decrypted plaintext file bytes. Public
+// per §5.2 : the only way for the UI (EncryptedImage) to get pixels to show
+// Caller (the widget's State) holds bytes in memory only : on dispose the
+// State + bytes are eligible for GC. No on disk plaintext cache in §5.2
 const _allow = <(String, String)>{
   ('x3dh_session.dart', 'derive'),
+  ('file_decryptor.dart', 'downloadAndDecrypt'),
 };
 
 void main() {
@@ -29,6 +34,10 @@ void main() {
         for (final m in _leakRe.allMatches(src)) {
           final name = m.group(1)!;
           if (name.startsWith('_')) continue;
+          // Skip 'Function' : the regex false matches typedef declarations
+          // like 'typedef X = Future<Uint8List> Function(...)' as if Function
+          // were a method name. The typedef itself doesnt leak any bytes
+          if (name == 'Function') continue;
           final pair = (f.uri.pathSegments.last, name);
           if (_allow.contains(pair)) continue;
           violations.add('${f.path}: public `$name` returns Uint8List');
