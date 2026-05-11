@@ -118,6 +118,9 @@ type fakeS3 struct {
 	headSize      int64
 	headSHA256B64 string
 	headErr       error
+	downloadURL   string
+	downloadErr   error
+	downloadKeys  []string
 	deleteCalls   int
 	deleteKeys    []string
 }
@@ -127,6 +130,17 @@ func (f *fakeS3) GetPresignedUploadURLWithChecksum(_ context.Context, _, _ strin
 		return nil, f.presignErr
 	}
 	return &PresignedUpload{URL: "http://s3/upload", RequiredHeader: map[string]string{"x-amz-checksum-sha256": "x"}}, nil
+}
+
+func (f *fakeS3) GetPresignedDownloadURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	f.downloadKeys = append(f.downloadKeys, key)
+	if f.downloadErr != nil {
+		return "", f.downloadErr
+	}
+	if f.downloadURL == "" {
+		return "http://s3/download/" + key, nil
+	}
+	return f.downloadURL, nil
 }
 
 func (f *fakeS3) HeadObject(_ context.Context, _ string) (int64, string, error) {
@@ -341,5 +355,77 @@ func TestConfirmUpload_UnknownMediaIs404(t *testing.T) {
 	err := svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New())
 	if !apierr.IsCode(err, "E_NOT_FOUND") {
 		t.Fatalf("err = %v, want E_NOT_FOUND", err)
+	}
+}
+
+// confirmedRow drives the upload happy path so RequestDownloadURL has a
+// confirmed row to read. Returns (albumID, mediaID, storageKey)
+func confirmedRow(t *testing.T, svc *MediaService, repo *fakeMediaRepo, s3 *fakeS3) (uuid.UUID, uuid.UUID, string) {
+	t.Helper()
+	in := validInput()
+	albumID := uuid.New()
+	res, err := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	s3.headSize = in.BlobSize
+	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
+	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID); err != nil {
+		t.Fatalf("ConfirmUpload: %v", err)
+	}
+	return albumID, res.MediaID, repo.rows[res.MediaID].StorageKey
+}
+
+func TestRequestDownloadURL_HappyPath(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID, mediaID, storageKey := confirmedRow(t, svc, repo, s3)
+
+	res, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if res.URL == "" {
+		t.Errorf("URL empty")
+	}
+	if len(s3.downloadKeys) != 1 || s3.downloadKeys[0] != storageKey {
+		t.Errorf("presigned for keys %v, want [%q]", s3.downloadKeys, storageKey)
+	}
+	if !res.ExpiresAt.After(time.Now()) {
+		t.Errorf("ExpiresAt %v not in future", res.ExpiresAt)
+	}
+}
+
+func TestRequestDownloadURL_RefusesPendingRow(t *testing.T) {
+	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validInput()
+	albumID := uuid.New()
+	res, err := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	// no Confirm : row stays pending. Download must refuse so the client
+	// doesnt try to GET an S3 object that may not exist
+	_, err = svc.RequestDownloadURL(context.Background(), albumID, res.MediaID)
+	if !apierr.IsCode(err, "E_NOT_FOUND") {
+		t.Fatalf("err = %v, want E_NOT_FOUND", err)
+	}
+}
+
+func TestRequestDownloadURL_UnknownMediaIs404(t *testing.T) {
+	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
+	_, err := svc.RequestDownloadURL(context.Background(), uuid.New(), uuid.New())
+	if !apierr.IsCode(err, "E_NOT_FOUND") {
+		t.Fatalf("err = %v, want E_NOT_FOUND", err)
+	}
+}
+
+func TestRequestDownloadURL_S3PresignFailureBubblesUp(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID, mediaID, _ := confirmedRow(t, svc, repo, s3)
+	s3.downloadErr = errors.New("s3 down")
+
+	_, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID)
+	if !apierr.IsCode(err, "E_INTERNAL") {
+		t.Fatalf("err = %v, want E_INTERNAL", err)
 	}
 }

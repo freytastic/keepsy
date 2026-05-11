@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/ui/screens/home_screen.dart';
@@ -24,6 +25,7 @@ class _MainShellState extends State<MainShell> {
 
   Future<void> _openCreate() async {
     HapticFeedback.mediumImpact();
+    final appState = context.read<AppState>();
     await Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => const CreateAlbumScreen(),
@@ -35,6 +37,13 @@ class _MainShellState extends State<MainShell> {
         transitionDuration: const Duration(milliseconds: 250),
       ),
     );
+    // Refresh the album list so the just created album shows up. Best effort :
+    // if the network blip we keep the stale list and the user can pull to
+    // refresh later (when that gesture lands)
+    if (!mounted) return;
+    final fresh = await AlbumService().getMyAlbums();
+    if (!mounted) return;
+    appState.setAlbums(fresh);
   }
 
   @override

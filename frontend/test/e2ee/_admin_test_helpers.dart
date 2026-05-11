@@ -231,6 +231,14 @@ class FakeEpochApi implements EpochApi {
     return w;
   }
 
+  // setEpoch : unused by the responder side tests but required to satisfy
+  // EpochApi. Use _CaptureEpochApi in epoch_rotator_test.dart for initiator
+  // assertions
+  @override
+  Future<void> setEpoch(String _, SetEpochRequest __) async {
+    throw UnimplementedError('FakeEpochApi.setEpoch not stubbed');
+  }
+
   void putWrap(String albumId, int epoch, WrapEnvelope env) {
     wraps['$albumId:$epoch'] = env;
   }

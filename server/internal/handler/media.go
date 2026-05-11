@@ -160,6 +160,31 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// RequestDownloadURL handles POST /albums/{id}/media/{mid}/download-url
+// Returns {url, expires_at}. URL is short lived (15 min) : client downloads
+// immediately. Refuses media that hasnt been confirmed
+func (h *MediaHandler) RequestDownloadURL(w http.ResponseWriter, r *http.Request) {
+	albumID, ok := scopedAlbumID(w, r)
+	if !ok {
+		return
+	}
+	mediaID, err := uuid.Parse(mux.Vars(r)["mid"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid media id").WithCause(err))
+		return
+	}
+	res, err := h.svc.RequestDownloadURL(r.Context(), albumID, mediaID)
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"url":        res.URL,
+		"expires_at": res.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
 func (h *MediaHandler) DeleteMedia(w http.ResponseWriter, r *http.Request) {
 	albumID, ok := scopedAlbumID(w, r)
 	if !ok {

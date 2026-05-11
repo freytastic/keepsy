@@ -1,40 +1,117 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/data/api/api_client.dart';
+import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
+import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/widgets/encrypted_image.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final AlbumModel album;
   final AlbumService albumService;
+  final MediaApi? mediaApi;
 
-  AlbumDetailScreen(
-      {super.key, required this.album, AlbumService? albumService})
-      : albumService = albumService ?? AlbumService();
+  AlbumDetailScreen({
+    super.key,
+    required this.album,
+    AlbumService? albumService,
+    this.mediaApi,
+  }) : albumService = albumService ?? AlbumService();
 
   @override
   State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+  late final MediaApi _media;
   List<AlbumMember> _members = [];
-  bool _loading = true;
+  List<MediaRecord> _items = [];
+  bool _loadingMembers = true;
+  bool _loadingMedia = true;
+  bool _uploading = false;
 
   @override
   void initState() {
     super.initState();
+    _media = widget.mediaApi ?? MediaApi(ApiClient());
     _loadMembers();
+    _loadMedia();
   }
 
   Future<void> _loadMembers() async {
     final members = await widget.albumService.listMembers(widget.album.id);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _members = members;
-        _loading = false;
+        _loadingMembers = false;
       });
+    }
+  }
+
+  Future<void> _loadMedia() async {
+    try {
+      final items = await _media.listMedia(widget.album.id);
+      if (mounted) {
+        setState(() {
+          _items = items;
+          _loadingMedia = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingMedia = false);
+    }
+  }
+
+  Future<void> _pickAndUpload() async {
+    if (_uploading) return;
+    // Capture providers up front so we never re read context across async gaps
+    final aks = context.read<AlbumKeyStore>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
+
+    setState(() => _uploading = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      final albumIdBytes = _uuidStringToBytes(widget.album.id);
+      if (albumIdBytes == null) throw Exception('bad album id');
+      final epoch = await aks.latestEpoch(albumIdBytes);
+      if (epoch < 0) {
+        throw Exception('no MK installed for this album yet');
+      }
+
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: albumIdBytes,
+        currentEpoch: epoch,
+        plaintext: bytes,
+        mediaType: 'photo',
+        mimeType: picked.mimeType ?? 'image/jpeg',
+      );
+      await _media.upload(albumId: widget.album.id, envelope: env);
+      await _loadMedia();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.mediaApi == null) _media.dispose();
+    super.dispose();
   }
 
   @override
@@ -48,14 +125,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       appBar: AppBar(
         backgroundColor: K.bg(dark),
         elevation: 0,
-        // todo (p1): decode name_ct with AES-GCM to get the real album name
+        // decode name_ct using AlbumKeyStore.useMk to
+        // render the real album name. Rn the placeholder is the base64
+        // ciphertext (set in AlbumModel.fromJson)
         title: Text(
           widget.album.name,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: K.t1(dark),
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
+              color: K.t1(dark), fontSize: 18, fontWeight: FontWeight.w700),
         ),
         iconTheme: IconThemeData(color: K.t1(dark)),
         actions: [
@@ -69,13 +146,98 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _uploading ? null : _pickAndUpload,
+        backgroundColor: accent,
+        child: _uploading
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white))
+            : const Icon(Icons.add_a_photo_outlined, color: Colors.white),
+      ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _MemberChipsRow(
-              members: _members, loading: _loading, dark: dark, accent: accent),
+              members: _members,
+              loading: _loadingMembers,
+              dark: dark,
+              accent: accent),
           const Divider(height: 1, thickness: 0.5),
-          Expanded(child: _MediaPlaceholder(dark: dark)),
+          Expanded(
+            child: _MediaGrid(
+              items: _items,
+              loading: _loadingMedia,
+              dark: dark,
+              media: _media,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MediaGrid extends StatelessWidget {
+  final List<MediaRecord> items;
+  final bool loading;
+  final bool dark;
+  final MediaApi media;
+
+  const _MediaGrid({
+    required this.items,
+    required this.loading,
+    required this.dark,
+    required this.media,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (items.isEmpty) {
+      return _MediaEmpty(dark: dark);
+    }
+    final aks = context.read<AlbumKeyStore>();
+    return GridView.builder(
+      padding: const EdgeInsets.all(8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisSpacing: 4,
+        crossAxisSpacing: 4,
+      ),
+      itemCount: items.length,
+      itemBuilder: (_, i) => ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: EncryptedImage(record: items[i], aks: aks, media: media),
+      ),
+    );
+  }
+}
+
+class _MediaEmpty extends StatelessWidget {
+  final bool dark;
+  const _MediaEmpty({required this.dark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.photo_library_outlined, size: 48, color: K.t3(dark)),
+          const SizedBox(height: 12),
+          Text('No media yet',
+              style: TextStyle(
+                  color: K.t2(dark),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500)),
+          const SizedBox(height: 4),
+          Text('Tap + to upload an encrypted photo',
+              style: TextStyle(color: K.t3(dark), fontSize: 13)),
         ],
       ),
     );
@@ -112,7 +274,6 @@ class _MemberChipsRow extends StatelessWidget {
         ),
       );
     }
-
     return SizedBox(
       height: 56,
       child: ListView.separated(
@@ -174,29 +335,17 @@ class _MemberChip extends StatelessWidget {
   }
 }
 
-class _MediaPlaceholder extends StatelessWidget {
-  final bool dark;
-
-  const _MediaPlaceholder({required this.dark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.photo_library_outlined, size: 48, color: K.t3(dark)),
-          const SizedBox(height: 12),
-          Text('No media yet',
-              style: TextStyle(
-                  color: K.t2(dark),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 4),
-          Text('Encrypted photos will appear here',
-              style: TextStyle(color: K.t3(dark), fontSize: 13)),
-        ],
-      ),
-    );
+// 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
+// Inlined here to match the existing pattern in main.dart + landing_screen.dart :
+// future cleanup could pull into a shared helper if a 4th copy appears
+Uint8List? _uuidStringToBytes(String s) {
+  final hex = s.replaceAll('-', '');
+  if (hex.length != 32) return null;
+  final out = Uint8List(16);
+  for (var i = 0; i < 16; i++) {
+    final v = int.tryParse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    if (v == null) return null;
+    out[i] = v;
   }
+  return out;
 }

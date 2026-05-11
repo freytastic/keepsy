@@ -3,12 +3,18 @@ class AlbumModel {
   final String name;
   final DateTime createdAt;
   final DateTime updatedAt;
+  // memberToken : the caller's own member_token for this album, base64. Set
+  // on /albums/{id} GET (servers fills it from RequireMember context) and on
+  // POST /albums (the creator's freshly minted token). Null on ListAlbums
+  // entries where the server hasnt resolved per album member context yet
+  final String? memberToken;
 
   AlbumModel({
     required this.id,
     required this.name,
     required this.createdAt,
     required this.updatedAt,
+    this.memberToken,
   });
 
   factory AlbumModel.fromJson(Map<String, dynamic> json) {
@@ -23,6 +29,7 @@ class AlbumModel {
       updatedAt: json['updated_at'] != null
           ? DateTime.parse(json['updated_at'])
           : DateTime.now(),
+      memberToken: json['member_token'] as String?,
     );
   }
 }

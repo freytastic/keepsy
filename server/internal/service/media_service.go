@@ -38,6 +38,7 @@ type MediaStore interface {
 // ObjectStore is the slice of *storage.S3Client the service needs
 type ObjectStore interface {
 	GetPresignedUploadURLWithChecksum(ctx context.Context, key, contentType string, contentLength int64, sha256B64 string, expires time.Duration) (*PresignedUpload, error)
+	GetPresignedDownloadURL(ctx context.Context, key string, expires time.Duration) (string, error)
 	HeadObject(ctx context.Context, key string) (size int64, sha256B64 string, err error)
 	DeleteObject(ctx context.Context, key string) error
 }
@@ -191,6 +192,42 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID uuid.
 		return apierr.Internal("failed to mark confirmed").WithCause(err)
 	}
 	return nil
+}
+
+// DownloadURLResult is the per request presigned GET URL. TTL is short on
+// purpose : the client downloads immediately after this returns. URL is the
+// only field today : future expansion (range support, byte budgets) goes here
+type DownloadURLResult struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+// DownloadURLTTL : longer than upload TTL since the client may take a moment
+// to actually issue the GET (image picker, UI animation, etc.)
+const DownloadURLTTL = 15 * time.Minute
+
+// RequestDownloadURL : returns a fresh presigned GET URL for a confirmed
+// media row. Refuses pending rows (their S3 object may not exist yet) and
+// missing rows (caller's RequireMember middleware already gates album scope)
+func (s *MediaService) RequestDownloadURL(ctx context.Context, albumID, mediaID uuid.UUID) (*DownloadURLResult, error) {
+	row, err := s.repo.GetByID(ctx, mediaID, albumID)
+	if err != nil {
+		if errors.Is(err, repository.ErrMediaNotFound) {
+			return nil, apierr.NotFound("media not found")
+		}
+		return nil, apierr.Internal("failed to read media row").WithCause(err)
+	}
+	if !row.Confirmed {
+		return nil, apierr.NotFound("media not yet confirmed")
+	}
+	url, err := s.s3.GetPresignedDownloadURL(ctx, row.StorageKey, DownloadURLTTL)
+	if err != nil {
+		return nil, apierr.Internal("failed to presign download").WithCause(err)
+	}
+	return &DownloadURLResult{
+		URL:       url,
+		ExpiresAt: time.Now().Add(DownloadURLTTL),
+	}, nil
 }
 
 func (s *MediaService) ListMedia(ctx context.Context, albumID uuid.UUID) ([]model.Media, error) {
