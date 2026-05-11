@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 
 import 'api_client.dart';
@@ -84,9 +85,31 @@ class MediaApi {
     return pre.mediaId;
   }
 
-  Future<List<dynamic>> listMedia(String albumId) async {
+  Future<List<MediaRecord>> listMedia(String albumId) async {
     final resp = await _api.get('/albums/$albumId/media');
-    return jsonDecode(resp.body) as List<dynamic>;
+    final raw =
+        (jsonDecode(resp.body) as List<dynamic>).cast<Map<String, dynamic>>();
+    return raw.map(MediaRecord.fromJson).toList();
+  }
+
+  // RequestDownloadURL : POSTs for a fresh presigned GET URL. Server
+  // refuses pending rows : verifies caller is a member via RequireMember
+  Future<String> requestDownloadURL(String albumId, String mediaId) async {
+    final resp =
+        await _api.post('/albums/$albumId/media/$mediaId/download-url');
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    return body['url'] as String;
+  }
+
+  // DownloadCiphertext fetches the bytes from a presigned URL. Bypasses
+  // ApiClient since the URL carries auth in the query string and we dont
+  // want a Bearer header (would fail S3 sig validation) or auto refresh on 401
+  Future<Uint8List> downloadCiphertext(String url) async {
+    final resp = await _http.get(Uri.parse(url));
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw Exception('s3 GET failed: ${resp.statusCode} ${resp.body}');
+    }
+    return resp.bodyBytes;
   }
 
   Future<void> deleteMedia(String albumId, String mediaId) async {
