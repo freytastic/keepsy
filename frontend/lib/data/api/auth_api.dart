@@ -66,8 +66,10 @@ class AuthService {
       return false;
     } on BootstrapAccountConflictException {
       rethrow;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      // Log the real error so me can see it in 'flutter run'
+      print('verifyOtp error: $e');
+      rethrow;
     }
   }
 

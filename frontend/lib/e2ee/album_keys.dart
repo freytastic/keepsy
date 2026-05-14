@@ -15,13 +15,22 @@ class AlbumKeyStore {
 
   // hex(albumId) -> { epoch -> KeyHandle }
   final Map<String, Map<int, KeyHandle>> _present = {};
-  bool _initialized = false;
+  Future<void>? _initFuture;
 
   AlbumKeyStore(this._store);
 
   // Rebuilds presence from any keepsy.album.<hex>.mk.<epoch> labels already
-  // in the SecureKeyStore. Idempotent
-  Future<void> initialize() async {
+  // in the SecureKeyStore. Runs once : every public method awaits this, so
+  // there is no separate "call initialize() first" contract. A failed init
+  // is not cached, so the next call retries
+  Future<void> initialize() {
+    return _initFuture ??= _rebuildPresence().catchError((Object e) {
+      _initFuture = null;
+      throw e;
+    });
+  }
+
+  Future<void> _rebuildPresence() async {
     final handles = await _store.list(labelPrefix: kAlbumLabelPrefix);
     _present.clear();
     for (final h in handles) {
@@ -29,18 +38,17 @@ class AlbumKeyStore {
       if (parsed == null) continue;
       _present.putIfAbsent(parsed.albumHex, () => {})[parsed.epoch] = h;
     }
-    _initialized = true;
   }
 
   Future<int> latestEpoch(Uint8List albumId) async {
-    _requireInit();
+    await initialize();
     final m = _present[_hex(albumId)];
     if (m == null || m.isEmpty) return -1;
     return m.keys.reduce((a, b) => a > b ? a : b);
   }
 
   Future<List<int>> presentEpochs(Uint8List albumId) async {
-    _requireInit();
+    await initialize();
     final m = _present[_hex(albumId)];
     if (m == null) return const [];
     return m.keys.toList()..sort();
@@ -48,7 +56,7 @@ class AlbumKeyStore {
 
   // Direct write : bypasses replay/downgrade. Internal flows + tests only
   Future<void> install(Uint8List albumId, int epoch, Uint8List mk) async {
-    _requireInit();
+    await initialize();
     if (epoch < 0) throw ArgumentError('epoch must be >= 0, got $epoch');
     if (mk.length != 32) {
       throw ArgumentError('mk must be 32 bytes, got ${mk.length}');
@@ -66,7 +74,7 @@ class AlbumKeyStore {
     required Uint8List mk,
     required bool backfill,
   }) async {
-    _requireInit();
+    await initialize();
     if (epoch < 0) throw ArgumentError('epoch must be >= 0, got $epoch');
     if (mk.length != 32) {
       throw ArgumentError('mk must be 32 bytes, got ${mk.length}');
@@ -109,19 +117,13 @@ class AlbumKeyStore {
     Uint8List albumId,
     int epoch,
     Future<T> Function(Uint8List mk) fn,
-  ) {
-    _requireInit();
+  ) async {
+    await initialize();
     final h = _present[_hex(albumId)]?[epoch];
     if (h == null) {
       throw StateError('no MK for album=${_hex(albumId)} epoch=$epoch');
     }
     return _store.use<T>(h, fn);
-  }
-
-  void _requireInit() {
-    if (!_initialized) {
-      throw StateError('AlbumKeyStore.initialize() must be called first');
-    }
   }
 }
 

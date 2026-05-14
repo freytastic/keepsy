@@ -83,17 +83,35 @@ class IdentityService {
   //   tres. Publish the initial 20-OPK batch if not yet marked published
   Future<void> bootstrap() async {
     if (await isBootstrapped()) return;
+    final swAll = Stopwatch()..start();
 
+    final sw = Stopwatch()..start();
     await _store.initialize();
+    print('[perf] bootstrap: store.initialize ${sw.elapsedMilliseconds}ms');
 
+    sw
+      ..reset()
+      ..start();
     final keys = await _ensureKeysGenerated();
+    print('[perf] bootstrap: ensureKeysGenerated ${sw.elapsedMilliseconds}ms');
 
     if (!await _labels.isIdentityPublished()) {
+      sw
+        ..reset()
+        ..start();
       await _publishIdentity(keys);
+      print('[perf] bootstrap: publishIdentity(PUT) '
+          '${sw.elapsedMilliseconds}ms');
     }
     if (!await _labels.areInitialOpksPublished()) {
+      sw
+        ..reset()
+        ..start();
       await _publishInitialOpks(keys);
+      print('[perf] bootstrap: publishInitialOpks(POST) '
+          '${sw.elapsedMilliseconds}ms');
     }
+    print('[perf] bootstrap: TOTAL ${swAll.elapsedMilliseconds}ms');
   }
 
   Future<_BootstrapKeys> _ensureKeysGenerated() async {
@@ -128,29 +146,33 @@ class IdentityService {
   }
 
   Future<_BootstrapKeys> _generateAndPersistKeys() async {
-    // IK = Ed25519 seed (32B). Generate, derive pub, persist seed, zero source
+    // Generate every key first, then persist the whole set in one putMany.
+    // 23 separate native puts (each re-encrypting + rewriting the entire
+    // envelope) was the bootstrap bottleneck
+    final swGen = Stopwatch()..start();
+    final entries = <({String label, Uint8List plaintext})>[];
+    final seeds = <Uint8List>[];
+
+    // IK = Ed25519 seed (32B)
     final ikSeed = Csprng.bytes(32);
     final ikKp = await KeyHandleAdapter.toEd25519(ikSeed);
     final ikPub = Uint8List.fromList((await ikKp.extractPublicKey()).bytes);
-    final ikHandle = await _store.put(kLabelIK, ikSeed);
-    ikSeed.fillRange(0, ikSeed.length, 0);
-    await _labels.set(kLabelIK, ikHandle.id);
+    seeds.add(ikSeed);
+    entries.add((label: kLabelIK, plaintext: ikSeed));
 
     // LK = X25519 (32B scalar)
     final lkPriv = Csprng.bytes(32);
     final lkKp = await KeyHandleAdapter.toX25519(lkPriv);
     final lkPub = Uint8List.fromList((await lkKp.extractPublicKey()).bytes);
-    final lkHandle = await _store.put(kLabelLK, lkPriv);
-    lkPriv.fillRange(0, lkPriv.length, 0);
-    await _labels.set(kLabelLK, lkHandle.id);
+    seeds.add(lkPriv);
+    entries.add((label: kLabelLK, plaintext: lkPriv));
 
     // SPK = X25519
     final spkPriv = Csprng.bytes(32);
     final spkKp = await KeyHandleAdapter.toX25519(spkPriv);
     final spkPub = Uint8List.fromList((await spkKp.extractPublicKey()).bytes);
-    final spkHandle = await _store.put(kLabelSpkCurrent, spkPriv);
-    spkPriv.fillRange(0, spkPriv.length, 0);
-    await _labels.set(kLabelSpkCurrent, spkHandle.id);
+    seeds.add(spkPriv);
+    entries.add((label: kLabelSpkCurrent, plaintext: spkPriv));
 
     // OPKs[0..19]
     final opks = <PrekeyOpk>[];
@@ -158,14 +180,35 @@ class IdentityService {
       final priv = Csprng.bytes(32);
       final kp = await KeyHandleAdapter.toX25519(priv);
       final pub = Uint8List.fromList((await kp.extractPublicKey()).bytes);
-      final h = await _store.put('$kLabelOpkPrefix$i', priv);
-      priv.fillRange(0, priv.length, 0);
-      await _labels.set('$kLabelOpkPrefix$i', h.id);
+      seeds.add(priv);
+      entries.add((label: '$kLabelOpkPrefix$i', plaintext: priv));
       opks.add(PrekeyOpk(idx: i, keyPub: pub));
     }
+    print('[perf] genKeys: generate 23 keys (crypto) '
+        '${swGen.elapsedMilliseconds}ms');
+
+    // Single batched persist. Seeds are zeroed once the bytes have been
+    // handed to the store, whether putMany succeeds or throws
+    final swPut = Stopwatch()..start();
+    final List<KeyHandle> handles;
+    try {
+      handles = await _store.putMany(entries);
+    } finally {
+      for (final s in seeds) {
+        s.fillRange(0, s.length, 0);
+      }
+    }
+    print('[perf] genKeys: putMany(23) ${swPut.elapsedMilliseconds}ms');
+
+    // handles[i] aligns with entries[i] : same order in, same order out
+    final swLabels = Stopwatch()..start();
+    for (var i = 0; i < handles.length; i++) {
+      await _labels.set(entries[i].label, handles[i].id);
+    }
+    print('[perf] genKeys: labels.set x23 ${swLabels.elapsedMilliseconds}ms');
 
     return _BootstrapKeys(
-      ikHandle: ikHandle,
+      ikHandle: handles[0],
       ikPub: ikPub,
       lkPub: lkPub,
       spkPub: spkPub,
