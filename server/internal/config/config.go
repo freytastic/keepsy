@@ -27,30 +27,32 @@ type Config struct {
 	UserLinkKey []byte
 
 	// S3 / R2 configs
-	S3Endpoint   string
-	S3AccessKey  string
-	S3SecretKey  string
-	S3Bucket     string
-	S3Region     string
-	UsePathStyle bool
+	S3Endpoint       string
+	S3PublicEndpoint string // optional: used for presigning if S3Endpoint is internal (e.g. http://minio:9000)
+	S3AccessKey      string
+	S3SecretKey      string
+	S3Bucket         string
+	S3Region         string
+	UsePathStyle     bool
 }
 
 func Load() *Config {
 	devMode := getEnv("APP_ENV", "") == "dev"
 	return &Config{
-		DatabaseURL:  getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/keepsy?sslmode=disable"),
-		RedisURL:     getEnv("REDIS_URL", "localhost:6379"),
-		Port:         getEnv("PORT", "8080"),
-		ResendAPIKey: getEnv("RESEND_API_KEY", ""),
-		DevMode:      devMode,
-		EmailHMACKey: loadEmailHMACKey(devMode),
-		UserLinkKey:  loadKeyOrDevPlaceholder("KEEPSY_USER_LINK_KEY", "keepsy-dev-userlink-placeholder-do-not-deploy", devMode),
-		S3Endpoint:   getEnv("S3_ENDPOINT", "http://localhost:9000"),
-		S3AccessKey:  getEnv("S3_ACCESS_KEY", "minioadmin"),
-		S3SecretKey:  getEnv("S3_SECRET_KEY", "minioadmin"),
-		S3Bucket:     getEnv("S3_BUCKET", "keepsy"),
-		S3Region:     getEnv("S3_REGION", "auto"),
-		UsePathStyle: getEnv("USE_PATH_STYLE", "true") == "true",
+		DatabaseURL:      getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/keepsy?sslmode=disable"),
+		RedisURL:         getEnv("REDIS_URL", "localhost:6379"),
+		Port:             getEnv("PORT", "8080"),
+		ResendAPIKey:     getEnv("RESEND_API_KEY", ""),
+		DevMode:          devMode,
+		EmailHMACKey:     loadEmailHMACKey(devMode),
+		UserLinkKey:      loadKeyOrDevPlaceholder("KEEPSY_USER_LINK_KEY", "keepsy-dev-userlink-placeholder-do-not-deploy", devMode),
+		S3Endpoint:       getEnv("S3_ENDPOINT", "http://localhost:9000"),
+		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
+		S3AccessKey:      getEnv("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:      getEnv("S3_SECRET_KEY", "minioadmin"),
+		S3Bucket:         getEnv("S3_BUCKET", "keepsy"),
+		S3Region:         getEnv("S3_REGION", "auto"),
+		UsePathStyle:     getEnv("USE_PATH_STYLE", "true") == "true",
 	}
 }
 
