@@ -7,7 +7,7 @@ import 'secure_key_store.dart';
 // Mirrors AndroidKeystore byte for byte: both are the same MethodChannel
 // surface. Keeping them as two classes (instead of a shared base) makes it
 // obvious in stack traces : revisit after Phase 2
-class IosSecureEnclave implements SecureKeyStore {
+class IosSecureEnclave extends SecureKeyStore {
   static const _channel = MethodChannel('keepsy/keystore');
 
   @override
