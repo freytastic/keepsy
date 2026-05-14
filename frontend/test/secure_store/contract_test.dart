@@ -25,6 +25,24 @@ void runContractTests(String name, StoreFactory factory) {
       expect(got, equals(pt));
     });
 
+    test('putMany round-trips every entry in input order', () async {
+      final entries = [
+        for (var i = 0; i < 5; i++)
+          (
+            label: 'batch.$i',
+            plaintext: Uint8List.fromList(List.filled(32, i)),
+          ),
+      ];
+      final handles = await store.putMany(entries);
+      expect(handles.length, 5);
+      for (var i = 0; i < 5; i++) {
+        expect(handles[i].label, 'batch.$i');
+        final got =
+            await store.use(handles[i], (b) async => Uint8List.fromList(b));
+        expect(got, equals(entries[i].plaintext));
+      }
+    });
+
     test('use zeroes bytes after fn returns', () async {
       final pt = Uint8List.fromList(List.filled(32, 0xAB));
       final h = await store.put('test.k', pt);
