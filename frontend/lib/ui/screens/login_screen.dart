@@ -163,10 +163,7 @@ class _LoginScreenState extends State<LoginScreen>
           _showError("Invalid OTP code. Try again.");
         }
       } on BootstrapAccountConflictException catch (_) {
-        // Server already has a different IK on file for this account. The
-        // local device cannot recover from this : retrying the OTP would
-        // just re trip the same 409. Surface a distinct message so the user
-        // doesnt keep typing OTPs forever
+        // same conflict handling
         for (final c in _otpCtrls) {
           c.clear();
         }
@@ -179,15 +176,13 @@ class _LoginScreenState extends State<LoginScreen>
           "Contact support or use account recovery to continue here.",
         );
       } catch (e) {
-        for (final c in _otpCtrls) {
-          c.clear();
-        }
+        //catch setup errors (eg secure storage failures)
+        print("LOGIN ERROR: $e");
         setState(() {
           _loading = false;
           _bootstrapping = false;
         });
-        _otpFoci[0].requestFocus();
-        _showError("Something went wrong. Please try again.");
+        _showError("Identity setup failed. Please try again.");
       }
     }
   }

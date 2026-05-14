@@ -96,13 +96,31 @@ class EpochRotator {
       // immediately after the wrap encrypt
       final wraps = <SetEpochWrap>[];
       for (final r in recipients) {
+        final sw = Stopwatch()..start();
         final bundle = await _prekeys.fetchPrekeyBundle(r.userId);
+        print('[perf] rotate: fetchPrekeyBundle(GET) '
+            '${sw.elapsedMilliseconds}ms');
+
+        sw
+          ..reset()
+          ..start();
         await bundle.verify(now: _now);
+        print('[perf] rotate: bundle.verify ${sw.elapsedMilliseconds}ms');
+
+        sw
+          ..reset()
+          ..start();
         final init = await X3dhSession.initiate(
           bundle: bundle,
           albumId: albumIdBytes,
           identity: _identity,
         );
+        print('[perf] rotate: X3dhSession.initiate '
+            '${sw.elapsedMilliseconds}ms');
+
+        sw
+          ..reset()
+          ..start();
         final wrap = await _wrapMK(
           sk: init.sharedSecret,
           mk: mk,
@@ -116,6 +134,7 @@ class EpochRotator {
           epoch: epoch,
           wrap: wrap,
         );
+        print('[perf] rotate: wrapMK+signSender ${sw.elapsedMilliseconds}ms');
         wraps.add(SetEpochWrap(
           recipientToken: r.memberToken,
           ekPub: init.ekPub,
@@ -126,6 +145,7 @@ class EpochRotator {
       }
 
       // build the §4.1 byte hashes : mirror server side byte for byte
+      final swPost = Stopwatch()..start();
       final tokens = recipients.map((r) => r.memberToken).toList();
       final memberSetHash = await _memberSetHash(tokens);
       final wrapsHash = await _wrapsHash(wraps);
@@ -135,8 +155,13 @@ class EpochRotator {
         memberSetHash: memberSetHash,
         wrapsHash: wrapsHash,
       );
+      print('[perf] rotate: hashes+envelopeSig '
+          '${swPost.elapsedMilliseconds}ms');
 
       // POST /albums/{id}/epoch. Server validates everything atomically
+      swPost
+        ..reset()
+        ..start();
       await _epochs.setEpoch(
         _uuidStringFromBytes(albumIdBytes),
         SetEpochRequest(
@@ -146,16 +171,21 @@ class EpochRotator {
           envelopeSig: envelopeSig,
         ),
       );
+      print('[perf] rotate: setEpoch(POST) ${swPost.elapsedMilliseconds}ms');
 
       //install MK locally. installVerified is idempotent on byte
       // equal re install so if a fanout race already installed it (via §4.2
       // responder path) we no op cleanly
+      swPost
+        ..reset()
+        ..start();
       await _aks.installVerified(
         albumId: albumIdBytes,
         epoch: epoch,
         mk: mk,
         backfill: false,
       );
+      print('[perf] rotate: installVerified ${swPost.elapsedMilliseconds}ms');
     } finally {
       mk.fillRange(0, mk.length, 0);
     }

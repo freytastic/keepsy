@@ -16,19 +16,18 @@ type S3Client struct {
 	bucket        string
 }
 
-func NewS3Client(endpoint, accessKey, secretKey, bucket, region string, usePathStyle bool) (*S3Client, error) {
-	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, reg string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL:               endpoint,
-			SigningRegion:     region,
-			HostnameImmutable: usePathStyle,
-		}, nil
-	})
-
+func NewS3Client(endpoint, presignEndpoint, accessKey, secretKey, bucket, region string, usePathStyle bool) (*S3Client, error) {
+	// Base client for internal operations (CreateBucket, HeadObject)
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		config.WithEndpointResolverWithOptions(customResolver),
+		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, reg string, options ...interface{}) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL:               endpoint,
+				SigningRegion:     region,
+				HostnameImmutable: usePathStyle,
+			}, nil
+		})),
 	)
 	if err != nil {
 		return nil, err
@@ -38,10 +37,34 @@ func NewS3Client(endpoint, accessKey, secretKey, bucket, region string, usePathS
 		o.UsePathStyle = usePathStyle
 	})
 
+	// Separate client for presigning if a different endpoint is provided
+	// This ensures presigned URLs carry the public IP reachable by the phone
+	presignUrl := endpoint
+	if presignEndpoint != "" {
+		presignUrl = presignEndpoint
+	}
+
+	presignCfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, reg string, options ...interface{}) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL:               presignUrl,
+				SigningRegion:     region,
+				HostnameImmutable: usePathStyle,
+			}, nil
+		})),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &S3Client{
-		client:        client,
-		presignClient: s3.NewPresignClient(client),
-		bucket:        bucket,
+		client: client,
+		presignClient: s3.NewPresignClient(s3.NewFromConfig(presignCfg, func(o *s3.Options) {
+			o.UsePathStyle = usePathStyle
+		})),
+		bucket: bucket,
 	}, nil
 }
 

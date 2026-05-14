@@ -44,6 +44,10 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
                     val pt = call.argument<ByteArray>("plaintext")!!
                     result.success(mapOf("handleId" to put(label, pt)))
                 }
+                "putMany" -> {
+                    val entries = call.argument<List<Map<String, Any?>>>("entries")!!
+                    result.success(putMany(entries).map { mapOf("handleId" to it) })
+                }
                 "getOnce" -> {
                     val id = call.argument<String>("handleId")!!
                     result.success(mapOf("plaintext" to getOnce(id)))
@@ -98,6 +102,22 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
         map[id] = label to plaintext
         saveMap(map)
         return id
+    }
+
+    // one loadMap + one saveMap for the whole set, instead of
+    // re decrypting and rewriting the envelope once per key
+    private fun putMany(entries: List<Map<String, Any?>>): List<String> {
+        val map = loadMap()
+        val ids = ArrayList<String>(entries.size)
+        for (e in entries) {
+            val label = e["label"] as String
+            val pt = e["plaintext"] as ByteArray
+            val id = randomHex(HANDLE_BYTES)
+            map[id] = label to pt
+            ids.add(id)
+        }
+        saveMap(map)
+        return ids
     }
 
     private fun getOnce(handleId: String): ByteArray {
@@ -155,17 +175,18 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
     private fun saveMap(map: Map<String, Pair<String, ByteArray>>) {
         if (!ks.containsAlias(WRAP_ALIAS)) throw UninitializedException("wrapper key absent")
         val pt = encode(map)
-        val iv = ByteArray(IV_BYTES).also(rng::nextBytes)
         val key = (ks.getEntry(WRAP_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
 
-        val ct = Cipher.getInstance("AES/GCM/NoPadding").run {
-            init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
-            doFinal(pt)
-        }
+        // AndroidKeyStore enforces randomized encryption : the keystore picks the
+        // GCM IV, a caller supplied one is rejected. Read it back after init
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        val ct = cipher.doFinal(pt)
 
-        val out = ByteArray(IV_BYTES + ct.size)
-        System.arraycopy(iv, 0, out, 0, IV_BYTES)
-        System.arraycopy(ct, 0, out, IV_BYTES, ct.size)
+        val out = ByteArray(iv.size + ct.size)
+        System.arraycopy(iv, 0, out, 0, iv.size)
+        System.arraycopy(ct, 0, out, iv.size, ct.size)
 
         val tmp = File(ctx.filesDir, "$ENVELOPE_FILE.tmp")
         tmp.writeBytes(out)

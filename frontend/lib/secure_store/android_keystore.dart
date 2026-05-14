@@ -4,7 +4,7 @@ import 'key_handle.dart';
 import 'key_store_exceptions.dart';
 import 'secure_key_store.dart';
 
-class AndroidKeystore implements SecureKeyStore {
+class AndroidKeystore extends SecureKeyStore {
   static const _channel = MethodChannel('keepsy/keystore');
 
   @override
@@ -15,6 +15,21 @@ class AndroidKeystore implements SecureKeyStore {
     final r =
         await _invoke<Map>('put', {'label': label, 'plaintext': plaintext});
     return KeyHandle(id: r['handleId'] as String, label: label);
+  }
+
+  @override
+  Future<List<KeyHandle>> putMany(
+      List<({String label, Uint8List plaintext})> entries) async {
+    final r = await _invoke<List>('putMany', {
+      'entries': [
+        for (final e in entries) {'label': e.label, 'plaintext': e.plaintext},
+      ],
+    });
+    return [
+      for (var i = 0; i < entries.length; i++)
+        KeyHandle(
+            id: (r[i] as Map)['handleId'] as String, label: entries[i].label),
+    ];
   }
 
   @override

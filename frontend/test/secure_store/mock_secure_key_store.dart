@@ -5,7 +5,7 @@ import 'package:keepsy/secure_store/key_handle.dart';
 import 'package:keepsy/secure_store/key_store_exceptions.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 
-class MockSecureKeyStore implements SecureKeyStore {
+class MockSecureKeyStore extends SecureKeyStore {
   final Map<String, _Entry> _store = {};
   bool _initialized = false;
 

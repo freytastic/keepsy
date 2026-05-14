@@ -70,7 +70,7 @@ func main() {
 	albumRepo := repository.NewAlbumRepository(dbPool, linker)
 	mediaRepo := repository.NewMediaRepository(dbPool)
 
-	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
+	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
 	if err != nil {
 		log.Fatalf("s3 init: %v", err)
 	}
@@ -184,7 +184,10 @@ func main() {
 		})
 	})
 
-	rootHandler := middleware.Recover(middleware.RequestID(middleware.CORS(r)))
+	rootHandler := middleware.Recover(middleware.RequestID(middleware.CORS(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		log.Printf("%s %s", req.Method, req.URL.Path)
+		r.ServeHTTP(w, req)
+	}))))
 
 	srv := &http.Server{
 		Addr:           ":" + cfg.Port,

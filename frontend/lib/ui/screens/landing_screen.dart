@@ -73,6 +73,11 @@ class _LandingPageState extends State<LandingPage> {
         final epochProcessor = context.read<EpochProcessor>();
         // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
+        // bootstrap() is idempotent + resumable : a login whose inline bootstrap
+        // failed (or never ran) is only ever retried here, on cold start
+        try {
+          await identity.bootstrap();
+        } catch (_) {/* logged elsewhere; landing must not gate */}
         try {
           await identity.ensureSpkRotated();
         } catch (_) {/* logged elsewhere; landing must not gate */}

@@ -15,6 +15,19 @@ abstract class SecureKeyStore {
 
   Future<KeyHandle> put(String label, Uint8List plaintext);
 
+  // Batch insert. The default loops put(); platform-backed stores override
+  // this with a single native round trip : one envelope read + rewrite for
+  // the whole batch instead of one per key. Handles are returned in input
+  // order
+  Future<List<KeyHandle>> putMany(
+      List<({String label, Uint8List plaintext})> entries) async {
+    final out = <KeyHandle>[];
+    for (final e in entries) {
+      out.add(await put(e.label, e.plaintext));
+    }
+    return out;
+  }
+
   // buffer is  guaranteed to be overwritten with zeros immediately after [fn] returns,
   // whether it succeeds or throws
   Future<T> use<T>(KeyHandle h, Future<T> Function(Uint8List bytes) fn);
