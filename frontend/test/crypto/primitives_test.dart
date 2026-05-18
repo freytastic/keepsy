@@ -1,10 +1,13 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 
+import '../_sodium_setup.dart';
+
 void main() {
+  setUpAll(ensureSodium);
+
   group('Aead round-trip', () {
     final key = Uint8List.fromList(List.filled(32, 0x42));
     final aad = Uint8List.fromList([1, 2, 3]);
@@ -150,29 +153,26 @@ void main() {
   group('Sign (Ed25519)', () {
     test('sign/verify happy path', () async {
       final kp = await Sign.generateEd25519();
-      final pk = await kp.extractPublicKey() as cg.SimplePublicKey;
       final msg = Uint8List.fromList('hello world'.codeUnits);
       final sig = await Sign.sign(kp, msg);
       expect(sig.length, equals(64));
-      expect(await Sign.verify(pk, msg, sig), isTrue);
+      expect(await Sign.verify(kp.publicKey, msg, sig), isTrue);
     });
 
     test('verify rejects tampered message', () async {
       final kp = await Sign.generateEd25519();
-      final pk = await kp.extractPublicKey() as cg.SimplePublicKey;
       final msg = Uint8List.fromList([1, 2, 3]);
       final sig = await Sign.sign(kp, msg);
       final tampered = Uint8List.fromList([1, 2, 4]);
-      expect(await Sign.verify(pk, tampered, sig), isFalse);
+      expect(await Sign.verify(kp.publicKey, tampered, sig), isFalse);
     });
 
     test('verify rejects flipped signature bit', () async {
       final kp = await Sign.generateEd25519();
-      final pk = await kp.extractPublicKey() as cg.SimplePublicKey;
       final msg = Uint8List.fromList([9, 9, 9]);
       final sig = await Sign.sign(kp, msg);
       sig[0] ^= 0x01;
-      expect(await Sign.verify(pk, msg, sig), isFalse);
+      expect(await Sign.verify(kp.publicKey, msg, sig), isFalse);
     });
   });
 
@@ -180,10 +180,8 @@ void main() {
     test('two parties derive the same shared secret', () async {
       final aliceKp = await Kex.generateX25519();
       final bobKp = await Kex.generateX25519();
-      final aliceShared = await Kex.dh(
-          aliceKp, await bobKp.extractPublicKey() as cg.SimplePublicKey);
-      final bobShared = await Kex.dh(
-          bobKp, await aliceKp.extractPublicKey() as cg.SimplePublicKey);
+      final aliceShared = await Kex.dh(aliceKp, bobKp.publicKey);
+      final bobShared = await Kex.dh(bobKp, aliceKp.publicKey);
       expect(aliceShared, orderedEquals(bobShared));
       expect(aliceShared.length, equals(32));
     });

@@ -1,6 +1,26 @@
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart' as cg;
+import 'package:sodium/sodium_sumo.dart';
 import 'wire_format.dart';
+
+// Byte backed EC key types. Owned here so the EC backend (currently
+// libsodium) can swap without touching callers. Private bytes are 32B
+// seeds in both cases : matches what SecureKeyStore persists
+class Ed25519KeyPair {
+  final Uint8List seed;
+  final Uint8List publicKey;
+  Ed25519KeyPair({required this.seed, required this.publicKey})
+      : assert(seed.length == 32, 'Ed25519 seed must be 32B'),
+        assert(publicKey.length == 32, 'Ed25519 pub must be 32B');
+}
+
+class X25519KeyPair {
+  final Uint8List privateKey;
+  final Uint8List publicKey;
+  X25519KeyPair({required this.privateKey, required this.publicKey})
+      : assert(privateKey.length == 32, 'X25519 priv must be 32B'),
+        assert(publicKey.length == 32, 'X25519 pub must be 32B');
+}
 
 // Thrown when an AEAD authentication tag fails verification
 // Distinct from FormatException so callers can differentiate "wire malformed"
@@ -101,35 +121,101 @@ abstract class Hkdf {
   }
 }
 
+// Sign/Kex are backed by libsodium (sumo variant for raw scalarmult)
+// Call bindSodium() exactly once at app startup before any sign/dh use
 abstract class Sign {
-  static Future<cg.SimpleKeyPair> generateEd25519() =>
-      cg.Ed25519().newKeyPair();
+  static SodiumSumo? _sodium;
+  static void bindSodium(SodiumSumo s) => _sodium = s;
+  static SodiumSumo get _s {
+    final s = _sodium;
+    if (s == null) throw StateError('Sign.bindSodium not called');
+    return s;
+  }
 
-  static Future<Uint8List> sign(cg.SimpleKeyPair keyPair, Uint8List msg) async {
-    final sig = await cg.Ed25519().sign(msg, keyPair: keyPair);
-    return Uint8List.fromList(sig.bytes);
+  static Future<Ed25519KeyPair> generateEd25519() async {
+    final seed = Csprng.bytes(32);
+    return fromSeed(seed);
+  }
+
+  static Future<Ed25519KeyPair> fromSeed(Uint8List seed) async {
+    if (seed.length != 32) {
+      throw ArgumentError('Ed25519 seed must be 32B, got ${seed.length}');
+    }
+    final secureSeed = SecureKey.fromList(_s, seed);
+    try {
+      final kp = _s.crypto.sign.seedKeyPair(secureSeed);
+      return Ed25519KeyPair(seed: seed, publicKey: kp.publicKey);
+    } finally {
+      secureSeed.dispose();
+    }
+  }
+
+  static Future<Uint8List> sign(Ed25519KeyPair kp, Uint8List msg) async {
+    final secureSeed = SecureKey.fromList(_s, kp.seed);
+    try {
+      final full = _s.crypto.sign.seedKeyPair(secureSeed);
+      try {
+        return _s.crypto.sign.detached(message: msg, secretKey: full.secretKey);
+      } finally {
+        full.secretKey.dispose();
+      }
+    } finally {
+      secureSeed.dispose();
+    }
   }
 
   static Future<bool> verify(
-      cg.SimplePublicKey pubKey, Uint8List msg, Uint8List sig) async {
-    return cg.Ed25519().verify(
-      msg,
-      signature: cg.Signature(sig, publicKey: pubKey),
-    );
+      Uint8List pubKey, Uint8List msg, Uint8List sig) async {
+    if (pubKey.length != 32 || sig.length != 64) return false;
+    return _s.crypto.sign
+        .verifyDetached(message: msg, signature: sig, publicKey: pubKey);
   }
 }
 
 abstract class Kex {
-  static Future<cg.SimpleKeyPair> generateX25519() => cg.X25519().newKeyPair();
+  static SodiumSumo? _sodium;
+  static void bindSodium(SodiumSumo s) => _sodium = s;
+  static SodiumSumo get _s {
+    final s = _sodium;
+    if (s == null) throw StateError('Kex.bindSodium not called');
+    return s;
+  }
 
-  // X25519 Diffie Hellman : returns the 32byte shared u coordinate
-  static Future<Uint8List> dh(
-      cg.SimpleKeyPair self, cg.SimplePublicKey peerPub) async {
-    final shared = await cg.X25519().sharedSecretKey(
-          keyPair: self,
-          remotePublicKey: peerPub,
-        );
-    return Uint8List.fromList(await shared.extractBytes());
+  static Future<X25519KeyPair> generateX25519() async {
+    // 32 random bytes : libsodium clamps inside scalarmult.base
+    final priv = Csprng.bytes(32);
+    return fromSeed(priv);
+  }
+
+  static Future<X25519KeyPair> fromSeed(Uint8List priv) async {
+    if (priv.length != 32) {
+      throw ArgumentError('X25519 scalar must be 32B, got ${priv.length}');
+    }
+    final secret = SecureKey.fromList(_s, priv);
+    try {
+      final pub = _s.crypto.scalarmult.base(n: secret);
+      return X25519KeyPair(privateKey: priv, publicKey: pub);
+    } finally {
+      secret.dispose();
+    }
+  }
+
+  // X25519 Diffie Hellman : returns the 32B shared u coordinate
+  static Future<Uint8List> dh(X25519KeyPair self, Uint8List peerPub) async {
+    if (peerPub.length != 32) {
+      throw ArgumentError('peer pub must be 32B, got ${peerPub.length}');
+    }
+    final secret = SecureKey.fromList(_s, self.privateKey);
+    try {
+      final shared = _s.crypto.scalarmult(n: secret, p: peerPub);
+      try {
+        return Uint8List.fromList(shared.extractBytes());
+      } finally {
+        shared.dispose();
+      }
+    } finally {
+      secret.dispose();
+    }
   }
 }
 

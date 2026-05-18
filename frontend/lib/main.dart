@@ -1,15 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:sodium/sodium_sumo.dart' show SodiumSumo, SodiumSumoInit;
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/data/api/epoch_api.dart' as data_epoch;
 import 'package:keepsy/data/api/error_mapper.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
+import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
@@ -33,6 +36,13 @@ final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Native libsodium for X25519/Ed25519 (sumo variant exposes raw
+  // crypto_scalarmult). AES-GCM/ChaCha20 stay on cryptography_flutter
+  // (auto-enabled by Flutter since the pkg ships as a plugin).
+  final sodium = await SodiumSumoInit.init();
+  Sign.bindSodium(sodium);
+  Kex.bindSodium(sodium);
 
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -74,6 +84,14 @@ void main() async {
   // installVerified). MemberDirectory's fetcher closure is the single point
   // where the e2ee/ layer touches lib/data/api/album_api.dart
   final albumKeyStore = AlbumKeyStore(secureKeyStore);
+  // Warm SecureKeyStore (wrapper key creation) + AlbumKeyStore (_store.list
+  // for _rebuildPresence) during login/landing idle
+  // cold first album installVerified ~700ms for the
+  // _store.list() inside _rebuildPresence, this folds that cost into the
+  // network bound login flow instead of the album create blocking path
+  // Must call SecureKeyStore.initialize first : AlbumKeyStore.initialize calls
+  // _store.list which throws KeyStoreUninitializedException without it
+  unawaited(_prewarmKeyStores(secureKeyStore, albumKeyStore));
   final albumService = AlbumService();
   final memberDirectory = MemberDirectory((albumId) async {
     final members =
@@ -160,10 +178,21 @@ void main() async {
         Provider<MemberDirectory>.value(value: memberDirectory),
         Provider<EpochProcessor>.value(value: epochProcessor),
         Provider<EpochRotator>.value(value: epochRotator),
+        Provider<SodiumSumo>.value(value: sodium),
       ],
       child: const KeepsyApp(),
     ),
   );
+}
+
+Future<void> _prewarmKeyStores(SecureKeyStore store, AlbumKeyStore aks) async {
+  try {
+    await store.initialize();
+    await aks.initialize();
+  } catch (e, s) {
+    developer.log('keystore prewarm failed (non-fatal)',
+        name: 'keepsy.startup', error: e, stackTrace: s);
+  }
 }
 
 // Canonical 8-4-4-4-12 hex form for raw 16B UUIDs. Inline here so main.dart

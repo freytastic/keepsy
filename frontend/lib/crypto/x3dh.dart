@@ -1,13 +1,12 @@
 import 'dart:typed_data';
-import 'package:cryptography/cryptography.dart' as cg;
 import 'primitives.dart';
 import 'wire_format.dart';
 
 // X3DH key agreement (4 DH with OPK, 3 DH fallback when OPK exhausted)
 
-// Inputs are all X25519 keys, never IK (Ed25519). Passing an Ed25519 key here
-// would silently produce wrong DH output : the explicit type guards in
-// Kex.dh + cg.SimplePublicKey(type: x25519) catch this at runtime
+// Peer pubs are raw 32B X25519 u-coordinates. Passing IK (Ed25519) bytes
+// here would silently produce wrong DH output : callers must source pubs
+// from PrekeyBundle.lk/spk/opk fields, never the ik field
 
 //   A computes: DH1=X25519(LK_a, SPK_b)  DH2=X25519(EK_a, LK_b)
 //               DH3=X25519(EK_a, SPK_b)  DH4=X25519(EK_a, OPK_b)
@@ -20,58 +19,56 @@ abstract class X3dh {
   static const int sharedSecretLen = 32;
 
   static Future<Uint8List> initiator({
-    required cg.SimpleKeyPair lkSkA,
-    required cg.SimpleKeyPair ekSkA,
-    required cg.SimplePublicKey lkPkB,
-    required cg.SimplePublicKey spkPkB,
-    cg.SimplePublicKey? opkPkB,
+    required X25519KeyPair lkSkA,
+    required X25519KeyPair ekSkA,
+    required Uint8List lkPkB,
+    required Uint8List spkPkB,
+    Uint8List? opkPkB,
     required Uint8List albumId,
   }) async {
-    _requireX25519(lkPkB, 'lkPkB');
-    _requireX25519(spkPkB, 'spkPkB');
-    if (opkPkB != null) _requireX25519(opkPkB, 'opkPkB');
+    _requireLen(lkPkB, 'lkPkB');
+    _requireLen(spkPkB, 'spkPkB');
+    if (opkPkB != null) _requireLen(opkPkB, 'opkPkB');
 
     final dh1 = await Kex.dh(lkSkA, spkPkB);
     final dh2 = await Kex.dh(ekSkA, lkPkB);
     final dh3 = await Kex.dh(ekSkA, spkPkB);
     final dh4 = opkPkB == null ? null : await Kex.dh(ekSkA, opkPkB);
 
-    final lkPkA = await lkSkA.extractPublicKey();
     return _finish(
       dh1: dh1,
       dh2: dh2,
       dh3: dh3,
       dh4: dh4,
-      lkPubA: Uint8List.fromList(lkPkA.bytes),
-      lkPubB: Uint8List.fromList(lkPkB.bytes),
+      lkPubA: lkSkA.publicKey,
+      lkPubB: lkPkB,
       albumId: albumId,
     );
   }
 
   static Future<Uint8List> responder({
-    required cg.SimpleKeyPair lkSkB,
-    required cg.SimpleKeyPair spkSkB,
-    cg.SimpleKeyPair? opkSkB,
-    required cg.SimplePublicKey lkPkA,
-    required cg.SimplePublicKey ekPkA,
+    required X25519KeyPair lkSkB,
+    required X25519KeyPair spkSkB,
+    X25519KeyPair? opkSkB,
+    required Uint8List lkPkA,
+    required Uint8List ekPkA,
     required Uint8List albumId,
   }) async {
-    _requireX25519(lkPkA, 'lkPkA');
-    _requireX25519(ekPkA, 'ekPkA');
+    _requireLen(lkPkA, 'lkPkA');
+    _requireLen(ekPkA, 'ekPkA');
 
     final dh1 = await Kex.dh(spkSkB, lkPkA);
     final dh2 = await Kex.dh(lkSkB, ekPkA);
     final dh3 = await Kex.dh(spkSkB, ekPkA);
     final dh4 = opkSkB == null ? null : await Kex.dh(opkSkB, ekPkA);
 
-    final lkPkB = await lkSkB.extractPublicKey();
     return _finish(
       dh1: dh1,
       dh2: dh2,
       dh3: dh3,
       dh4: dh4,
-      lkPubA: Uint8List.fromList(lkPkA.bytes),
-      lkPubB: Uint8List.fromList(lkPkB.bytes),
+      lkPubA: lkPkA,
+      lkPubB: lkSkB.publicKey,
       albumId: albumId,
     );
   }
@@ -95,14 +92,9 @@ abstract class X3dh {
     );
   }
 
-  static void _requireX25519(cg.SimplePublicKey pk, String name) {
-    if (pk.type != cg.KeyPairType.x25519) {
-      throw ArgumentError(
-          '$name must be X25519, got ${pk.type} : never pass IK (Ed25519)');
-    }
-    if (pk.bytes.length != kLkPubLen) {
-      throw ArgumentError(
-          '$name must be $kLkPubLen bytes, got ${pk.bytes.length}');
+  static void _requireLen(Uint8List pk, String name) {
+    if (pk.length != kLkPubLen) {
+      throw ArgumentError('$name must be $kLkPubLen bytes, got ${pk.length}');
     }
   }
 

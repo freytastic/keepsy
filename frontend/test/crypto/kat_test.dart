@@ -3,9 +3,12 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:cryptography/cryptography.dart' as cg;
+import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/x3dh.dart';
 import 'package:keepsy/crypto/safety_numbers.dart';
 import 'package:keepsy/crypto/canonical_json.dart';
+
+import '../_sodium_setup.dart';
 
 // For cross language KATs. Mirror of the Go runner at
 // server/internal/crypto/kat_test.go : if either side fails on a vector,
@@ -34,6 +37,8 @@ Map<String, dynamic> _loadKat() {
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   final kat = _loadKat();
 
   group('KAT: AES-256-GCM decrypt', () {
@@ -91,18 +96,11 @@ void main() {
     final vectors = (kat['x25519'] as List).cast<Map>();
     for (final tv in vectors) {
       test(tv['name'] as String, () async {
-        // package:cryptography clamps internally per RFC 7748, matching
-        // the bytes the KAT was generated against
-        final kp = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['scalar_hex'] as String));
-        final peer = cg.SimplePublicKey(_hex(tv['u_hex'] as String),
-            type: cg.KeyPairType.x25519);
-        final shared = await cg
-            .X25519()
-            .sharedSecretKey(keyPair: kp, remotePublicKey: peer);
-        expect(await shared.extractBytes(),
-            orderedEquals(_hex(tv['shared_hex'] as String)));
+        // libsodium clamps the scalar inside scalarmult, matching the
+        // bytes the KAT was generated against (RFC 7748)
+        final kp = await Kex.fromSeed(_hex(tv['scalar_hex'] as String));
+        final shared = await Kex.dh(kp, _hex(tv['u_hex'] as String));
+        expect(shared, orderedEquals(_hex(tv['shared_hex'] as String)));
       });
     }
   });
@@ -112,19 +110,17 @@ void main() {
     for (final tv in vectors) {
       test(tv['name'] as String, () async {
         final seed = _hex(tv['seed_hex'] as String);
-        final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
-        final pk = await kp.extractPublicKey() as cg.SimplePublicKey;
-        expect(pk.bytes, orderedEquals(_hex(tv['pubkey_hex'] as String)),
+        final kp = await Sign.fromSeed(seed);
+        expect(kp.publicKey, orderedEquals(_hex(tv['pubkey_hex'] as String)),
             reason: 'pubkey derivation diverged from RFC 8032');
 
         final msg = _hex(tv['msg_hex'] as String);
-        final sig = await cg.Ed25519().sign(msg, keyPair: kp);
-        expect(sig.bytes, orderedEquals(_hex(tv['sig_hex'] as String)),
+        final sig = await Sign.sign(kp, msg);
+        expect(sig, orderedEquals(_hex(tv['sig_hex'] as String)),
             reason: 'deterministic signature diverged from RFC 8032');
 
-        final ok = await cg.Ed25519().verify(msg,
-            signature:
-                cg.Signature(_hex(tv['sig_hex'] as String), publicKey: pk));
+        final ok =
+            await Sign.verify(kp.publicKey, msg, _hex(tv['sig_hex'] as String));
         expect(ok, isTrue);
       });
     }
@@ -134,39 +130,24 @@ void main() {
     final vectors = (kat['x3dh_4dh'] as List).cast<Map>();
     for (final tv in vectors) {
       test(tv['name'] as String, () async {
-        final lkA = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['lk_a_seed_hex'] as String));
-        final ekA = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['ek_a_seed_hex'] as String));
-        final lkB = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['lk_b_seed_hex'] as String));
-        final spkB = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['spk_b_seed_hex'] as String));
-        final opkB = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['opk_b_seed_hex'] as String));
+        final lkA = await Kex.fromSeed(_hex(tv['lk_a_seed_hex'] as String));
+        final ekA = await Kex.fromSeed(_hex(tv['ek_a_seed_hex'] as String));
+        final lkB = await Kex.fromSeed(_hex(tv['lk_b_seed_hex'] as String));
+        final spkB = await Kex.fromSeed(_hex(tv['spk_b_seed_hex'] as String));
+        final opkB = await Kex.fromSeed(_hex(tv['opk_b_seed_hex'] as String));
         final albumId = _hex(tv['album_id_hex'] as String);
         final wantShared = _hex(tv['shared_secret_hex'] as String);
 
         // Pubkey parity : the seed→pub derivation must match Go's curve25519
-        final lkAPub = await lkA.extractPublicKey() as cg.SimplePublicKey;
-        expect(lkAPub.bytes, orderedEquals(_hex(tv['lk_a_pub_hex'] as String)),
+        expect(lkA.publicKey, orderedEquals(_hex(tv['lk_a_pub_hex'] as String)),
             reason: 'lk_a pub diverged');
-        final lkBPub = await lkB.extractPublicKey() as cg.SimplePublicKey;
-        final spkBPub = await spkB.extractPublicKey() as cg.SimplePublicKey;
-        final opkBPub = await opkB.extractPublicKey() as cg.SimplePublicKey;
-        final ekAPub = await ekA.extractPublicKey() as cg.SimplePublicKey;
 
         final aShared = await X3dh.initiator(
           lkSkA: lkA,
           ekSkA: ekA,
-          lkPkB: lkBPub,
-          spkPkB: spkBPub,
-          opkPkB: opkBPub,
+          lkPkB: lkB.publicKey,
+          spkPkB: spkB.publicKey,
+          opkPkB: opkB.publicKey,
           albumId: albumId,
         );
         expect(aShared, orderedEquals(wantShared),
@@ -176,8 +157,8 @@ void main() {
           lkSkB: lkB,
           spkSkB: spkB,
           opkSkB: opkB,
-          lkPkA: lkAPub,
-          ekPkA: ekAPub,
+          lkPkA: lkA.publicKey,
+          ekPkA: ekA.publicKey,
           albumId: albumId,
         );
         expect(bShared, orderedEquals(wantShared),
@@ -190,31 +171,18 @@ void main() {
     final vectors = (kat['x3dh_3dh'] as List).cast<Map>();
     for (final tv in vectors) {
       test(tv['name'] as String, () async {
-        final lkA = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['lk_a_seed_hex'] as String));
-        final ekA = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['ek_a_seed_hex'] as String));
-        final lkB = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['lk_b_seed_hex'] as String));
-        final spkB = await cg
-            .X25519()
-            .newKeyPairFromSeed(_hex(tv['spk_b_seed_hex'] as String));
+        final lkA = await Kex.fromSeed(_hex(tv['lk_a_seed_hex'] as String));
+        final ekA = await Kex.fromSeed(_hex(tv['ek_a_seed_hex'] as String));
+        final lkB = await Kex.fromSeed(_hex(tv['lk_b_seed_hex'] as String));
+        final spkB = await Kex.fromSeed(_hex(tv['spk_b_seed_hex'] as String));
         final albumId = _hex(tv['album_id_hex'] as String);
         final wantShared = _hex(tv['shared_secret_hex'] as String);
-
-        final lkAPub = await lkA.extractPublicKey() as cg.SimplePublicKey;
-        final lkBPub = await lkB.extractPublicKey() as cg.SimplePublicKey;
-        final spkBPub = await spkB.extractPublicKey() as cg.SimplePublicKey;
-        final ekAPub = await ekA.extractPublicKey() as cg.SimplePublicKey;
 
         final aShared = await X3dh.initiator(
           lkSkA: lkA,
           ekSkA: ekA,
-          lkPkB: lkBPub,
-          spkPkB: spkBPub,
+          lkPkB: lkB.publicKey,
+          spkPkB: spkB.publicKey,
           albumId: albumId,
         );
         expect(aShared, orderedEquals(wantShared));
@@ -222,8 +190,8 @@ void main() {
         final bShared = await X3dh.responder(
           lkSkB: lkB,
           spkSkB: spkB,
-          lkPkA: lkAPub,
-          ekPkA: ekAPub,
+          lkPkA: lkA.publicKey,
+          ekPkA: ekA.publicKey,
           albumId: albumId,
         );
         expect(bShared, orderedEquals(wantShared));

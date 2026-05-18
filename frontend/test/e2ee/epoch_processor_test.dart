@@ -7,6 +7,7 @@ import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/wrap_envelope.dart';
 
+import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';
 
 Uint8List _albumId([int seed = 0xA1]) =>
@@ -68,6 +69,8 @@ Future<_Stack> _bootStack({
 const int _spkTs = 1714838400; // anchored, well within ±90d skew
 
 void main() {
+  setUpAll(ensureSodium);
+
   group('EpochProcessor.handleEvent', () {
     test('round trip: synthetic admin builds wrap, processor installs MK',
         () async {

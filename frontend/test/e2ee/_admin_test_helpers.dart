@@ -70,12 +70,12 @@ class SyntheticAdmin {
     );
     await svc.bootstrap();
     final ikPub = await svc.useIk<Uint8List>((seed) async {
-      final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
-      return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+      final kp = await KeyHandleAdapter.toEd25519(seed);
+      return kp.publicKey;
     });
     final lkPub = await svc.useLk<Uint8List>((priv) async {
-      final kp = await cg.X25519().newKeyPairFromSeed(priv);
-      return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+      final kp = await KeyHandleAdapter.toX25519(priv);
+      return kp.publicKey;
     });
     return SyntheticAdmin._(svc, Csprng.bytes(32), ikPub, lkPub);
   }
@@ -135,22 +135,22 @@ Future<PrekeyBundle> buildResponderBundle({
   ({int idx, Uint8List keyPub})? opk,
 }) async {
   final ikPub = await responder.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
+    return kp.publicKey;
   });
   final lkPub = await responder.useLk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   final spkPub = await responder.useSpk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   final msg = Uint8List(40);
   msg.setRange(0, 32, spkPub);
   ByteData.sublistView(msg, 32).setUint64(0, spkTs, Endian.big);
   final spkSig = await responder.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
     return Sign.sign(kp, msg);
   });
   final json = <String, dynamic>{

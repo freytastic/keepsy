@@ -1,17 +1,18 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/e2ee/prekey_bundle.dart';
+
+import '../_sodium_setup.dart';
 
 // Tests cover both fromJson decoding and the §6 verify ordering rules
 // (length -> ts skew -> Ed25519 sig). Synthesized JSON is built inline so we
 // stay independent of the data layer adapter
 
 Future<Map<String, dynamic>> _buildBundleJson({
-  required cg.SimpleKeyPair ikKp,
+  required Ed25519KeyPair ikKp,
   required Uint8List lkPub,
   required Uint8List spkPub,
   required int spkTs,
@@ -19,8 +20,7 @@ Future<Map<String, dynamic>> _buildBundleJson({
   Uint8List? overrideSpkSig,
   ({int idx, Uint8List keyPub})? opk,
 }) async {
-  final ikPub = overrideIkPub ??
-      Uint8List.fromList((await ikKp.extractPublicKey()).bytes);
+  final ikPub = overrideIkPub ?? ikKp.publicKey;
   Uint8List spkSig;
   if (overrideSpkSig != null) {
     spkSig = overrideSpkSig;
@@ -48,7 +48,7 @@ Future<Map<String, dynamic>> _buildBundleJson({
 }
 
 void main() {
-  late cg.SimpleKeyPair ikKp;
+  late Ed25519KeyPair ikKp;
   late Uint8List lkPub;
   late Uint8List spkPub;
   late Uint8List opkPub;
@@ -56,13 +56,14 @@ void main() {
   final tsNow = t0.millisecondsSinceEpoch ~/ 1000;
 
   setUpAll(() async {
-    ikKp = await cg.Ed25519().newKeyPair();
-    final lkKp = await cg.X25519().newKeyPair();
-    final spkKp = await cg.X25519().newKeyPair();
-    final opkKp = await cg.X25519().newKeyPair();
-    lkPub = Uint8List.fromList((await lkKp.extractPublicKey()).bytes);
-    spkPub = Uint8List.fromList((await spkKp.extractPublicKey()).bytes);
-    opkPub = Uint8List.fromList((await opkKp.extractPublicKey()).bytes);
+    await ensureSodium();
+    ikKp = await Sign.generateEd25519();
+    final lkKp = await Kex.generateX25519();
+    final spkKp = await Kex.generateX25519();
+    final opkKp = await Kex.generateX25519();
+    lkPub = lkKp.publicKey;
+    spkPub = spkKp.publicKey;
+    opkPub = opkKp.publicKey;
   });
 
   group('PrekeyBundle.fromJson', () {

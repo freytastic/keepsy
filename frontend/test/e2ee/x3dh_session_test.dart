@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/e2ee/identity.dart';
@@ -9,7 +8,9 @@ import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/e2ee/prekey_bundle.dart';
 import 'package:keepsy/e2ee/x3dh_session.dart';
+import 'package:keepsy/secure_store/key_handle_adapter.dart';
 
+import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';
 import 'identity_label_map_test_helpers.dart';
 
@@ -72,16 +73,16 @@ Future<
 Future<({Uint8List ikPub, Uint8List lkPub, Uint8List spkPub})> _extractPubs(
     IdentityService svc) async {
   final ikPub = await svc.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
+    return kp.publicKey;
   });
   final lkPub = await svc.useLk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   final spkPub = await svc.useSpk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   return (ikPub: ikPub, lkPub: lkPub, spkPub: spkPub);
 }
@@ -89,8 +90,8 @@ Future<({Uint8List ikPub, Uint8List lkPub, Uint8List spkPub})> _extractPubs(
 // Pulls a specific OPK pub by idx so the initiator can target it
 Future<Uint8List> _extractOpkPub(IdentityService svc, int idx) async {
   final pub = svc.tryUseOpk<Uint8List>(idx, (priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   if (pub == null) {
     throw StateError('opk $idx missing on responder');
@@ -110,7 +111,7 @@ Future<PrekeyBundle> _buildVerifiedBundle({
   msg.setRange(0, 32, pubs.spkPub);
   ByteData.sublistView(msg, 32).setUint64(0, spkTs, Endian.big);
   final spkSig = await svc.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
     return Sign.sign(kp, msg);
   });
   final json = <String, dynamic>{
@@ -131,6 +132,8 @@ Future<PrekeyBundle> _buildVerifiedBundle({
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   final albumId = Uint8List.fromList(List<int>.generate(16, (i) => i + 1));
   final fixed = DateTime.utc(2026, 5, 4, 12);
   final spkTs = fixed.millisecondsSinceEpoch ~/ 1000;
@@ -182,7 +185,8 @@ void main() {
     test('initiate + derive agree on the shared secret (4-DH)', () async {
       final aliceSvc = (await _newBootstrappedSvc(now: fixed)).svc;
       final bobSvc = (await _newBootstrappedSvc(now: fixed)).svc;
-      final opkIdx = 7;
+      // idx within the bootstrap pool (0..kBootstrapOpkPool-1)
+      final opkIdx = 3;
       final opkPub = await _extractOpkPub(bobSvc, opkIdx);
       final bundle = await _buildVerifiedBundle(
           svc: bobSvc, spkTs: spkTs, opk: (idx: opkIdx, keyPub: opkPub));
@@ -236,8 +240,8 @@ void main() {
 
       // Generate a throwaway EK pub for the call : derive should fail before
       // it touches the math
-      final ekKp = await cg.X25519().newKeyPair();
-      final ekPub = Uint8List.fromList((await ekKp.extractPublicKey()).bytes);
+      final ekKp = await Kex.generateX25519();
+      final ekPub = ekKp.publicKey;
 
       await expectLater(
         X3dhSession.derive(
