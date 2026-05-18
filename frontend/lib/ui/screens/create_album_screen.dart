@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
+import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
@@ -40,10 +43,15 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
       setState(() => _error = 'Album name is required');
       return;
     }
-    // Capture providers up front : context isnt valid across the awaits
+    // Capture providers up front : context isnt valid across the awaits +
+    // we navigator.pop before the deferred rotate runs, so the original
+    // context is gone by then
     final rotator = context.read<EpochRotator>();
-    final userId = context.read<AppState>().userId;
+    final identity = context.read<IdentityService>();
+    final appState = context.read<AppState>();
+    final userId = appState.userId;
     final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
 
     if (userId == null) {
       setState(() => _error = 'Not signed in');
@@ -53,6 +61,8 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
       _busy = true;
       _error = null;
     });
+    // Let the spinner paint before the network call
+    await WidgetsBinding.instance.endOfFrame;
 
     try {
       final album = await AlbumService().createAlbum(name);
@@ -65,17 +75,63 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
       if (albumIdBytes == null) {
         throw Exception('Invalid album id from server');
       }
-      await rotator.bootstrap(
+      // Mark syncing : album_detail's _SyncingPlaceholder + FAB disable
+      // already key off appState.isSyncing(albumId), so navigating into the
+      // album before rotate completes is safe + visually consistent
+      appState.markSyncing([album.id]);
+      // Defer rotate off the blocking path. ~700ms of AndroidKeyStore I/O
+      // runs in the
+      // background while the user is already on the album list / album
+      // detail with a static syncing indicator
+      unawaited(_runRotateInBackground(
+        rotator: rotator,
+        identity: identity,
+        appState: appState,
+        messenger: messenger,
+        albumId: album.id,
         albumIdBytes: albumIdBytes,
         creatorMemberToken: base64Decode(tokenB64),
         creatorUserId: userId,
-      );
+      ));
       navigator.pop(album);
     } catch (e) {
       setState(() {
         _busy = false;
         _error = e.toString();
       });
+    }
+  }
+
+  // Cleared in finally so a failed rotate doesnt leave the album stuck in
+  // the syncing state forever : a snackbar tells the user what happened
+  // cryptoReady is awaited HERE (not before pop) so a fast user that beats
+  // signup bootstrap doesnt block on the create screen
+  Future<void> _runRotateInBackground({
+    required EpochRotator rotator,
+    required IdentityService identity,
+    required AppState appState,
+    required ScaffoldMessengerState messenger,
+    required String albumId,
+    required Uint8List albumIdBytes,
+    required Uint8List creatorMemberToken,
+    required String creatorUserId,
+  }) async {
+    try {
+      await identity.cryptoReady;
+      await rotator.bootstrap(
+        albumIdBytes: albumIdBytes,
+        creatorMemberToken: creatorMemberToken,
+        creatorUserId: creatorUserId,
+      );
+    } catch (e, s) {
+      developer.log('album rotate failed',
+          name: 'keepsy.album', error: e, stackTrace: s);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Encryption setup failed for the new album'),
+        duration: Duration(seconds: 4),
+      ));
+    } finally {
+      appState.clearSyncing(albumId);
     }
   }
 

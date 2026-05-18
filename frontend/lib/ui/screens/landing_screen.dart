@@ -63,40 +63,26 @@ class _LandingPageState extends State<LandingPage> {
           appState.setAlbums(userAlbums.cast());
         }
 
-        // D5 + D9 + §4.2 §9 cold start hygiene : rotate SPK if ≥30d, refill
-        // OPKs if pool dropped below trigger, catch up missed epoch_changed
-        // events. All best effort and must never block landing : a network
-        // blip shouldn't bounce the user back to login
-        // Capture providers up front so the post await dispatch doesnt re
-        // read context across async gaps
+        // Capture providers up front : context isnt valid across the awaits
+        // below, and we want to fire'n'forget the hygiene path so landing
+        // navigates immediately after the cheap auth+user+albums fetches
         final identity = context.read<IdentityService>();
         final epochProcessor = context.read<EpochProcessor>();
         // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
-        // bootstrap() is idempotent + resumable : a login whose inline bootstrap
-        // failed (or never ran) is only ever retried here, on cold start
-        try {
-          await identity.bootstrap();
-        } catch (_) {/* logged elsewhere; landing must not gate */}
-        try {
-          await identity.ensureSpkRotated();
-        } catch (_) {/* logged elsewhere; landing must not gate */}
-        try {
-          await identity.replenishOpks();
-        } catch (_) {/* same */}
 
-        if (userAlbums != null && userAlbums.isNotEmpty) {
-          final ids = <Uint8List>[];
+        // D5 + D9 + §4.2 §9 cold start hygiene : rotate SPK if ≥30d, refill
+        // OPKs up to target, catch up missed epoch_changed events
+        //  all in the background, none of it gates navigation. UI
+        // surfaces that need IK/LK/SPK await identity.cryptoReady (3.1)
+        final List<Uint8List> albumIds = [];
+        if (userAlbums != null) {
           for (final a in userAlbums) {
             final b = _uuidStringToBytes((a as AlbumModel).id);
-            if (b != null) ids.add(b);
-          }
-          if (ids.isNotEmpty) {
-            try {
-              await epochProcessor.catchUpAll(ids);
-            } catch (_) {/* same hygiene as SPK/OPK */}
+            if (b != null) albumIds.add(b);
           }
         }
+        unawaited(_runCryptoHygiene(identity, epochProcessor, albumIds));
       }
     }
 
@@ -114,6 +100,47 @@ class _LandingPageState extends State<LandingPage> {
         ),
       ),
     );
+  }
+
+  // Runs cold start crypto hygiene off the navigation critical path. Album
+  // detail screens watch AppState.isSyncing to render a "syncing keys"
+  // placeholder until catchUpAll lands the MK
+  Future<void> _runCryptoHygiene(IdentityService identity,
+      EpochProcessor epochProcessor, List<Uint8List> albumIds) async {
+    try {
+      await identity.bootstrap();
+    } catch (_) {/* logged via identity.cryptoReady error */}
+    try {
+      await identity.ensureSpkRotated();
+    } catch (_) {/* best effort */}
+    try {
+      // trigger=kTargetOpkPool so the post-bootstrap pool (5) is force refilled
+      // up to 20 immediately. Steady state callers (WS opk_low) use the default
+      // trigger=kReplenishTrigger so they only refill on real consumption
+      await identity.replenishOpks(
+        target: kTargetOpkPool,
+        trigger: kTargetOpkPool,
+      );
+    } catch (_) {/* best effort */}
+    if (albumIds.isNotEmpty) {
+      final ids = albumIds.map(_uuidStringFromBytes).toList();
+      if (!mounted) return;
+      context.read<AppState>().markSyncing(ids);
+      try {
+        await epochProcessor.catchUpAll(albumIds);
+      } catch (_) {/* best effort */}
+      if (!mounted) return;
+      for (final id in ids) {
+        context.read<AppState>().clearSyncing(id);
+      }
+    }
+  }
+
+  // 16B UUID -> canonical hex string. Matches the form server uses for IDs
+  String _uuidStringFromBytes(Uint8List b) {
+    final s = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
+        '-${s.substring(16, 20)}-${s.substring(20)}';
   }
 
   // 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input

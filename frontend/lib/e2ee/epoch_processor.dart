@@ -116,8 +116,7 @@ class EpochProcessor {
     }
 
     final msg = await _msgToSign(albumId, epoch, envelope.wrap);
-    final ikPk = cg.SimplePublicKey(pubs.ikPub, type: cg.KeyPairType.ed25519);
-    final ok = await Sign.verify(ikPk, msg, envelope.senderSig);
+    final ok = await Sign.verify(pubs.ikPub, msg, envelope.senderSig);
     if (!ok) throw const WrapVerificationException('sig_invalid');
 
     Uint8List? sk;

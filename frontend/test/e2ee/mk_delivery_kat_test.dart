@@ -6,6 +6,8 @@ import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/crypto/primitives.dart';
 
+import '../_sodium_setup.dart';
+
 // Cross language KAT: signed_payload over (album_id ‖ u32_be(epoch) ‖ wrap_blob)
 // Sibling lane (Lane B) emits server/test_vectors/signed_payload_kat.json
 // When the file is present, this test recomputes msgToSign in Dart and runs
@@ -39,6 +41,8 @@ Future<Uint8List> _msgToSign(
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   test('signed_payload msg construction matches §4.2 byte layout', () async {
     // Hand rolled placeholder vector : forced bytes, deterministic
     final albumId = Uint8List.fromList(List.filled(16, 0xA1));
@@ -50,10 +54,9 @@ void main() {
     // Sign + verify in dart so the cross language KAT path is exercised even
     // when the sibling fixture isnt landed yet
     final ikSeed = Uint8List.fromList(List.filled(32, 0xD1));
-    final ikKp = await cg.Ed25519().newKeyPairFromSeed(ikSeed);
-    final ikPub = await ikKp.extractPublicKey();
+    final ikKp = await Sign.fromSeed(ikSeed);
     final sig = await Sign.sign(ikKp, msg);
-    expect(await Sign.verify(ikPub, msg, sig), isTrue);
+    expect(await Sign.verify(ikKp.publicKey, msg, sig), isTrue);
   });
 
   test('cross-language KAT (must agree with server fixture byte for byte)',
@@ -83,9 +86,8 @@ void main() {
       expect(_hexEncode(msg), _hexEncode(expectedMsg),
           reason: '${tv['name']}: signed_payload msg bytes diverged');
 
-      final ikKp = await cg.Ed25519().newKeyPairFromSeed(ikSeed);
-      final ikPub = await ikKp.extractPublicKey();
-      expect(await Sign.verify(ikPub, expectedMsg, expectedSig), isTrue,
+      final ikKp = await Sign.fromSeed(ikSeed);
+      expect(await Sign.verify(ikKp.publicKey, expectedMsg, expectedSig), isTrue,
           reason: '${tv['name']}: expected_sig failed Ed25519.verify');
     }
   });

@@ -9,6 +9,7 @@ import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/e2ee/prekey_bundle.dart';
 
+import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';
 import 'identity_label_map_test_helpers.dart';
 
@@ -108,17 +109,19 @@ Future<
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   group('IdentityService', () {
-    test('bootstrap creates 20 OPKs and uploads a valid replenish_sig',
-        () async {
+    test('bootstrap creates kBootstrapOpkPool OPKs and uploads a valid '
+        'replenish_sig', () async {
       final fixed = DateTime.utc(2026, 5, 4, 12);
       final r = await _newService(now: fixed);
 
       await r.svc.bootstrap();
 
-      // 20 OPK labels in the map
+      // Bootstrap pool labels in the map : background replenish lifts to target
       final opkLabels = r.labels.labelsWithPrefix(kLabelOpkPrefix);
-      expect(opkLabels.length, 20);
+      expect(opkLabels.length, kBootstrapOpkPool);
       // IK / LK / SPK current persisted
       expect(r.labels.handleId(kLabelIK), isNotNull);
       expect(r.labels.handleId(kLabelLK), isNotNull);
@@ -130,21 +133,20 @@ void main() {
       expect((upsert['spk_sig'] as Uint8List).length, 64);
       expect(upsert['spk_ts'], fixed.millisecondsSinceEpoch ~/ 1000);
 
-      // /opks : one batch of 20
+      // /opks : one bootstrap batch
       expect(r.api.replenishBatches.length, 1);
       final batch = r.api.replenishBatches.first;
-      expect(batch.length, 20);
-      // idx is 0..19 in array order
-      for (var i = 0; i < 20; i++) {
+      expect(batch.length, kBootstrapOpkPool);
+      // idx is 0..kBootstrapOpkPool-1 in array order
+      for (var i = 0; i < kBootstrapOpkPool; i++) {
         expect(batch[i].idx, i);
         expect(batch[i].keyPub.length, 32);
       }
 
       // replenish_sig verifies under ik_pub for the §6.5 message
       final ikPub = upsert['ik_pub'] as Uint8List;
-      final pk = cg.SimplePublicKey(ikPub, type: cg.KeyPairType.ed25519);
       final msg = await _replenishMsgForTest(batch);
-      final ok = await Sign.verify(pk, msg, r.api.replenishSigs.first);
+      final ok = await Sign.verify(ikPub, msg, r.api.replenishSigs.first);
       expect(ok, isTrue);
     });
 
@@ -201,13 +203,12 @@ void main() {
       expect(newSpkTs, clockNow.millisecondsSinceEpoch ~/ 1000);
 
       final ikPub = api.lastUpsert!['ik_pub'] as Uint8List;
-      final pk = cg.SimplePublicKey(ikPub, type: cg.KeyPairType.ed25519);
 
       // spk_sig over spk_pub || u64_be(ts)
       final spkSigMsg = Uint8List(40);
       spkSigMsg.setRange(0, 32, newSpkPub);
       ByteData.sublistView(spkSigMsg, 32).setUint64(0, newSpkTs, Endian.big);
-      expect(await Sign.verify(pk, spkSigMsg, spkSig), isTrue);
+      expect(await Sign.verify(ikPub, spkSigMsg, spkSig), isTrue);
 
       // rotation_sig over "rotate-spk-v1" || spk_pub || u64_be(ts)
       final salt = kSaltSpkRotate;
@@ -216,14 +217,14 @@ void main() {
       rotMsg.setRange(salt.length, salt.length + 32, newSpkPub);
       ByteData.sublistView(rotMsg, salt.length + 32)
           .setUint64(0, newSpkTs, Endian.big);
-      expect(await Sign.verify(pk, rotMsg, rotationSig), isTrue);
+      expect(await Sign.verify(ikPub, rotMsg, rotationSig), isTrue);
     });
 
     test('replenish raises pool to target when count < trigger', () async {
       final fixed = DateTime.utc(2026, 5, 4, 12);
       final r = await _newService(now: fixed);
       await r.svc.bootstrap();
-      // After bootstrap : 20 batches recorded once. Reset and lower the count
+      // After bootstrap : one initial batch recorded. Reset and lower the count
       r.api.replenishBatches.clear();
       r.api.replenishSigs.clear();
       r.api.countResponse = 4;
@@ -232,13 +233,16 @@ void main() {
 
       expect(r.api.countCalls, 1);
       expect(r.api.replenishBatches.length, 1);
-      // 20 - 4 = 16 (no shit sherlock) fresh keys
-      expect(r.api.replenishBatches.first.length, 16);
-      // New idxs start above 19 (max bootstrap idx). First new idx = 20
-      expect(r.api.replenishBatches.first.first.idx, 20);
-      expect(r.api.replenishBatches.first.last.idx, 35);
-      // Label map grew to 36 OPKs total
-      expect(r.labels.labelsWithPrefix(kLabelOpkPrefix).length, 36);
+      // target - count = (20 - 4) = 16 fresh keys
+      final needed = kTargetOpkPool - 4;
+      expect(r.api.replenishBatches.first.length, needed);
+      // New idxs start above (kBootstrapOpkPool - 1) = 4. First new idx = 5
+      expect(r.api.replenishBatches.first.first.idx, kBootstrapOpkPool);
+      expect(r.api.replenishBatches.first.last.idx,
+          kBootstrapOpkPool + needed - 1);
+      // Label map total = bootstrap + replenish
+      expect(r.labels.labelsWithPrefix(kLabelOpkPrefix).length,
+          kBootstrapOpkPool + needed);
     });
 
     // §7 + new bootstrap resume behavior : when /keys returns 409, bootstrap
@@ -286,7 +290,8 @@ void main() {
       expect(await r.labels.areInitialOpksPublished(), isFalse);
       expect(r.api.upsertCalls, 1);
       expect(r.labels.handleId(kLabelIK), isNotNull);
-      expect(r.labels.labelsWithPrefix(kLabelOpkPrefix).length, 20);
+      expect(r.labels.labelsWithPrefix(kLabelOpkPrefix).length,
+          kBootstrapOpkPool);
 
       // Second attempt: only /opks should be retried; /keys must NOT be
       // called again (server would 409 and we'd surface conflict spuriously)
@@ -294,7 +299,7 @@ void main() {
 
       expect(r.api.upsertCalls, 1, reason: '/keys must not be called twice');
       expect(r.api.replenishBatches.length, 1);
-      expect(r.api.replenishBatches.first.length, 20);
+      expect(r.api.replenishBatches.first.length, kBootstrapOpkPool);
       expect(await r.labels.areInitialOpksPublished(), isTrue);
       expect(await r.svc.isBootstrapped(), isTrue);
     });

@@ -2,10 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
+
+import '../_sodium_setup.dart';
 
 // Cross language KAT: rotate-spk-v1
 // Sibling lane (Lane A6) emits server/test_vectors/spk_rotate_kat.json. The
@@ -37,6 +38,8 @@ Uint8List _rotationMsg(Uint8List spkPub, int spkTs) {
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   test('rotate-spk-v1 message construction matches §4.2 byte layout', () async {
     // Hand rolled placeholder vector : ik_seed, spk_pub, spk_ts deterministic
     final ikSeed = Uint8List.fromList(List.filled(32, 0xA1));
@@ -54,10 +57,9 @@ void main() {
 
     // Sign + verify under the IK seed. Proves Dart's Ed25519 sees the same
     // bytes Go's ed25519.Sign will see for the same inputs
-    final ikKp = await cg.Ed25519().newKeyPairFromSeed(ikSeed);
-    final ikPub = await ikKp.extractPublicKey();
+    final ikKp = await Sign.fromSeed(ikSeed);
     final sig = await Sign.sign(ikKp, msg);
-    expect(await Sign.verify(ikPub, msg, sig), isTrue);
+    expect(await Sign.verify(ikKp.publicKey, msg, sig), isTrue);
   });
 
   test('cross-language KAT (must agree with server fixture byte-for-byte)',
@@ -82,9 +84,8 @@ void main() {
       expect(_hexEncode(msg), _hexEncode(expectedMsg),
           reason: '${tv['name']}: rotate-spk-v1 msg bytes diverged');
 
-      final ikKp = await cg.Ed25519().newKeyPairFromSeed(ikSeed);
-      final ikPub = await ikKp.extractPublicKey();
-      expect(await Sign.verify(ikPub, expectedMsg, expectedSig), isTrue,
+      final ikKp = await Sign.fromSeed(ikSeed);
+      expect(await Sign.verify(ikKp.publicKey, expectedMsg, expectedSig), isTrue,
           reason: '${tv['name']}: expected_rotation_sig failed Ed25519.verify');
     }
   });

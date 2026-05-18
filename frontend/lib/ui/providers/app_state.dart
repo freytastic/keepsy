@@ -30,6 +30,29 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Per album sync state : album IDs whose MK install is still in flight
+  // (catchUpAll on cold start, or a wsreconnect replay). Album detail
+  // screens should render a "syncing keys" placeholder while their id is in
+  // this set instead of trying to decrypt and failing
+  final Set<String> _syncing = {};
+  bool isSyncing(String albumId) => _syncing.contains(albumId);
+
+  void markSyncing(Iterable<String> ids) {
+    if (ids.isEmpty) return;
+    _syncing.addAll(ids);
+    notifyListeners();
+  }
+
+  void clearSyncing(String id) {
+    if (_syncing.remove(id)) notifyListeners();
+  }
+
+  void clearAllSyncing() {
+    if (_syncing.isEmpty) return;
+    _syncing.clear();
+    notifyListeners();
+  }
+
   String? _userId;
   String? _email;
   String? _avatarKey;

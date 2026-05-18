@@ -1,14 +1,15 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/e2ee/prekey_bundle.dart';
 import 'package:keepsy/e2ee/x3dh_session.dart';
+import 'package:keepsy/secure_store/key_handle_adapter.dart';
 
+import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';
 import 'identity_label_map_test_helpers.dart';
 
@@ -61,22 +62,22 @@ Future<IdentityService> _bootstrappedSvc(DateTime now) async {
 
 Future<PrekeyBundle> _bundleFor(IdentityService svc, int spkTs) async {
   final ikPub = await svc.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
+    return kp.publicKey;
   });
   final lkPub = await svc.useLk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   final spkPub = await svc.useSpk<Uint8List>((priv) async {
-    final kp = await cg.X25519().newKeyPairFromSeed(priv);
-    return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+    final kp = await KeyHandleAdapter.toX25519(priv);
+    return kp.publicKey;
   });
   final msg = Uint8List(40);
   msg.setRange(0, 32, spkPub);
   ByteData.sublistView(msg, 32).setUint64(0, spkTs, Endian.big);
   final spkSig = await svc.useIk<Uint8List>((seed) async {
-    final kp = await cg.Ed25519().newKeyPairFromSeed(seed);
+    final kp = await KeyHandleAdapter.toEd25519(seed);
     return Sign.sign(kp, msg);
   });
   return PrekeyBundle.fromJson({
@@ -90,6 +91,8 @@ Future<PrekeyBundle> _bundleFor(IdentityService svc, int spkTs) async {
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   test(
       'caller-zeroed sharedSecret stays zero and a second initiate produces '
       'a fresh non-zero secret', () async {

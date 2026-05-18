@@ -91,10 +91,18 @@ class EpochRotator {
     // mint a fresh MK
     final mk = Csprng.bytes(32);
     try {
-      // per recipient, fetch + verify prekey bundle, run X3DH
-      // initiate, wrap MK under shared_secret, sign the wrap. SK is zeroed
-      // immediately after the wrap encrypt
-      final wraps = <SetEpochWrap>[];
+      // Per recipient : bundle fetch + verify + X3DH + wrap MK. Defer the
+      // sender_sig until we have all sender msgs : we batch every sig
+      // (per recipient sender_sig + the one envelope_sig) into a single
+      // _identity.useIk call below, so the IK seed only leaves the secure
+      // store once per epoch instead of (N+1) times
+      final partials = <({
+        Uint8List ekPub,
+        int? opkIdx,
+        Uint8List wrap,
+        Uint8List senderMsg,
+        Uint8List memberToken
+      })>[];
       for (final r in recipients) {
         final sw = Stopwatch()..start();
         final bundle = await _prekeys.fetchPrekeyBundle(r.userId);
@@ -128,35 +136,60 @@ class EpochRotator {
           epoch: epoch,
         );
         init.sharedSecret.fillRange(0, init.sharedSecret.length, 0);
+        final senderMsg = await _buildSenderMsg(albumIdBytes, epoch, wrap);
+        print('[perf] rotate: wrapMK ${sw.elapsedMilliseconds}ms');
 
-        final senderSig = await _signSenderMsg(
-          albumIdBytes: albumIdBytes,
-          epoch: epoch,
-          wrap: wrap,
-        );
-        print('[perf] rotate: wrapMK+signSender ${sw.elapsedMilliseconds}ms');
-        wraps.add(SetEpochWrap(
-          recipientToken: r.memberToken,
+        partials.add((
           ekPub: init.ekPub,
-          opkIdxUsed: init.opkIdx,
+          opkIdx: init.opkIdx,
           wrap: wrap,
-          senderSig: senderSig,
+          senderMsg: senderMsg,
+          memberToken: r.memberToken,
         ));
       }
 
-      // build the §4.1 byte hashes : mirror server side byte for byte
-      final swPost = Stopwatch()..start();
+      // Single IK fetch : sign all sender msgs, compute hashes, sign envelope
+      final swSign = Stopwatch()..start();
       final tokens = recipients.map((r) => r.memberToken).toList();
       final memberSetHash = await _memberSetHash(tokens);
-      final wrapsHash = await _wrapsHash(wraps);
-      final envelopeSig = await _signEnvelopeMsg(
-        albumIdBytes: albumIdBytes,
-        epoch: epoch,
-        memberSetHash: memberSetHash,
-        wrapsHash: wrapsHash,
-      );
-      print('[perf] rotate: hashes+envelopeSig '
-          '${swPost.elapsedMilliseconds}ms');
+      final signed = await _identity
+          .useIk<({List<Uint8List> sender, Uint8List envelope})>((seed) async {
+        final kp = await KeyHandleAdapter.toEd25519(seed);
+        final senderSigs = <Uint8List>[];
+        for (final p in partials) {
+          senderSigs.add(await Sign.sign(kp, p.senderMsg));
+        }
+        final wraps0 = <SetEpochWrap>[
+          for (var i = 0; i < partials.length; i++)
+            SetEpochWrap(
+              recipientToken: partials[i].memberToken,
+              ekPub: partials[i].ekPub,
+              opkIdxUsed: partials[i].opkIdx,
+              wrap: partials[i].wrap,
+              senderSig: senderSigs[i],
+            )
+        ];
+        final wrapsHash = await _wrapsHash(wraps0);
+        final envMsg =
+            _buildEnvelopeMsg(albumIdBytes, epoch, memberSetHash, wrapsHash);
+        final envSig = await Sign.sign(kp, envMsg);
+        return (sender: senderSigs, envelope: envSig);
+      });
+      print('[perf] rotate: signAll(${partials.length}+1) '
+          '${swSign.elapsedMilliseconds}ms');
+
+      final wraps = <SetEpochWrap>[
+        for (var i = 0; i < partials.length; i++)
+          SetEpochWrap(
+            recipientToken: partials[i].memberToken,
+            ekPub: partials[i].ekPub,
+            opkIdxUsed: partials[i].opkIdx,
+            wrap: partials[i].wrap,
+            senderSig: signed.sender[i],
+          )
+      ];
+      final envelopeSig = signed.envelope;
+      final swPost = Stopwatch()..start();
 
       // POST /albums/{id}/epoch. Server validates everything atomically
       swPost
@@ -211,35 +244,24 @@ class EpochRotator {
     );
   }
 
-  // _signSenderMsg : Ed25519_sign(IK_priv, SHA256(album_id ‖ u32_be(epoch) ‖
-  // wrap_blob)) per §4.2 D3. Same hash the §4.2 responder recomputes before
-  // accepting the wrap. Uses identity.useIk so the seed never escapes
-  Future<Uint8List> _signSenderMsg({
-    required Uint8List albumIdBytes,
-    required int epoch,
-    required Uint8List wrap,
-  }) async {
+  // sender msg : SHA256(album_id ‖ u32_be(epoch) ‖ wrap_blob) per §4.2 D3
+  // Same hash the §4.2 responder recomputes before accepting the wrap
+  // Build only : the actual Ed25519 sign happens inside the batched useIk
+  Future<Uint8List> _buildSenderMsg(
+      Uint8List albumIdBytes, int epoch, Uint8List wrap) async {
     final buf = Uint8List(16 + 4 + wrap.length);
     buf.setRange(0, 16, albumIdBytes);
     ByteData.sublistView(buf, 16, 20).setUint32(0, epoch, Endian.big);
     buf.setRange(20, buf.length, wrap);
     final h = await cg.Sha256().hash(buf);
-    final msg = Uint8List.fromList(h.bytes);
-    return _identity.useIk<Uint8List>((seed) async {
-      final kp = await KeyHandleAdapter.toEd25519(seed);
-      return Sign.sign(kp, msg);
-    });
+    return Uint8List.fromList(h.bytes);
   }
 
-  // _signEnvelopeMsg : Ed25519_sign(IK_priv, "epoch-set-v1" ‖ album_id ‖
-  // u32_be(epoch) ‖ member_set_hash ‖ wraps_hash) per §4.1. Server verifies
-  // this against the caller's IK_pub before committing the transaction
-  Future<Uint8List> _signEnvelopeMsg({
-    required Uint8List albumIdBytes,
-    required int epoch,
-    required Uint8List memberSetHash,
-    required Uint8List wrapsHash,
-  }) async {
+  // envelope msg : "epoch-set-v1" ‖ album_id ‖ u32_be(epoch) ‖
+  // member_set_hash ‖ wraps_hash per §4.1. Server verifies this against
+  // the caller's IK_pub before committing the transaction
+  Uint8List _buildEnvelopeMsg(Uint8List albumIdBytes, int epoch,
+      Uint8List memberSetHash, Uint8List wrapsHash) {
     final salt = _kSaltEpochSet;
     final buf = Uint8List(salt.length + 16 + 4 + 32 + 32);
     var i = 0;
@@ -252,10 +274,7 @@ class EpochRotator {
     buf.setRange(i, i + 32, memberSetHash);
     i += 32;
     buf.setRange(i, i + 32, wrapsHash);
-    return _identity.useIk<Uint8List>((seed) async {
-      final kp = await KeyHandleAdapter.toEd25519(seed);
-      return Sign.sign(kp, buf);
-    });
+    return buf;
   }
 }
 

@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:keepsy/data/constants.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
-import 'package:keepsy/e2ee/identity.dart';
 
 class AuthService {
   final StorageService _storage = StorageService();
@@ -22,18 +21,12 @@ class AuthService {
     }
   }
 
-  // verify OTP & persist credentials, then block on E2EE bootstrap (D4)
-  // Returns 'true' once token is saved AND IdentityService.bootstrap() has
-  // either run or confirmed the user is already bootstrapped. Bootstrap
-  // failure : returns 'false' so the UI can surface "encryption setup failed"
-  // instead of pretending login succeeded
-
-  // BootstrapAccountConflictException is rethrown verbatim : it signals an
-  // unrecoverable mismatch (server has different IK than what this device
-  // can produce) and the UI must show a distinct message rather than hint
-  // at "wrong OTP"
-  Future<bool> verifyOtp(
-      String email, String code, IdentityService identity) async {
+  // verify OTP and persist credentials. Returns 'true' once token is saved
+  // E2EE bootstrap is NOT done here anymore (was D4 hard block) : the caller
+  // fires identity.bootstrap() unawaited after navigation so the user gets
+  // an instant home screen instead of staring at a spinner during the
+  // keystore heavy bootstrap. cryptoReady gates any subsequent crypto action
+  Future<bool> verifyOtp(String email, String code) async {
     try {
       final url = Uri.parse('${AppConstants.baseURL}/auth/otp/verify');
       final response = await http.post(
@@ -50,25 +43,14 @@ class AuthService {
 
         if (token != null && refreshToken != null && expiresAt != null) {
           await _storage.saveAuth(token, refreshToken, expiresAt);
-          // M8 privacy : server stores email_hmac, not the plaintext, so the
+          // M8 privacy : server stores email_hmac, not plaintext, so the
           // client persists its own email for profile screen display
           await _storage.saveEmail(email);
-          // D4 : hard block login completion until the E2EE identity is
-          // published. bootstrap() is idempotent + resumable, so retried
-          // logins after a partial failure pick up where the last attempt
-          // stopped instead of wedging on E_IDENTITY_ALREADY_SET
-          if (!await identity.isBootstrapped()) {
-            await identity.bootstrap();
-          }
           return true;
         }
       }
       return false;
-    } on BootstrapAccountConflictException {
-      rethrow;
     } catch (e) {
-      // Log the real error so me can see it in 'flutter run'
-      print('verifyOtp error: $e');
       rethrow;
     }
   }

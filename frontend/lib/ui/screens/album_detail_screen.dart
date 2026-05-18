@@ -119,6 +119,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final state = context.watch<AppState>();
     final dark = state.isDark;
     final accent = state.accent;
+    final syncing = state.isSyncing(widget.album.id);
 
     return Scaffold(
       backgroundColor: K.bg(dark),
@@ -147,7 +148,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _uploading ? null : _pickAndUpload,
+        onPressed: (syncing || _uploading) ? null : _pickAndUpload,
         backgroundColor: accent,
         child: _uploading
             ? const SizedBox(
@@ -167,13 +168,33 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               accent: accent),
           const Divider(height: 1, thickness: 0.5),
           Expanded(
-            child: _MediaGrid(
-              items: _items,
-              loading: _loadingMedia,
-              dark: dark,
-              media: _media,
-            ),
+            child: syncing
+                ? const _SyncingPlaceholder()
+                : _MediaGrid(
+                    items: _items,
+                    loading: _loadingMedia,
+                    dark: dark,
+                    media: _media,
+                  ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SyncingPlaceholder extends StatelessWidget {
+  const _SyncingPlaceholder();
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(strokeWidth: 2),
+          const SizedBox(height: 12),
+          Text('Syncing encryption keys…',
+              style: Theme.of(context).textTheme.bodyMedium),
         ],
       ),
     );

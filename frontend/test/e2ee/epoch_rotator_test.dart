@@ -13,6 +13,7 @@ import 'package:keepsy/e2ee/prekey_bundle.dart';
 import 'package:keepsy/e2ee/wrap_envelope.dart';
 import 'package:keepsy/e2ee/x3dh_session.dart';
 
+import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';
 
 Uint8List _albumId([int seed = 0xA1]) =>
@@ -129,6 +130,8 @@ Future<
 }
 
 void main() {
+  setUpAll(ensureSodium);
+
   group('EpochRotator.bootstrap', () {
     test(
         'installs MK_0 locally and POSTs set_epoch with the creator as sole member',
@@ -256,8 +259,8 @@ void main() {
       msg.add(req.memberSetHash);
       msg.add(wrapsHash);
 
-      final pk = cg.SimplePublicKey(c.ikPub, type: cg.KeyPairType.ed25519);
-      expect(await Sign.verify(pk, msg.toBytes(), req.envelopeSig), isTrue);
+      expect(await Sign.verify(c.ikPub, msg.toBytes(), req.envelopeSig),
+          isTrue);
     });
   });
 }

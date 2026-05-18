@@ -22,6 +22,9 @@ dependencies:
   # E2EE dependencies
   cryptography: ^2.7.0
   cryptography_flutter: ^2.3.2
+  # Native libsodium via dart:ffi : kept for X25519/Ed25519 only (sumo
+  # variant exposes raw crypto_scalarmult). AEAD/HKDF stay on cryptography
+  sodium: ^4.0.2+1
   flutter_secure_storage: ^9.2.2
   web_socket_channel: ^3.0.1
   app_links: ^6.3.2
