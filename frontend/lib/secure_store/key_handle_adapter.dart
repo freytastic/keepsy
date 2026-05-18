@@ -1,25 +1,11 @@
 import 'dart:typed_data';
-import 'package:cryptography/cryptography.dart' as cg;
+import 'package:keepsy/crypto/primitives.dart';
 
-// Adapter to convert raw private bytes from SecureKeyStore into
-// cryptography package objects for actual use
+// Thin adapter : raw private bytes from SecureKeyStore → typed keypair
+// All EC math now goes through libsodium via primitives.Sign/Kex
 abstract class KeyHandleAdapter {
-  // Wraps a 32 byte Ed25519 seed into a SimpleKeyPair
+  static Future<Ed25519KeyPair> toEd25519(Uint8List seed) =>
+      Sign.fromSeed(seed);
 
-  // This is async because the cryptography package derives the
-  // public key from the seed, which may happen on a native delegate
-  static Future<cg.SimpleKeyPair> toEd25519(Uint8List seed) async {
-    if (seed.length != 32) {
-      throw ArgumentError('Ed25519 seed must be 32 bytes, got ${seed.length}');
-    }
-    return cg.Ed25519().newKeyPairFromSeed(seed);
-  }
-
-  // Wraps a 32 byte X25519 private scalar into a SimpleKeyPair
-  static Future<cg.SimpleKeyPair> toX25519(Uint8List priv) async {
-    if (priv.length != 32) {
-      throw ArgumentError('X25519 scalar must be 32 bytes, got ${priv.length}');
-    }
-    return cg.X25519().newKeyPairFromSeed(priv);
-  }
+  static Future<X25519KeyPair> toX25519(Uint8List priv) => Kex.fromSeed(priv);
 }

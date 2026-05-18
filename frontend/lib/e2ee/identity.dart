@@ -24,7 +24,12 @@ import 'prekey_api.dart';
 
 typedef Now = DateTime Function();
 
-const int kInitialOpkPool = 20;
+// Bootstrap publishes a small batch synchronously so signup stays fast
+// Background replenish lifts the pool to the target after the user has
+// navigated into the app. Trigger fires whenever the server count drops
+// below this : replenish brings it back up to kTargetOpkPool
+const int kBootstrapOpkPool = 5;
+const int kTargetOpkPool = 20;
 const int kReplenishTrigger = 5;
 const int kSpkRotationSeconds = 30 * 24 * 3600;
 
@@ -54,6 +59,14 @@ class IdentityService {
   // Mutex: WS opk_low + cold start replenish collapse to one in-flight call
   Completer<void>? _inflightReplenish;
 
+  // cryptoReady : resolves the first time bootstrap() completes successfully
+  // (or immediately if isBootstrapped() was already true). UI surfaces that
+  // need IK/LK/SPK (album create, invite, etc) 'await identity.cryptoReady'
+  // before calling into the rotator/x3dh so a non-blocking landing flow
+  // doesnt race the crypto hygiene running in the background
+  Completer<void> _bootstrapDone = Completer<void>();
+  Future<void> get cryptoReady => _bootstrapDone.future;
+
   IdentityService({
     required SecureKeyStore store,
     required IdentityLabelMap labels,
@@ -82,36 +95,61 @@ class IdentityService {
   //      ik_pub for this account, no recovery from this device
   //   tres. Publish the initial 20-OPK batch if not yet marked published
   Future<void> bootstrap() async {
-    if (await isBootstrapped()) return;
+    if (await isBootstrapped()) {
+      if (!_bootstrapDone.isCompleted) _bootstrapDone.complete();
+      return;
+    }
+    // Resume path : a prior bootstrap completed with-error left the completer
+    // closed. Recreate so callers awaiting cryptoReady get the new outcome
+    if (_bootstrapDone.isCompleted) {
+      _bootstrapDone = Completer<void>();
+    }
     final swAll = Stopwatch()..start();
 
-    final sw = Stopwatch()..start();
-    await _store.initialize();
-    print('[perf] bootstrap: store.initialize ${sw.elapsedMilliseconds}ms');
+    try {
+      final sw = Stopwatch()..start();
+      await _store.initialize();
+      print('[perf] bootstrap: store.initialize ${sw.elapsedMilliseconds}ms');
 
-    sw
-      ..reset()
-      ..start();
-    final keys = await _ensureKeysGenerated();
-    print('[perf] bootstrap: ensureKeysGenerated ${sw.elapsedMilliseconds}ms');
-
-    if (!await _labels.isIdentityPublished()) {
       sw
         ..reset()
         ..start();
-      await _publishIdentity(keys);
-      print('[perf] bootstrap: publishIdentity(PUT) '
-          '${sw.elapsedMilliseconds}ms');
+      final keys = await _ensureKeysGenerated();
+      print(
+        '[perf] bootstrap: ensureKeysGenerated '
+        '${sw.elapsedMilliseconds}ms',
+      );
+
+      if (!await _labels.isIdentityPublished()) {
+        sw
+          ..reset()
+          ..start();
+        await _publishIdentity(keys);
+        print(
+          '[perf] bootstrap: publishIdentity(PUT) '
+          '${sw.elapsedMilliseconds}ms',
+        );
+      }
+      if (!await _labels.areInitialOpksPublished()) {
+        sw
+          ..reset()
+          ..start();
+        await _publishInitialOpks(keys);
+        print(
+          '[perf] bootstrap: publishInitialOpks(POST) '
+          '${sw.elapsedMilliseconds}ms',
+        );
+      }
+      print('[perf] bootstrap: TOTAL ${swAll.elapsedMilliseconds}ms');
+      _bootstrapDone.complete();
+    } catch (e, s) {
+      _bootstrapDone.completeError(e, s);
+      // If nothing happened to be awaiting cryptoReady, .ignore() prevents
+      // the framework from flagging an "unhandled async error" : the
+      // rethrow below still surfaces the failure to bootstrap()'s caller
+      _bootstrapDone.future.ignore();
+      rethrow;
     }
-    if (!await _labels.areInitialOpksPublished()) {
-      sw
-        ..reset()
-        ..start();
-      await _publishInitialOpks(keys);
-      print('[perf] bootstrap: publishInitialOpks(POST) '
-          '${sw.elapsedMilliseconds}ms');
-    }
-    print('[perf] bootstrap: TOTAL ${swAll.elapsedMilliseconds}ms');
   }
 
   Future<_BootstrapKeys> _ensureKeysGenerated() async {
@@ -122,11 +160,15 @@ class IdentityService {
     final allPresent = ikId != null &&
         lkId != null &&
         spkId != null &&
-        opkLabels.length == kInitialOpkPool;
+        opkLabels.length == kBootstrapOpkPool;
 
     if (allPresent) {
       return _readKeysFromStore(
-          ikId: ikId, lkId: lkId, spkId: spkId, opkLabels: opkLabels);
+        ikId: ikId,
+        lkId: lkId,
+        spkId: spkId,
+        opkLabels: opkLabels,
+      );
     }
 
     // Partial state. Identity must NOT have been marked published, otherwise
@@ -156,36 +198,37 @@ class IdentityService {
     // IK = Ed25519 seed (32B)
     final ikSeed = Csprng.bytes(32);
     final ikKp = await KeyHandleAdapter.toEd25519(ikSeed);
-    final ikPub = Uint8List.fromList((await ikKp.extractPublicKey()).bytes);
+    final ikPub = ikKp.publicKey;
     seeds.add(ikSeed);
     entries.add((label: kLabelIK, plaintext: ikSeed));
 
     // LK = X25519 (32B scalar)
     final lkPriv = Csprng.bytes(32);
     final lkKp = await KeyHandleAdapter.toX25519(lkPriv);
-    final lkPub = Uint8List.fromList((await lkKp.extractPublicKey()).bytes);
+    final lkPub = lkKp.publicKey;
     seeds.add(lkPriv);
     entries.add((label: kLabelLK, plaintext: lkPriv));
 
     // SPK = X25519
     final spkPriv = Csprng.bytes(32);
     final spkKp = await KeyHandleAdapter.toX25519(spkPriv);
-    final spkPub = Uint8List.fromList((await spkKp.extractPublicKey()).bytes);
+    final spkPub = spkKp.publicKey;
     seeds.add(spkPriv);
     entries.add((label: kLabelSpkCurrent, plaintext: spkPriv));
 
-    // OPKs[0..19]
+    // OPKs[0..kBootstrapOpkPool-1] : background replenish raises to target
     final opks = <PrekeyOpk>[];
-    for (var i = 0; i < kInitialOpkPool; i++) {
+    for (var i = 0; i < kBootstrapOpkPool; i++) {
       final priv = Csprng.bytes(32);
       final kp = await KeyHandleAdapter.toX25519(priv);
-      final pub = Uint8List.fromList((await kp.extractPublicKey()).bytes);
       seeds.add(priv);
       entries.add((label: '$kLabelOpkPrefix$i', plaintext: priv));
-      opks.add(PrekeyOpk(idx: i, keyPub: pub));
+      opks.add(PrekeyOpk(idx: i, keyPub: kp.publicKey));
     }
-    print('[perf] genKeys: generate 23 keys (crypto) '
-        '${swGen.elapsedMilliseconds}ms');
+    print(
+      '[perf] genKeys: generate ${entries.length} keys (crypto) '
+      '${swGen.elapsedMilliseconds}ms',
+    );
 
     // Single batched persist. Seeds are zeroed once the bytes have been
     // handed to the store, whether putMany succeeds or throws
@@ -198,14 +241,20 @@ class IdentityService {
         s.fillRange(0, s.length, 0);
       }
     }
-    print('[perf] genKeys: putMany(23) ${swPut.elapsedMilliseconds}ms');
+    print(
+      '[perf] genKeys: putMany(${entries.length}) '
+      '${swPut.elapsedMilliseconds}ms',
+    );
 
     // handles[i] aligns with entries[i] : same order in, same order out
     final swLabels = Stopwatch()..start();
     for (var i = 0; i < handles.length; i++) {
       await _labels.set(entries[i].label, handles[i].id);
     }
-    print('[perf] genKeys: labels.set x23 ${swLabels.elapsedMilliseconds}ms');
+    print(
+      '[perf] genKeys: labels.set x${handles.length} '
+      '${swLabels.elapsedMilliseconds}ms',
+    );
 
     return _BootstrapKeys(
       ikHandle: handles[0],
@@ -228,19 +277,19 @@ class IdentityService {
     final ikHandle = KeyHandle(id: ikId, label: kLabelIK);
     final ikPub = await _store.use<Uint8List>(ikHandle, (seed) async {
       final kp = await KeyHandleAdapter.toEd25519(seed);
-      return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+      return kp.publicKey;
     });
 
     final lkHandle = KeyHandle(id: lkId, label: kLabelLK);
     final lkPub = await _store.use<Uint8List>(lkHandle, (priv) async {
       final kp = await KeyHandleAdapter.toX25519(priv);
-      return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+      return kp.publicKey;
     });
 
     final spkHandle = KeyHandle(id: spkId, label: kLabelSpkCurrent);
     final spkPub = await _store.use<Uint8List>(spkHandle, (priv) async {
       final kp = await KeyHandleAdapter.toX25519(priv);
-      return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+      return kp.publicKey;
     });
 
     final sortedLabels = List<String>.from(opkLabels)
@@ -257,7 +306,7 @@ class IdentityService {
       final h = KeyHandle(id: hid, label: label);
       final pub = await _store.use<Uint8List>(h, (priv) async {
         final kp = await KeyHandleAdapter.toX25519(priv);
-        return Uint8List.fromList((await kp.extractPublicKey()).bytes);
+        return kp.publicKey;
       });
       initialOpks.add(PrekeyOpk(idx: idx, keyPub: pub));
     }
@@ -275,8 +324,10 @@ class IdentityService {
     // Fresh ts every publish attempt: a long pause between generation and
     // (resumed) upload would otherwise blow the server's 5 min skew window
     final spkTs = _now().toUtc().millisecondsSinceEpoch ~/ 1000;
-    final spkSig =
-        await _signWithIk(_spkSigMsg(keys.spkPub, spkTs), keys.ikHandle);
+    final spkSig = await _signWithIk(
+      _spkSigMsg(keys.spkPub, spkTs),
+      keys.ikHandle,
+    );
     try {
       await _api.upsertIdentity(
         ikPub: keys.ikPub,
@@ -298,10 +349,14 @@ class IdentityService {
   }
 
   Future<void> _publishInitialOpks(_BootstrapKeys keys) async {
-    final replenishSig =
-        await _signWithIk(await _replenishMsg(keys.initialOpks), keys.ikHandle);
+    final replenishSig = await _signWithIk(
+      await _replenishMsg(keys.initialOpks),
+      keys.ikHandle,
+    );
     await _api.replenishOpks(
-        opks: keys.initialOpks, replenishSig: replenishSig);
+      opks: keys.initialOpks,
+      replenishSig: replenishSig,
+    );
     await _labels.markInitialOpksPublished();
   }
 
@@ -319,14 +374,16 @@ class IdentityService {
 
     final newPriv = Csprng.bytes(32);
     final newKp = await KeyHandleAdapter.toX25519(newPriv);
-    final newPub = Uint8List.fromList((await newKp.extractPublicKey()).bytes);
+    final newPub = newKp.publicKey;
     final newHandle = await _store.put(kLabelSpkCurrent, newPriv);
     newPriv.fillRange(0, newPriv.length, 0);
 
     final newTs = nowSec;
     final spkSig = await _signWithIk(_spkSigMsg(newPub, newTs), ikHandle);
-    final rotationSig =
-        await _signWithIk(_rotationSigMsg(newPub, newTs), ikHandle);
+    final rotationSig = await _signWithIk(
+      _rotationSigMsg(newPub, newTs),
+      ikHandle,
+    );
 
     await _api.rotateSpk(
       spkPub: newPub,
@@ -347,7 +404,7 @@ class IdentityService {
 
   // D9 : cold start belt-and-suspenders + WS event handler. Mutexed
   Future<void> replenishOpks({
-    int target = kInitialOpkPool,
+    int target = kTargetOpkPool,
     int trigger = kReplenishTrigger,
   }) {
     final inflight = _inflightReplenish;
@@ -388,10 +445,9 @@ class IdentityService {
       final idx = maxIdx + 1 + k;
       final priv = Csprng.bytes(32);
       final kp = await KeyHandleAdapter.toX25519(priv);
-      final pub = Uint8List.fromList((await kp.extractPublicKey()).bytes);
       final h = await _store.put('$kLabelOpkPrefix$idx', priv);
       priv.fillRange(0, priv.length, 0);
-      opks.add(PrekeyOpk(idx: idx, keyPub: pub));
+      opks.add(PrekeyOpk(idx: idx, keyPub: kp.publicKey));
       newHandles[idx] = h;
     }
 
@@ -420,7 +476,8 @@ class IdentityService {
     final id = _labels.handleId(kLabelIK);
     if (id == null) {
       throw StateError(
-          'IK not bootstrapped : IdentityService.bootstrap() first');
+        'IK not bootstrapped : IdentityService.bootstrap() first',
+      );
     }
     return _store.use<T>(KeyHandle(id: id, label: kLabelIK), fn);
   }
@@ -429,7 +486,8 @@ class IdentityService {
     final id = _labels.handleId(kLabelLK);
     if (id == null) {
       throw StateError(
-          'LK not bootstrapped : IdentityService.bootstrap() first');
+        'LK not bootstrapped : IdentityService.bootstrap() first',
+      );
     }
     return _store.use<T>(KeyHandle(id: id, label: kLabelLK), fn);
   }
@@ -438,7 +496,8 @@ class IdentityService {
     final id = _labels.handleId(kLabelSpkCurrent);
     if (id == null) {
       throw StateError(
-          'SPK.current not bootstrapped : IdentityService.bootstrap() first');
+        'SPK.current not bootstrapped : IdentityService.bootstrap() first',
+      );
     }
     return _store.use<T>(KeyHandle(id: id, label: kLabelSpkCurrent), fn);
   }
@@ -499,8 +558,11 @@ Future<Uint8List> _replenishMsg(List<PrekeyOpk> opks) async {
   final salt = _kSaltOpkBatch;
   final out = Uint8List(salt.length + 4 + hash.length);
   out.setRange(0, salt.length, salt);
-  ByteData.sublistView(out, salt.length, salt.length + 4)
-      .setUint32(0, opks.length, Endian.big);
+  ByteData.sublistView(
+    out,
+    salt.length,
+    salt.length + 4,
+  ).setUint32(0, opks.length, Endian.big);
   out.setRange(salt.length + 4, out.length, hash);
   return out;
 }

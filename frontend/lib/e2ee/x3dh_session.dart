@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
+import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/x3dh.dart';
 import 'package:keepsy/secure_store/key_handle_adapter.dart';
 
@@ -36,37 +36,28 @@ class OpkNotFoundException implements Exception {
 
 abstract class X3dhSession {
   // Initiator. Bundle MUST be verify()'d by caller. EK is generated fresh
-  // inside the useLk callback and never escapes the closure : nothing to zero,
-  // SimpleKeyPair is async zeroable by package:cryptography
+  // inside the useLk callback and never escapes the closure
   static Future<X3dhInitiateResult> initiate({
     required PrekeyBundle bundle,
     required Uint8List albumId,
     required IdentityService identity,
   }) async {
-    final lkPkB = cg.SimplePublicKey(bundle.lkPub, type: cg.KeyPairType.x25519);
-    final spkPkB =
-        cg.SimplePublicKey(bundle.spkPub, type: cg.KeyPairType.x25519);
-    final opkPkB = bundle.opk == null
-        ? null
-        : cg.SimplePublicKey(bundle.opk!.keyPub, type: cg.KeyPairType.x25519);
-
     return identity.useLk<X3dhInitiateResult>((lkPriv) async {
       final lkKp = await KeyHandleAdapter.toX25519(lkPriv);
-      final ekKp = await cg.X25519().newKeyPair();
+      final ekKp = await Kex.generateX25519();
 
       final shared = await X3dh.initiator(
         lkSkA: lkKp,
         ekSkA: ekKp,
-        lkPkB: lkPkB,
-        spkPkB: spkPkB,
-        opkPkB: opkPkB,
+        lkPkB: bundle.lkPub,
+        spkPkB: bundle.spkPub,
+        opkPkB: bundle.opk?.keyPub,
         albumId: albumId,
       );
 
-      final ekPub = Uint8List.fromList((await ekKp.extractPublicKey()).bytes);
       return X3dhInitiateResult(
         sharedSecret: shared,
-        ekPub: ekPub,
+        ekPub: ekKp.publicKey,
         opkIdx: bundle.opk?.idx,
       );
     });
@@ -91,15 +82,12 @@ abstract class X3dhSession {
           'peerLkPub must be 32 bytes, got ${peerLkPub.length}');
     }
 
-    final lkPkA = cg.SimplePublicKey(peerLkPub, type: cg.KeyPairType.x25519);
-    final ekPkA = cg.SimplePublicKey(ekPub, type: cg.KeyPairType.x25519);
-
     if (opkIdx == null) {
       return _runResponder(
         identity: identity,
         opkSk: null,
-        lkPkA: lkPkA,
-        ekPkA: ekPkA,
+        lkPkA: peerLkPub,
+        ekPkA: ekPub,
         albumId: albumId,
       );
     }
@@ -109,8 +97,8 @@ abstract class X3dhSession {
       return _runResponder(
         identity: identity,
         opkSk: opkKp,
-        lkPkA: lkPkA,
-        ekPkA: ekPkA,
+        lkPkA: peerLkPub,
+        ekPkA: ekPub,
         albumId: albumId,
       );
     });
@@ -127,9 +115,9 @@ abstract class X3dhSession {
 // stays X3dhSession.derive, which is the lone allowlisted name
 Future<Uint8List> _runResponder({
   required IdentityService identity,
-  required cg.SimpleKeyPair? opkSk,
-  required cg.SimplePublicKey lkPkA,
-  required cg.SimplePublicKey ekPkA,
+  required X25519KeyPair? opkSk,
+  required Uint8List lkPkA,
+  required Uint8List ekPkA,
   required Uint8List albumId,
 }) {
   return identity.useLk<Uint8List>((lkPriv) async {

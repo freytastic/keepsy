@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart' as cg;
 import 'package:keepsy/crypto/primitives.dart';
 
 import 'identity.dart' show Now;
@@ -69,8 +68,7 @@ class PrekeyBundle {
           delta > 0 ? 'ts_too_old' : 'ts_in_future');
     }
 
-    final pk = cg.SimplePublicKey(ikPub, type: cg.KeyPairType.ed25519);
-    final ok = await Sign.verify(pk, _spkSigMsg(spkPub, spkTs), spkSig);
+    final ok = await Sign.verify(ikPub, _spkSigMsg(spkPub, spkTs), spkSig);
     if (!ok) {
       throw const BundleVerificationException('sig_invalid');
     }

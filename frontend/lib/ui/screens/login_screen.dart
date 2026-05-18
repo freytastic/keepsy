@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -117,20 +118,11 @@ class _LoginScreenState extends State<LoginScreen>
         _loading = true;
         _bootstrapping = false;
       });
+      // Let the spinner paint before the network call
+      await WidgetsBinding.instance.endOfFrame;
 
       try {
-        // OTP verify includes the E2EE bootstrap : flip the loader copy after
-        // server returns 200 so the slow part is visible to the user
-        final verifyFuture =
-            authService.verifyOtp(_emailCtrl.text.trim(), otpCode, identity);
-        // Best effort UI hint : if bootstrap is running, show the message
-        // after a short tick so fast paths dont flicker it
-        Future.delayed(const Duration(milliseconds: 250), () {
-          if (mounted && _loading) {
-            setState(() => _bootstrapping = true);
-          }
-        });
-        final ok = await verifyFuture;
+        final ok = await authService.verifyOtp(_emailCtrl.text.trim(), otpCode);
 
         if (ok) {
           final userService = UserService();
@@ -138,19 +130,27 @@ class _LoginScreenState extends State<LoginScreen>
           if (userData != null && mounted) {
             context.read<AppState>().setUserData(userData);
           }
-          if (mounted) {
-            // Server no longer returns email (M8) : push the typed plaintext
-            // into AppState directly so the profile screen renders it
-            context.read<AppState>().setEmail(_emailCtrl.text.trim());
-            // Idempotent ('if (_active) return') : also hit on landing for
-            // returning users : this covers the fresh login path
-            unawaited(context.read<RealtimeService>().connect());
-          }
+          if (!mounted) return;
+          // Server no longer returns email (M8) : push the typed plaintext
+          // into AppState directly so the profile screen renders it
+          context.read<AppState>().setEmail(_emailCtrl.text.trim());
+          // Idempotent ('if (_active) return') : also hit on landing for
+          // returning users : this covers the fresh login path
+          unawaited(context.read<RealtimeService>().connect());
+          // Capture messenger BEFORE _goHome since pushAndRemoveUntil
+          // removes our route and invalidates our local context
+          final messenger = ScaffoldMessenger.of(context);
           setState(() {
             _loading = false;
             _bootstrapping = false;
           });
           _goHome();
+          // Defer the keystore heavy E2EE bootstrap off the blocking path :
+          // user sees home immediately instead of a frozen spinner during the
+          // AndroidKeyStore round trips. cryptoReady gates any subsequent
+          // crypto action (album-create, invite) so a fast user that beats
+          // bootstrap waits politely on those screens, not on this one
+          unawaited(_runBootstrapInBackground(identity, messenger));
         } else {
           for (final c in _otpCtrls) {
             c.clear();
@@ -162,29 +162,46 @@ class _LoginScreenState extends State<LoginScreen>
           _otpFoci[0].requestFocus();
           _showError("Invalid OTP code. Try again.");
         }
-      } on BootstrapAccountConflictException catch (_) {
-        // same conflict handling
-        for (final c in _otpCtrls) {
-          c.clear();
-        }
-        setState(() {
-          _loading = false;
-          _bootstrapping = false;
-        });
-        _showError(
-          "This account's encryption keys are already registered on another device. "
-          "Contact support or use account recovery to continue here.",
-        );
       } catch (e) {
-        //catch setup errors (eg secure storage failures)
-        print("LOGIN ERROR: $e");
         setState(() {
           _loading = false;
           _bootstrapping = false;
         });
-        _showError("Identity setup failed. Please try again.");
+        _showError("Login failed. Please try again.");
       }
     }
+  }
+
+  // Fires after _goHome. The user is on MainShell : any error must surface
+  // via the root messenger since our login_screen context is gone
+  Future<void> _runBootstrapInBackground(
+      IdentityService identity, ScaffoldMessengerState messenger) async {
+    try {
+      await identity.bootstrap();
+    } on BootstrapAccountConflictException {
+      messenger.showSnackBar(const SnackBar(
+        content: Text(
+          "This account's encryption keys are registered on another device. "
+          "Use account recovery to continue here.",
+        ),
+        duration: Duration(seconds: 6),
+      ));
+      return;
+    } catch (e, s) {
+      developer.log('signup bootstrap failed',
+          name: 'keepsy.signup', error: e, stackTrace: s);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Encryption setup failed. Please reopen the app.'),
+        duration: Duration(seconds: 5),
+      ));
+      return;
+    }
+    try {
+      await identity.replenishOpks(
+        target: kTargetOpkPool,
+        trigger: kTargetOpkPool,
+      );
+    } catch (_) {}
   }
 
   // error snackbar
