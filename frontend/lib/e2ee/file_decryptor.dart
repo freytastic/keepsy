@@ -34,6 +34,10 @@ class FileDecryptError implements Exception {
       'FileDecryptError($reason${detail == null ? '' : ': $detail'})';
 }
 
+// "thumb" suffix bound into the thumb cipher AAD. Must match
+// file_pipeline.dart's _kThumbAadSuffix byte for byte
+final Uint8List _kThumbAadSuffix = Uint8List.fromList('thumb'.codeUnits);
+
 abstract class FileDecryptor {
   static const int _wrapNonceLen = 12;
   static const int _wrapTagCTLen = 48;
@@ -131,12 +135,98 @@ abstract class FileDecryptor {
       _zero(dek);
     }
   }
+
+  //  thumb decrypt : same shape as the file path but uses the row's
+  // thumb_wrap_nonce/thumb_wrap_tag_ct + thumb_sha256 + AAD = media_id ‖
+  // "thumb". Always VER=0x01 (~20 KB so no streaming math). Caller MUST
+  // check record.hasThumb first : throws 'no_thumb' otherwise
+  static Future<Uint8List> downloadAndDecryptThumb({
+    required AlbumKeyStore aks,
+    required MediaRecord record,
+    required String presignedUrl,
+    required DownloadFn download,
+  }) async {
+    final thumbNonce = record.thumbWrapNonce;
+    final thumbTagCT = record.thumbWrapTagCT;
+    final thumbSize = record.thumbSize;
+    final thumbSha = record.thumbSha256;
+    if (thumbNonce == null ||
+        thumbTagCT == null ||
+        thumbSize == null ||
+        thumbSha == null) {
+      throw const FileDecryptError('no_thumb');
+    }
+    if (thumbNonce.length != _wrapNonceLen) {
+      throw FileDecryptError('wrap_auth_failed',
+          'thumb_wrap_nonce len ${thumbNonce.length}, want $_wrapNonceLen');
+    }
+    if (thumbTagCT.length != _wrapTagCTLen) {
+      throw FileDecryptError('wrap_auth_failed',
+          'thumb_wrap_tag_ct len ${thumbTagCT.length}, want $_wrapTagCTLen');
+    }
+
+    final albumIdBytes = record.albumIdBytes;
+    final mediaIdBytes = record.mediaIdBytes;
+    final wrapAad = _wrapAad(albumIdBytes, record.epochTag);
+    final wrapWire = Uint8List(1 + _wrapNonceLen + _wrapTagCTLen);
+    wrapWire[0] = kVerAesGcm;
+    wrapWire.setRange(1, 1 + _wrapNonceLen, thumbNonce);
+    wrapWire.setRange(1 + _wrapNonceLen, wrapWire.length, thumbTagCT);
+
+    Uint8List dek;
+    try {
+      dek =
+          await aks.useMk<Uint8List>(albumIdBytes, record.epochTag, (mk) async {
+        return Aead.decrypt(wire: wrapWire, key: mk, aad: wrapAad);
+      });
+    } on StateError catch (e) {
+      throw FileDecryptError('no_mk', e.toString());
+    } on AeadAuthFailed catch (e) {
+      throw FileDecryptError('wrap_auth_failed', e.toString());
+    }
+
+    final Uint8List cipher;
+    try {
+      cipher = await download(presignedUrl);
+    } catch (e) {
+      _zero(dek);
+      throw FileDecryptError('http_failed', e.toString());
+    }
+
+    try {
+      if (cipher.length != thumbSize) {
+        throw FileDecryptError(
+            'wrong_size', 'thumb got ${cipher.length}, want $thumbSize');
+      }
+      final sha = await cg.Sha256().hash(cipher);
+      if (!_constTimeEq(Uint8List.fromList(sha.bytes), thumbSha)) {
+        throw FileDecryptError('sha256_mismatch');
+      }
+      try {
+        return await Aead.decrypt(
+            wire: cipher, key: dek, aad: _thumbAad(mediaIdBytes));
+      } on AeadAuthFailed catch (e) {
+        throw FileDecryptError('aead_auth_failed', e.toString());
+      } on FormatException catch (e) {
+        throw FileDecryptError('aead_auth_failed', e.toString());
+      }
+    } finally {
+      _zero(dek);
+    }
+  }
 }
 
 Uint8List _wrapAad(Uint8List albumIdBytes, int epoch) {
   final out = Uint8List(16 + 4);
   out.setRange(0, 16, albumIdBytes);
   ByteData.sublistView(out, 16).setUint32(0, epoch, Endian.big);
+  return out;
+}
+
+Uint8List _thumbAad(Uint8List mediaId) {
+  final out = Uint8List(mediaId.length + _kThumbAadSuffix.length);
+  out.setRange(0, mediaId.length, mediaId);
+  out.setRange(mediaId.length, out.length, _kThumbAadSuffix);
   return out;
 }
 

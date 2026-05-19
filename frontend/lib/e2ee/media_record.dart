@@ -19,6 +19,13 @@ class MediaRecord {
   final String mediaType; // 'photo' | 'video'
   final String? mimeType;
   final DateTime createdAt;
+  // present-as-a-group for photos uploaded post, null for videos as of now
+  // and any row uploaded. Caller picks EncryptedThumbnail vs full
+  // EncryptedImage based on 'hasThumb'
+  final Uint8List? thumbWrapNonce;
+  final Uint8List? thumbWrapTagCT;
+  final int? thumbSize;
+  final Uint8List? thumbSha256;
 
   const MediaRecord({
     required this.id,
@@ -32,9 +39,19 @@ class MediaRecord {
     required this.mediaType,
     required this.mimeType,
     required this.createdAt,
+    this.thumbWrapNonce,
+    this.thumbWrapTagCT,
+    this.thumbSize,
+    this.thumbSha256,
   });
 
+  bool get hasThumb => thumbWrapNonce != null;
+
   factory MediaRecord.fromJson(Map<String, dynamic> json) {
+    final thumbNonce = json['thumb_wrap_nonce'] as String?;
+    final thumbTag = json['thumb_wrap_tag_ct'] as String?;
+    final thumbSz = json['thumb_size'];
+    final thumbSha = json['thumb_sha256'] as String?;
     return MediaRecord(
       id: json['id'] as String,
       albumId: json['album_id'] as String,
@@ -47,6 +64,10 @@ class MediaRecord {
       mediaType: json['media_type'] as String,
       mimeType: json['mime_type'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
+      thumbWrapNonce: thumbNonce == null ? null : base64Decode(thumbNonce),
+      thumbWrapTagCT: thumbTag == null ? null : base64Decode(thumbTag),
+      thumbSize: thumbSz == null ? null : (thumbSz as num).toInt(),
+      thumbSha256: thumbSha == null ? null : base64Decode(thumbSha),
     );
   }
 
