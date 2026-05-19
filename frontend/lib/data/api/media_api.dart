@@ -21,31 +21,43 @@ class MediaApi {
 
   MediaApi(this._api, {http.Client? raw}) : _http = raw ?? http.Client();
 
-  // RequestUploadResponse mirrors the server's response shape
+  // RequestUploadResponse mirrors the server's response shape. Thumb URL +
+  // headers are populated only when the request carried thumb_* fields
   Future<_RequestUploadResponse> _requestUploadURL({
     required String albumId,
     required UploadEnvelope env,
   }) async {
-    final resp = await _api.post(
-      '/albums/$albumId/media/upload-url',
-      body: {
-        'media_id': env.mediaIdString,
-        'blob_size': env.blobSize,
-        'blob_sha256': base64Encode(env.blobSha256),
-        'mime_type': env.mimeType ?? '',
-        'media_type': env.mediaType,
-        'wrap_nonce': base64Encode(env.wrapNonce),
-        'wrap_tag_ct': base64Encode(env.wrapTagCT),
-        'epoch_tag': env.epoch,
-      },
-    );
-    final body = jsonDecode(resp.body) as Map<String, dynamic>;
-    final headers = (body['required_header'] as Map<String, dynamic>? ?? {})
+    final body = <String, dynamic>{
+      'media_id': env.mediaIdString,
+      'blob_size': env.blobSize,
+      'blob_sha256': base64Encode(env.blobSha256),
+      'mime_type': env.mimeType ?? '',
+      'media_type': env.mediaType,
+      'wrap_nonce': base64Encode(env.wrapNonce),
+      'wrap_tag_ct': base64Encode(env.wrapTagCT),
+      'epoch_tag': env.epoch,
+    };
+    if (env.hasThumb) {
+      body['thumb_size'] = env.thumbSize;
+      body['thumb_sha256'] = base64Encode(env.thumbSha256!);
+      body['thumb_wrap_nonce'] = base64Encode(env.thumbWrapNonce!);
+      body['thumb_wrap_tag_ct'] = base64Encode(env.thumbWrapTagCT!);
+    }
+    final resp =
+        await _api.post('/albums/$albumId/media/upload-url', body: body);
+    final json = jsonDecode(resp.body) as Map<String, dynamic>;
+    final headers = (json['required_header'] as Map<String, dynamic>? ?? {})
         .map((k, v) => MapEntry(k, v.toString()));
+    final thumbURL = json['thumb_upload_url'] as String?;
+    final thumbHeaders =
+        (json['thumb_required_header'] as Map<String, dynamic>? ?? {})
+            .map((k, v) => MapEntry(k, v.toString()));
     return _RequestUploadResponse(
-      mediaId: body['media_id'] as String,
-      uploadURL: body['upload_url'] as String,
+      mediaId: json['media_id'] as String,
+      uploadURL: json['upload_url'] as String,
       requiredHeader: headers,
+      thumbUploadURL: thumbURL,
+      thumbRequiredHeader: thumbHeaders,
     );
   }
 
@@ -81,6 +93,12 @@ class MediaApi {
   }) async {
     final pre = await _requestUploadURL(albumId: albumId, env: envelope);
     await _putToS3(pre.uploadURL, envelope.cipherBytes, pre.requiredHeader);
+    // thumb PUT before confirm. ConfirmUpload HEADs both S3 objects
+    // skipping the thumb PUT would make confirm fail + drop the pending row
+    if (envelope.hasThumb && pre.thumbUploadURL != null) {
+      await _putToS3(pre.thumbUploadURL!, envelope.thumbCipherBytes!,
+          pre.thumbRequiredHeader);
+    }
     await _confirmUpload(albumId, pre.mediaId);
     return pre.mediaId;
   }
@@ -94,9 +112,14 @@ class MediaApi {
 
   // RequestDownloadURL : POSTs for a fresh presigned GET URL. Server
   // refuses pending rows : verifies caller is a member via RequireMember
-  Future<String> requestDownloadURL(String albumId, String mediaId) async {
-    final resp =
-        await _api.post('/albums/$albumId/media/$mediaId/download-url');
+  // asset=='thumb' requests the thumb object instead of the file
+  // server 404s if the row has no thumb
+  Future<String> requestDownloadURL(String albumId, String mediaId,
+      {String asset = 'file'}) async {
+    final path = asset == 'thumb'
+        ? '/albums/$albumId/media/$mediaId/download-url?asset=thumb'
+        : '/albums/$albumId/media/$mediaId/download-url';
+    final resp = await _api.post(path);
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return body['url'] as String;
   }
@@ -123,9 +146,13 @@ class _RequestUploadResponse {
   final String mediaId;
   final String uploadURL;
   final Map<String, String> requiredHeader;
+  final String? thumbUploadURL;
+  final Map<String, String> thumbRequiredHeader;
   const _RequestUploadResponse({
     required this.mediaId,
     required this.uploadURL,
     required this.requiredHeader,
+    this.thumbUploadURL,
+    this.thumbRequiredHeader = const {},
   });
 }

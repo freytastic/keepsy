@@ -28,12 +28,14 @@ func (r *MediaRepository) CreatePending(ctx context.Context, m *model.Media) err
 	}
 	return r.DB.QueryRow(ctx, `
 		INSERT INTO media (
-			id, album_id, uploader_token, storage_key, wrap_nonce, wrap_tag_ct,
-			epoch_tag, blob_size, blob_sha256, media_type, mime_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
+			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
+			thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size, thumb_sha256
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING created_at`,
-		m.ID, m.AlbumID, m.UploaderToken, m.StorageKey, m.WrapNonce, m.WrapTagCT,
-		m.EpochTag, m.BlobSize, m.BlobSHA256, m.MediaType, m.MimeType,
+		m.ID, m.AlbumID, m.UploaderToken, m.StorageKey, m.ThumbKey, m.WrapNonce,
+		m.WrapTagCT, m.EpochTag, m.BlobSize, m.BlobSHA256, m.MediaType, m.MimeType,
+		m.ThumbWrapNonce, m.ThumbWrapTagCT, m.ThumbSize, m.ThumbSHA256,
 	).Scan(&m.CreatedAt)
 }
 
@@ -71,13 +73,15 @@ func (r *MediaRepository) GetByID(ctx context.Context, mediaID, albumID uuid.UUI
 	err := r.DB.QueryRow(ctx, `
 		SELECT id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
-			confirmed, created_at
+			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
+			thumb_sha256
 		FROM media WHERE id = $1 AND album_id = $2`,
 		mediaID, albumID,
 	).Scan(
 		&m.ID, &m.AlbumID, &m.UploaderToken, &m.StorageKey, &m.ThumbKey,
 		&m.WrapNonce, &m.WrapTagCT, &m.EpochTag, &m.BlobSize, &m.BlobSHA256,
 		&m.MediaType, &m.MimeType, &m.Confirmed, &m.CreatedAt,
+		&m.ThumbWrapNonce, &m.ThumbWrapTagCT, &m.ThumbSize, &m.ThumbSHA256,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrMediaNotFound
@@ -91,7 +95,8 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 	rows, err := r.DB.Query(ctx, `
 		SELECT id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
-			confirmed, created_at
+			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
+			thumb_sha256
 		FROM media WHERE album_id = $1 AND confirmed = TRUE
 		ORDER BY created_at DESC, id DESC`,
 		albumID,
@@ -107,6 +112,7 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 			&m.ID, &m.AlbumID, &m.UploaderToken, &m.StorageKey, &m.ThumbKey,
 			&m.WrapNonce, &m.WrapTagCT, &m.EpochTag, &m.BlobSize, &m.BlobSHA256,
 			&m.MediaType, &m.MimeType, &m.Confirmed, &m.CreatedAt,
+			&m.ThumbWrapNonce, &m.ThumbWrapTagCT, &m.ThumbSize, &m.ThumbSHA256,
 		); err != nil {
 			return nil, err
 		}

@@ -123,13 +123,24 @@ type fakeS3 struct {
 	downloadKeys  []string
 	deleteCalls   int
 	deleteKeys    []string
+	presignKeys   []string //  track call order so tests can assert dual presign
+	//per-key HEAD overrides for dual-confirm tests. Empty map → fall
+	// back to headSize/headSHA256B64/headErr (default behavior, same as before)
+	headByKey map[string]headResult
 }
 
-func (f *fakeS3) GetPresignedUploadURLWithChecksum(_ context.Context, _, _ string, _ int64, _ string, _ time.Duration) (*PresignedUpload, error) {
+type headResult struct {
+	size      int64
+	sha256B64 string
+	err       error
+}
+
+func (f *fakeS3) GetPresignedUploadURLWithChecksum(_ context.Context, key, _ string, _ int64, _ string, _ time.Duration) (*PresignedUpload, error) {
+	f.presignKeys = append(f.presignKeys, key)
 	if f.presignErr != nil {
 		return nil, f.presignErr
 	}
-	return &PresignedUpload{URL: "http://s3/upload", RequiredHeader: map[string]string{"x-amz-checksum-sha256": "x"}}, nil
+	return &PresignedUpload{URL: "http://s3/upload/" + key, RequiredHeader: map[string]string{"x-amz-checksum-sha256": "x"}}, nil
 }
 
 func (f *fakeS3) GetPresignedDownloadURL(_ context.Context, key string, _ time.Duration) (string, error) {
@@ -143,7 +154,10 @@ func (f *fakeS3) GetPresignedDownloadURL(_ context.Context, key string, _ time.D
 	return f.downloadURL, nil
 }
 
-func (f *fakeS3) HeadObject(_ context.Context, _ string) (int64, string, error) {
+func (f *fakeS3) HeadObject(_ context.Context, key string) (int64, string, error) {
+	if r, ok := f.headByKey[key]; ok {
+		return r.size, r.sha256B64, r.err
+	}
 	return f.headSize, f.headSHA256B64, f.headErr
 }
 
@@ -380,7 +394,7 @@ func TestRequestDownloadURL_HappyPath(t *testing.T) {
 	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
 	albumID, mediaID, storageKey := confirmedRow(t, svc, repo, s3)
 
-	res, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID)
+	res, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID, "file")
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -405,7 +419,7 @@ func TestRequestDownloadURL_RefusesPendingRow(t *testing.T) {
 	}
 	// no Confirm : row stays pending. Download must refuse so the client
 	// doesnt try to GET an S3 object that may not exist
-	_, err = svc.RequestDownloadURL(context.Background(), albumID, res.MediaID)
+	_, err = svc.RequestDownloadURL(context.Background(), albumID, res.MediaID, "file")
 	if !apierr.IsCode(err, "E_NOT_FOUND") {
 		t.Fatalf("err = %v, want E_NOT_FOUND", err)
 	}
@@ -413,7 +427,7 @@ func TestRequestDownloadURL_RefusesPendingRow(t *testing.T) {
 
 func TestRequestDownloadURL_UnknownMediaIs404(t *testing.T) {
 	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
-	_, err := svc.RequestDownloadURL(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.RequestDownloadURL(context.Background(), uuid.New(), uuid.New(), "file")
 	if !apierr.IsCode(err, "E_NOT_FOUND") {
 		t.Fatalf("err = %v, want E_NOT_FOUND", err)
 	}
@@ -424,8 +438,215 @@ func TestRequestDownloadURL_S3PresignFailureBubblesUp(t *testing.T) {
 	albumID, mediaID, _ := confirmedRow(t, svc, repo, s3)
 	s3.downloadErr = errors.New("s3 down")
 
-	_, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID)
+	_, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID, "file")
 	if !apierr.IsCode(err, "E_INTERNAL") {
 		t.Fatalf("err = %v, want E_INTERNAL", err)
+	}
+}
+
+// validThumbInput : validInput() + the four thumb fields set with byte-valid
+// shapes. Tests mutate to exercise specific failure modes
+func validThumbInput() RequestUploadInput {
+	in := validInput()
+	in.ThumbSize = 20 * 1024
+	in.ThumbSHA256 = bytes.Repeat([]byte{0xCD}, 32)
+	in.ThumbWrapNonce = bytes.Repeat([]byte{0x33}, 12)
+	in.ThumbWrapTagCT = bytes.Repeat([]byte{0x44}, 48)
+	return in
+}
+
+func TestRequestUploadURL_ThumbAbsentReturnsSingleURL(t *testing.T) {
+	svc, _, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	res, err := svc.RequestUploadURL(context.Background(), uuid.New(), []byte{0xCC}, validInput())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if res.UploadURL == "" {
+		t.Fatalf("UploadURL empty")
+	}
+	if res.ThumbUploadURL != "" {
+		t.Errorf("ThumbUploadURL = %q ; want empty when no thumb requested", res.ThumbUploadURL)
+	}
+	if len(s3.presignKeys) != 1 {
+		t.Errorf("presign called %d times ; want 1", len(s3.presignKeys))
+	}
+}
+
+func TestRequestUploadURL_ThumbReturnsTwoURLs(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	res, err := svc.RequestUploadURL(context.Background(), uuid.New(), []byte{0xCC}, validThumbInput())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if res.UploadURL == "" || res.ThumbUploadURL == "" {
+		t.Fatalf("URLs = (%q, %q) ; want both set", res.UploadURL, res.ThumbUploadURL)
+	}
+	if res.UploadURL == res.ThumbUploadURL {
+		t.Errorf("file + thumb URLs identical ; storage_key wasnt unique")
+	}
+	if len(s3.presignKeys) != 2 {
+		t.Errorf("presign called %d times ; want 2", len(s3.presignKeys))
+	}
+	row := repo.rows[res.MediaID]
+	if row.ThumbKey == nil {
+		t.Fatalf("row.ThumbKey is nil after thumb upload request")
+	}
+	if *row.ThumbKey == row.StorageKey {
+		t.Errorf("thumb_key equals storage_key ; should be distinct random hex")
+	}
+}
+
+func TestRequestUploadURL_RejectsPartialThumb(t *testing.T) {
+	tests := []struct {
+		name string
+		mut  func(*RequestUploadInput)
+		want string
+	}{
+		{"size only", func(in *RequestUploadInput) {
+			in.ThumbSHA256 = nil
+			in.ThumbWrapNonce = nil
+			in.ThumbWrapTagCT = nil
+		}, "thumb_wrap_nonce"},
+		{"missing thumb wrap nonce", func(in *RequestUploadInput) { in.ThumbWrapNonce = nil }, "thumb_wrap_nonce"},
+		{"missing thumb wrap tag ct", func(in *RequestUploadInput) { in.ThumbWrapTagCT = nil }, "thumb_wrap_tag_ct"},
+		{"missing thumb sha256", func(in *RequestUploadInput) { in.ThumbSHA256 = nil }, "thumb_sha256"},
+		{"zero thumb size", func(in *RequestUploadInput) { in.ThumbSize = 0 }, "thumb_size"},
+		{"wrong thumb nonce len", func(in *RequestUploadInput) { in.ThumbWrapNonce = bytes.Repeat([]byte{1}, 11) }, "thumb_wrap_nonce"},
+		{"wrong thumb wrap tag ct len", func(in *RequestUploadInput) { in.ThumbWrapTagCT = bytes.Repeat([]byte{1}, 47) }, "thumb_wrap_tag_ct"},
+		{"wrong thumb sha256 len", func(in *RequestUploadInput) { in.ThumbSHA256 = bytes.Repeat([]byte{1}, 31) }, "thumb_sha256"},
+		{"thumb too big", func(in *RequestUploadInput) { in.ThumbSize = 600 * 1024 }, "thumb_size"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
+			in := validThumbInput()
+			tt.mut(&in)
+			_, err := svc.RequestUploadURL(context.Background(), uuid.New(), []byte{0xCC}, in)
+			if !apierr.IsCode(err, "E_VALIDATION") {
+				t.Fatalf("err = %v, want E_VALIDATION mentioning %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfirmUpload_ThumbHappyPath(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
+	}
+
+	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !repo.rows[res.MediaID].Confirmed {
+		t.Errorf("row not flipped to confirmed")
+	}
+}
+
+func TestConfirmUpload_ThumbMissingDropsRow(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {err: errors.New("404 NoSuchKey")},
+	}
+
+	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID)
+	if !apierr.IsCode(err, "E_VALIDATION") {
+		t.Fatalf("err = %v, want E_VALIDATION", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; ok {
+		t.Errorf("pending row not dropped when thumb missing")
+	}
+}
+
+func TestConfirmUpload_ThumbSizeMismatchDropsRow(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
+	}
+
+	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID)
+	if !apierr.IsCode(err, "E_VALIDATION") {
+		t.Fatalf("err = %v, want E_VALIDATION", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; ok {
+		t.Errorf("pending row not dropped on thumb size mismatch")
+	}
+}
+
+func TestConfirmUpload_ThumbSHA256MismatchDropsRow(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 32))},
+	}
+
+	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID)
+	if !apierr.IsCode(err, "E_VALIDATION") {
+		t.Fatalf("err = %v, want E_VALIDATION", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; ok {
+		t.Errorf("pending row not dropped on thumb sha256 mismatch")
+	}
+}
+
+func TestRequestDownloadURL_ThumbAssetUsesThumbKey(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
+	}
+	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	_, err := svc.RequestDownloadURL(context.Background(), albumID, res.MediaID, "thumb")
+	if err != nil {
+		t.Fatalf("thumb download: %v", err)
+	}
+	// downloadKeys[0] should be thumbKey (= row.ThumbKey), not fileKey
+	if len(s3.downloadKeys) != 1 || s3.downloadKeys[0] != *repo.rows[res.MediaID].ThumbKey {
+		t.Errorf("downloaded keys = %v ; want [%v]", s3.downloadKeys, *repo.rows[res.MediaID].ThumbKey)
+	}
+}
+
+func TestRequestDownloadURL_ThumbAsset404sWhenRowHasNoThumb(t *testing.T) {
+	// A row uploaded without a thumb should 404 on asset=thumb request
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID, mediaID, _ := confirmedRow(t, svc, repo, s3)
+	_, err := svc.RequestDownloadURL(context.Background(), albumID, mediaID, "thumb")
+	if !apierr.IsCode(err, "E_NOT_FOUND") {
+		t.Fatalf("err = %v, want E_NOT_FOUND", err)
 	}
 }

@@ -21,6 +21,12 @@ type Media struct {
 	MimeType      *string   `json:"mime_type,omitempty"`
 	Confirmed     bool      `json:"confirmed"`
 	CreatedAt     time.Time `json:"created_at"`
+	// per file thumb has its own DEK wrapped under same MK as the file
+	// DEK. All four nullable : videos + pre §5.3 rows wont have thumbs
+	ThumbWrapNonce []byte `json:"thumb_wrap_nonce,omitempty"`
+	ThumbWrapTagCT []byte `json:"thumb_wrap_tag_ct,omitempty"`
+	ThumbSize      *int64 `json:"thumb_size,omitempty"`
+	ThumbSHA256    []byte `json:"thumb_sha256,omitempty"`
 }
 
 type MediaWithURL struct {

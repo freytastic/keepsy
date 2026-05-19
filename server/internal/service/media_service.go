@@ -66,26 +66,38 @@ const (
 	wrapNonceLen = 12 // AES-GCM 96 bit nonce
 	wrapTagCTLen = 48 // AES-GCM tag (16) + ciphertext of 32 byte DEK
 	sha256Len    = 32
+	// plan targets ~20 KB thumbs. Hard ceiling at 500 KB rejects a
+	// client that tries to abuse the thumb channel as a sneaky second blob
+	maxThumbSize = 500 * 1024
 )
 
-// RequestUploadInput is the decoded body of POST /albums/{id}/media/upload-url
+// RequestUploadInput is the decoded body of POST /albums/{id}/media/upload-ur.
+// thumb fields are optional : present-as-a-group for photos that include
+// a thumb, absent-as-a-group for videos or any non thumbnailable media
 type RequestUploadInput struct {
-	MediaID    uuid.UUID
-	BlobSize   int64
-	BlobSHA256 []byte // raw 32 bytes : client base64s it on the wire
-	MimeType   string
-	MediaType  string // 'photo' or 'video'
-	WrapNonce  []byte
-	WrapTagCT  []byte
-	EpochTag   int
+	MediaID        uuid.UUID
+	BlobSize       int64
+	BlobSHA256     []byte // raw 32 bytes : client base64s it on the wire
+	MimeType       string
+	MediaType      string // 'photo' or 'video'
+	WrapNonce      []byte
+	WrapTagCT      []byte
+	EpochTag       int
+	ThumbSize      int64  // 0 if no thumb
+	ThumbSHA256    []byte // empty if no thumb
+	ThumbWrapNonce []byte // empty if no thumb
+	ThumbWrapTagCT []byte // empty if no thumb
 }
 
-// RequestUploadResult is what the handler returns to the client
+// RequestUploadResult is what the handler returns to the client. Thumb fields
+// are populated only when the request included thumb_* fields
 type RequestUploadResult struct {
-	MediaID        uuid.UUID
-	UploadURL      string
-	RequiredHeader map[string]string
-	StorageKey     string // returned for client side debug logs only
+	MediaID             uuid.UUID
+	UploadURL           string
+	RequiredHeader      map[string]string
+	StorageKey          string // returned for client side debug logs only
+	ThumbUploadURL      string
+	ThumbRequiredHeader map[string]string
 }
 
 // RequestUploadURL : creates a pending row + presigned PUT URL. The client
@@ -139,6 +151,23 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		MediaType:     in.MediaType,
 		MimeType:      &mimePtr,
 	}
+
+	//thumb fields present-as-a-group → mint second storage_key + presign
+	// a second PUT. ConfirmUpload validates BOTH objects exist + checksum
+	hasThumb := len(in.ThumbWrapNonce) > 0
+	var thumbKey string
+	if hasThumb {
+		thumbKey, err = newStorageKey()
+		if err != nil {
+			return nil, apierr.Internal("failed to mint thumb storage key").WithCause(err)
+		}
+		row.ThumbKey = &thumbKey
+		row.ThumbWrapNonce = in.ThumbWrapNonce
+		row.ThumbWrapTagCT = in.ThumbWrapTagCT
+		row.ThumbSize = &in.ThumbSize
+		row.ThumbSHA256 = in.ThumbSHA256
+	}
+
 	if err := s.repo.CreatePending(ctx, row); err != nil {
 		return nil, apierr.Internal("failed to write pending media").WithCause(err)
 	}
@@ -150,12 +179,26 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		_ = s.repo.DeletePending(ctx, mediaID, albumID)
 		return nil, apierr.Internal("failed to presign upload").WithCause(err)
 	}
-	return &RequestUploadResult{
+	res := &RequestUploadResult{
 		MediaID:        mediaID,
 		UploadURL:      pre.URL,
 		RequiredHeader: pre.RequiredHeader,
 		StorageKey:     storageKey,
-	}, nil
+	}
+	if hasThumb {
+		thumbSHA256B64 := base64.StdEncoding.EncodeToString(in.ThumbSHA256)
+		// Thumb is always image/webp client choice. Hardcoded here
+		// instead of taking from the request so a bad client cant claim a
+		// thumb is application/octet-stream or worse
+		thumbPre, err := s.s3.GetPresignedUploadURLWithChecksum(ctx, thumbKey, "image/webp", in.ThumbSize, thumbSHA256B64, PresignTTL)
+		if err != nil {
+			_ = s.repo.DeletePending(ctx, mediaID, albumID)
+			return nil, apierr.Internal("failed to presign thumb upload").WithCause(err)
+		}
+		res.ThumbUploadURL = thumbPre.URL
+		res.ThumbRequiredHeader = thumbPre.RequiredHeader
+	}
+	return res, nil
 }
 
 // ConfirmUpload validates the S3 object against the claimed size + sha256
@@ -188,6 +231,26 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID uuid.
 		return apierr.Validation("uploaded blob sha256 mismatch ; pending row dropped")
 	}
 
+	// if the row has a thumb, the matching S3 object MUST exist + match
+	// before confirm. A row gets at most one shot at thumb upload : if it
+	// fails here the row is dropped (orphan) and client retries the whole flow
+	if row.ThumbKey != nil {
+		thGot, thGotSHA256B64, err := s.s3.HeadObject(ctx, *row.ThumbKey)
+		if err != nil {
+			_ = s.dropOrphan(ctx, row)
+			return apierr.Validation("thumb upload not found on storage ; pending row dropped").WithCause(err)
+		}
+		if row.ThumbSize == nil || thGot != *row.ThumbSize {
+			_ = s.dropOrphan(ctx, row)
+			return apierr.Validation("uploaded thumb size mismatch ; pending row dropped")
+		}
+		wantThumbSHA256B64 := base64.StdEncoding.EncodeToString(row.ThumbSHA256)
+		if thGotSHA256B64 != "" && thGotSHA256B64 != wantThumbSHA256B64 {
+			_ = s.dropOrphan(ctx, row)
+			return apierr.Validation("uploaded thumb sha256 mismatch ; pending row dropped")
+		}
+	}
+
 	if err := s.repo.MarkConfirmed(ctx, mediaID, albumID); err != nil {
 		return apierr.Internal("failed to mark confirmed").WithCause(err)
 	}
@@ -209,7 +272,9 @@ const DownloadURLTTL = 15 * time.Minute
 // RequestDownloadURL : returns a fresh presigned GET URL for a confirmed
 // media row. Refuses pending rows (their S3 object may not exist yet) and
 // missing rows (caller's RequireMember middleware already gates album scope)
-func (s *MediaService) RequestDownloadURL(ctx context.Context, albumID, mediaID uuid.UUID) (*DownloadURLResult, error) {
+// asset == "thumb" presigns row.ThumbKey instead of row.StorageKey : 404s if
+// the row has no thumb
+func (s *MediaService) RequestDownloadURL(ctx context.Context, albumID, mediaID uuid.UUID, asset string) (*DownloadURLResult, error) {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
@@ -220,7 +285,14 @@ func (s *MediaService) RequestDownloadURL(ctx context.Context, albumID, mediaID 
 	if !row.Confirmed {
 		return nil, apierr.NotFound("media not yet confirmed")
 	}
-	url, err := s.s3.GetPresignedDownloadURL(ctx, row.StorageKey, DownloadURLTTL)
+	key := row.StorageKey
+	if asset == "thumb" {
+		if row.ThumbKey == nil {
+			return nil, apierr.NotFound("media has no thumb")
+		}
+		key = *row.ThumbKey
+	}
+	url, err := s.s3.GetPresignedDownloadURL(ctx, key, DownloadURLTTL)
 	if err != nil {
 		return nil, apierr.Internal("failed to presign download").WithCause(err)
 	}
@@ -294,6 +366,27 @@ func validateUploadInput(in RequestUploadInput) error {
 	}
 	if in.MimeType != "" && !strings.HasPrefix(in.MimeType, "image/") && !strings.HasPrefix(in.MimeType, "video/") {
 		return apierr.Validation("mime_type must be image/* or video/*")
+	}
+	//all-or-nothing. A client that sends one thumb field must
+	// send all four so the row never ends up partially set
+	hasAnyThumb := len(in.ThumbWrapNonce) > 0 || len(in.ThumbWrapTagCT) > 0 ||
+		in.ThumbSize > 0 || len(in.ThumbSHA256) > 0
+	if hasAnyThumb {
+		if len(in.ThumbWrapNonce) != wrapNonceLen {
+			return apierr.Validation("thumb_wrap_nonce must be 12 bytes")
+		}
+		if len(in.ThumbWrapTagCT) != wrapTagCTLen {
+			return apierr.Validation("thumb_wrap_tag_ct must be 48 bytes")
+		}
+		if len(in.ThumbSHA256) != sha256Len {
+			return apierr.Validation("thumb_sha256 must be 32 bytes")
+		}
+		if in.ThumbSize <= 0 {
+			return apierr.Validation("thumb_size must be > 0")
+		}
+		if in.ThumbSize > maxThumbSize {
+			return apierr.Validation("thumb_size exceeds 500KB cap")
+		}
 	}
 	return nil
 }

@@ -1,0 +1,4 @@
+ALTER TABLE media DROP COLUMN IF EXISTS thumb_sha256;
+ALTER TABLE media DROP COLUMN IF EXISTS thumb_size;
+ALTER TABLE media DROP COLUMN IF EXISTS thumb_wrap_tag_ct;
+ALTER TABLE media DROP COLUMN IF EXISTS thumb_wrap_nonce;
