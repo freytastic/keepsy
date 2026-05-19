@@ -12,8 +12,9 @@ import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
-import 'package:keepsy/ui/widgets/encrypted_image.dart';
+import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final AlbumModel album;
@@ -231,9 +232,24 @@ class _MediaGrid extends StatelessWidget {
         crossAxisSpacing: 4,
       ),
       itemCount: items.length,
-      itemBuilder: (_, i) => ClipRRect(
+      itemBuilder: (context, i) => ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: EncryptedImage(record: items[i], aks: aks, media: media),
+        //  grid uses thumb cipher (~20 KB) so scroll stays smooth
+        // Pre §5.3 rows + videos fall through to EncryptedImage inside
+        // the widget
+        child: GestureDetector(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => PhotoViewerScreen(
+                record: items[i],
+                aks: aks,
+                media: media,
+              ),
+            ),
+          ),
+          child:
+              EncryptedThumbnail(record: items[i], aks: aks, media: media),
+        ),
       ),
     );
   }
