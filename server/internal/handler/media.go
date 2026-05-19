@@ -42,6 +42,12 @@ type requestUploadReq struct {
 	WrapNonce  string `json:"wrap_nonce"`
 	WrapTagCT  string `json:"wrap_tag_ct"`
 	EpochTag   int    `json:"epoch_tag"`
+	// §5.3 : present-as-a-group for photos with thumb, absent for videos
+	// or any non thumbnailable media. Service validates the all-or-nothing rule
+	ThumbSize      int64  `json:"thumb_size,omitempty"`
+	ThumbSHA256    string `json:"thumb_sha256,omitempty"`
+	ThumbWrapNonce string `json:"thumb_wrap_nonce,omitempty"`
+	ThumbWrapTagCT string `json:"thumb_wrap_tag_ct,omitempty"`
 }
 
 func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) {
@@ -79,16 +85,37 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 		apierr.Write(w, r, apierr.Validation("wrap_tag_ct must be base64").WithCause(err))
 		return
 	}
+	// decoded only when present. Empty string → zero length
+	// slice, which the service treats as "no thumb"
+	thumbSHA256, err := decodeOptionalBase64(req.ThumbSHA256, "thumb_sha256")
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	thumbWrapNonce, err := decodeOptionalBase64(req.ThumbWrapNonce, "thumb_wrap_nonce")
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	thumbWrapTagCT, err := decodeOptionalBase64(req.ThumbWrapTagCT, "thumb_wrap_tag_ct")
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
 
 	res, err := h.svc.RequestUploadURL(r.Context(), albumID, memberToken, service.RequestUploadInput{
-		MediaID:    mediaID,
-		BlobSize:   req.BlobSize,
-		BlobSHA256: sha,
-		MimeType:   req.MimeType,
-		MediaType:  req.MediaType,
-		WrapNonce:  wrapNonce,
-		WrapTagCT:  wrapTagCT,
-		EpochTag:   req.EpochTag,
+		MediaID:        mediaID,
+		BlobSize:       req.BlobSize,
+		BlobSHA256:     sha,
+		MimeType:       req.MimeType,
+		MediaType:      req.MediaType,
+		WrapNonce:      wrapNonce,
+		WrapTagCT:      wrapTagCT,
+		EpochTag:       req.EpochTag,
+		ThumbSize:      req.ThumbSize,
+		ThumbSHA256:    thumbSHA256,
+		ThumbWrapNonce: thumbWrapNonce,
+		ThumbWrapTagCT: thumbWrapTagCT,
 	})
 	if err != nil {
 		apierr.Write(w, r, err)
@@ -97,11 +124,16 @@ func (h *MediaHandler) RequestUploadURL(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	out := map[string]any{
 		"media_id":        res.MediaID,
 		"upload_url":      res.UploadURL,
 		"required_header": res.RequiredHeader,
-	})
+	}
+	if res.ThumbUploadURL != "" {
+		out["thumb_upload_url"] = res.ThumbUploadURL
+		out["thumb_required_header"] = res.ThumbRequiredHeader
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 type confirmUploadReq struct {
@@ -142,7 +174,7 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, len(rows))
 	for i, m := range rows {
-		out[i] = map[string]any{
+		row := map[string]any{
 			"id":             m.ID,
 			"album_id":       m.AlbumID,
 			"uploader_token": base64.StdEncoding.EncodeToString(m.UploaderToken),
@@ -155,6 +187,16 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 			"mime_type":      m.MimeType,
 			"created_at":     m.CreatedAt,
 		}
+		//thumb fields emitted only when the row has a thumb. Client
+		// uses presence to decide between EncryptedThumbnail (fast grid) and
+		// falling back to EncryptedImage (no thumb available)
+		if m.ThumbSize != nil {
+			row["thumb_wrap_nonce"] = base64.StdEncoding.EncodeToString(m.ThumbWrapNonce)
+			row["thumb_wrap_tag_ct"] = base64.StdEncoding.EncodeToString(m.ThumbWrapTagCT)
+			row["thumb_size"] = *m.ThumbSize
+			row["thumb_sha256"] = base64.StdEncoding.EncodeToString(m.ThumbSHA256)
+		}
+		out[i] = row
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
@@ -162,7 +204,8 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 
 // RequestDownloadURL handles POST /albums/{id}/media/{mid}/download-url
 // Returns {url, expires_at}. URL is short lived (15 min) : client downloads
-// immediately. Refuses media that hasnt been confirmed
+// immediately. Refuses media that hasnt been confirmed. ?asset=thumb on the
+// query string returns the thumb URL : default = file
 func (h *MediaHandler) RequestDownloadURL(w http.ResponseWriter, r *http.Request) {
 	albumID, ok := scopedAlbumID(w, r)
 	if !ok {
@@ -173,7 +216,11 @@ func (h *MediaHandler) RequestDownloadURL(w http.ResponseWriter, r *http.Request
 		apierr.Write(w, r, apierr.Validation("invalid media id").WithCause(err))
 		return
 	}
-	res, err := h.svc.RequestDownloadURL(r.Context(), albumID, mediaID)
+	asset := r.URL.Query().Get("asset")
+	if asset == "" {
+		asset = "file"
+	}
+	res, err := h.svc.RequestDownloadURL(r.Context(), albumID, mediaID, asset)
 	if err != nil {
 		apierr.Write(w, r, err)
 		return
@@ -216,4 +263,17 @@ func parseOptionalUUID(s string) (uuid.UUID, error) {
 		return uuid.Nil, nil
 	}
 	return uuid.Parse(s)
+}
+
+// Empty string → nil slice (= "field not present"). Service treats a nil/empty
+// thumb_wrap_nonce as the trigger to skip thumb logic entirely
+func decodeOptionalBase64(s, name string) ([]byte, error) {
+	if s == "" {
+		return nil, nil
+	}
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, apierr.Validation(name + " must be base64").WithCause(err)
+	}
+	return b, nil
 }
