@@ -14,6 +14,7 @@ type User struct {
 	EmailHMAC   []byte    `json:"-" db:"email_hmac"`
 	AccentColor string    `json:"accent_color" db:"accent_color"`
 	Theme       string    `json:"theme" db:"theme"`
+	KeepsyID    string    `json:"keepsy_id,omitempty" db:"keepsy_id"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
 
