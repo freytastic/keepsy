@@ -27,6 +27,8 @@ frontend/.svn/
 frontend/.swiftpm/
 frontend/migrate_working_dir/
 
+frontend/flash.sh
+
 # IntelliJ related
 frontend/*.iml
 frontend/*.ipr
