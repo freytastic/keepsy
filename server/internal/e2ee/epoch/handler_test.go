@@ -156,9 +156,9 @@ func seedUserWithIdentity(t *testing.T, pool *pgxpool.Pool) testUser {
 	spkSig := make([]byte, 64)
 	spkTs := time.Now().Unix()
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		id, email, []byte(pub), lkPub, spkPub, spkSig, spkTs,
+		`INSERT INTO users (id, email_hmac, keepsy_id, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		id, []byte(email), id.String(), []byte(pub), lkPub, spkPub, spkSig, spkTs,
 	); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

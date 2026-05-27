@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freytastic/keepsy/internal/handle"
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/google/uuid"
@@ -182,5 +183,48 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 				t.Errorf("VerifyOTP() returned empty token on success")
 			}
 		})
+	}
+}
+
+func TestAuthService_VerifyOTP_KeepsyIDCollisionRetry(t *testing.T) {
+	correctOTP := "123456"
+	calls := 0
+	var lastUser *model.User
+
+	userStore := &MockUserStore{
+		GetByEmailHMACFunc: func(ctx context.Context, _ []byte) (*model.User, error) {
+			return nil, repository.ErrUserNotFound
+		},
+		CreateFunc: func(ctx context.Context, u *model.User) error {
+			calls++
+			lastUser = u
+			if calls == 1 {
+				return repository.ErrKeepsyIDTaken
+			}
+			u.ID = uuid.New()
+			return nil
+		},
+	}
+	otpStore := &MockOTPStore{
+		GetOTPFunc:    func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
+		DeleteOTPFunc: func(ctx context.Context, e string) error { return nil },
+	}
+	sessStore := &MockSessionStore{
+		CreateFunc: func(ctx context.Context, s *model.Session) error { return nil },
+	}
+
+	s := NewAuthService(otpStore, userStore, sessStore, &MockEmailService{}, testHMACKey)
+	token, err := s.VerifyOTP(context.Background(), "new@example.com", correctOTP)
+	if err != nil {
+		t.Fatalf("VerifyOTP unexpected err: %v", err)
+	}
+	if token == "" {
+		t.Fatal("empty token on success")
+	}
+	if calls != 2 {
+		t.Fatalf("Create called %d times, want 2 (collision + retry)", calls)
+	}
+	if lastUser == nil || len(lastUser.KeepsyID) != handle.Length {
+		t.Fatalf("user.KeepsyID not set to a valid handle: %+v", lastUser)
 	}
 }

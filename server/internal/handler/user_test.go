@@ -26,6 +26,35 @@ func (s *stubUserStore) Update(ctx context.Context, u *model.User) error {
 	return s.updateFn(ctx, u)
 }
 
+// TestGetMe_IncludesKeepsyID locks the §6.1 discovery handle into the /me
+// response : the profile screen reads it from here, so a dropped field hides
+// the user's shareable keepsy ID
+func TestGetMe_IncludesKeepsyID(t *testing.T) {
+	id := uuid.New()
+	store := &stubUserStore{
+		getByIDFn: func(_ context.Context, _ uuid.UUID) (*model.User, error) {
+			return &model.User{ID: id, KeepsyID: "K7F29QXM", AccentColor: "#2dd4bf", Theme: "dark"}, nil
+		},
+	}
+	h := NewUserHandler(service.NewUserService(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/users/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, id))
+	rec := httptest.NewRecorder()
+	h.GetMe(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["keepsy_id"] != "K7F29QXM" {
+		t.Fatalf("keepsy_id = %v, want K7F29QXM (must reach /me so the profile can show it)", body["keepsy_id"])
+	}
+}
+
 // TestUpdateMe_RejectsE2EEFields proves PATCH /users/me cannot smuggle E2EE
 // columns : bootstrap is supposed to flow through PUT /users/me/keys
 func TestUpdateMe_RejectsE2EEFields(t *testing.T) {

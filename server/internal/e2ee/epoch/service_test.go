@@ -18,6 +18,7 @@ type mockStore struct {
 	adminIKByMemberTokenFn func(ctx context.Context, memberToken []byte) ([]byte, error)
 	insertEpochFn          func(ctx context.Context, in InsertEpochInput) error
 	getWrapFn              func(ctx context.Context, albumID uuid.UUID, epoch int, recipient []byte) (*Wrap, error)
+	pendingMembersFn       func(ctx context.Context, albumID uuid.UUID, newEpoch int) ([][]byte, error)
 }
 
 func (m *mockStore) CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, bool, time.Time, error) {
@@ -31,6 +32,12 @@ func (m *mockStore) InsertEpoch(ctx context.Context, in InsertEpochInput) error 
 }
 func (m *mockStore) GetWrap(ctx context.Context, albumID uuid.UUID, epoch int, recipient []byte) (*Wrap, error) {
 	return m.getWrapFn(ctx, albumID, epoch, recipient)
+}
+func (m *mockStore) PendingMembers(ctx context.Context, albumID uuid.UUID, newEpoch int) ([][]byte, error) {
+	if m.pendingMembersFn == nil {
+		return nil, nil
+	}
+	return m.pendingMembersFn(ctx, albumID, newEpoch)
 }
 
 // fixture builds a deterministic-ish admin (pub, priv) and a recipient token
@@ -101,10 +108,30 @@ func okStore(f *fixture) *mockStore {
 	}
 }
 
+func TestSetEpoch_ReturnsPendingMembers(t *testing.T) {
+	f := newFixture(t)
+	store := okStore(f)
+	want := [][]byte{[]byte("token-A"), []byte("token-B")}
+	store.pendingMembersFn = func(_ context.Context, _ uuid.UUID, newEpoch int) ([][]byte, error) {
+		if newEpoch != 0 {
+			t.Fatalf("PendingMembers newEpoch = %d, want 0", newEpoch)
+		}
+		return want, nil
+	}
+	svc := NewService(store)
+	got, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pending = %d entries, want 2", len(got))
+	}
+}
+
 func TestSetEpoch_RejectsNonAdmin(t *testing.T) {
 	f := newFixture(t)
 	svc := NewService(okStore(f))
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "member", f.validRequest(t, 0))
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "member", f.validRequest(t, 0))
 	if !apierr.IsCode(err, "E_FORBIDDEN") {
 		t.Fatalf("err = %v, want E_FORBIDDEN", err)
 	}
@@ -120,7 +147,7 @@ func TestSetEpoch_AcceptsAdminAndCoAdmin(t *testing.T) {
 			return nil
 		}
 		svc := NewService(store)
-		if err := svc.SetEpoch(context.Background(), f.albumID, f.caller, role, f.validRequest(t, 0)); err != nil {
+		if _, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, role, f.validRequest(t, 0)); err != nil {
 			t.Fatalf("role=%s: err = %v", role, err)
 		}
 		if !called {
@@ -135,7 +162,7 @@ func TestSetEpoch_RejectsTamperedEnvelopeSig(t *testing.T) {
 	in := f.validRequest(t, 0)
 	in.EnvelopeSig = bytes.Clone(in.EnvelopeSig)
 	in.EnvelopeSig[0] ^= 0x01
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
 	if !apierr.IsCode(err, "E_SIG_INVALID") {
 		t.Fatalf("err = %v, want E_SIG_INVALID", err)
 	}
@@ -146,7 +173,7 @@ func TestSetEpoch_RejectsBadMemberSetHash(t *testing.T) {
 	svc := NewService(okStore(f))
 	in := f.validRequest(t, 0)
 	in.MemberSetHash = bytes.Repeat([]byte{0xDE}, 32) // doesnt match recipients
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -157,7 +184,7 @@ func TestSetEpoch_RejectsBadVERPrefix(t *testing.T) {
 	svc := NewService(okStore(f))
 	in := f.validRequest(t, 0)
 	in.Wraps[0].Wrap[0] = 0x02 // VER=0x02 (chacha) not allowed for MK wraps (where i belong 'chacha' also means uncle)
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -170,7 +197,7 @@ func TestSetEpoch_RejectsDuplicateRecipient(t *testing.T) {
 	in.Wraps = append(in.Wraps, in.Wraps[0]) // duplicate
 	// member_set_hash + envelope_sig were computed on the original 1 wrap form
 	// so this fails on the duplicate check before getting to sig verify
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -183,7 +210,7 @@ func TestSetEpoch_TranslatesEpochReplay(t *testing.T) {
 		return ErrEpochReplay
 	}
 	svc := NewService(store)
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 5))
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 5))
 	if !apierr.IsCode(err, "E_EPOCH_REPLAY") {
 		t.Fatalf("err = %v, want E_EPOCH_REPLAY", err)
 	}
@@ -196,7 +223,7 @@ func TestSetEpoch_TranslatesMemberSetDrift(t *testing.T) {
 		return ErrMemberSetDrift
 	}
 	svc := NewService(store)
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0))
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0))
 	if !apierr.IsCode(err, "E_MEMBER_SET_DRIFT") {
 		t.Fatalf("err = %v, want E_MEMBER_SET_DRIFT", err)
 	}
@@ -209,7 +236,7 @@ func TestSetEpoch_AdminWithoutIdentity(t *testing.T) {
 		return nil, ErrAdminNotFound
 	}
 	svc := NewService(store)
-	err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0))
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0))
 	if !apierr.IsCode(err, "E_IDENTITY_NOT_SET") {
 		t.Fatalf("err = %v, want E_IDENTITY_NOT_SET", err)
 	}
@@ -225,7 +252,7 @@ func TestSetEpoch_PassesCorrectInsertInput(t *testing.T) {
 	}
 	svc := NewService(store)
 	in := f.validRequest(t, 7)
-	if err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in); err != nil {
+	if _, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", in); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if captured.AlbumID != f.albumID {
