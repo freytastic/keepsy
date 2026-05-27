@@ -75,6 +75,13 @@ func MustGetMemberRole(r *http.Request) (string, bool) {
 	return v, ok
 }
 
+// WithMemberContext attaches member token + role to ctx exactly as RequireMember
+// does. Exported so handler tests can drive endpoints without the DB backed lookup
+func WithMemberContext(ctx context.Context, token []byte, role string) context.Context {
+	ctx = context.WithValue(ctx, memberTokenKey, token)
+	return context.WithValue(ctx, memberRoleKey, role)
+}
+
 var getPathVar = func(r *http.Request, name string) (string, bool) {
 	v, ok := mux.Vars(r)[name]
 	return v, ok && v != ""

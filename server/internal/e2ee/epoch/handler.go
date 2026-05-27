@@ -113,12 +113,13 @@ func (h *Handler) SetEpoch(w http.ResponseWriter, r *http.Request) {
 		tokens[i] = rt
 	}
 
-	if err := h.svc.SetEpoch(r.Context(), albumID, callerToken, callerRole, SetEpochInput{
+	pending, err := h.svc.SetEpoch(r.Context(), albumID, callerToken, callerRole, SetEpochInput{
 		Epoch:         req.Epoch,
 		MemberSetHash: hash,
 		Wraps:         wraps,
 		EnvelopeSig:   envSig,
-	}); err != nil {
+	})
+	if err != nil {
 		apierr.Write(w, r, err)
 		return
 	}
@@ -127,9 +128,16 @@ func (h *Handler) SetEpoch(w http.ResponseWriter, r *http.Request) {
 		go h.fanout(albumID, req.Epoch, tokens)
 	}
 
+	pendingB64 := make([]string, len(pending))
+	for i, t := range pending {
+		pendingB64[i] = base64.StdEncoding.EncodeToString(t)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"epoch": req.Epoch})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"epoch":           req.Epoch,
+		"pending_members": pendingB64,
+	})
 }
 
 // fanout emits e2ee.epoch_changed to every user behind the recipient_tokens
