@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/data/api/user_api.dart';
@@ -159,6 +161,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               Text(state.email ?? '',
                                   style: TextStyle(
                                       color: K.t3(dark), fontSize: 13)),
+                              if (state.keepsyId != null) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text('ID  ${formatHandle(state.keepsyId!)}',
+                                        style: TextStyle(
+                                            color: K.t3(dark),
+                                            fontSize: 12,
+                                            letterSpacing: 1)),
+                                    const SizedBox(width: 6),
+                                    InkWell(
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(
+                                            text: formatHandle(
+                                                state.keepsyId!)));
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(const SnackBar(
+                                                content:
+                                                    Text('keepsy ID copied')));
+                                      },
+                                      child: Icon(Icons.copy_outlined,
+                                          size: 14, color: K.t3(dark)),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
                         ),

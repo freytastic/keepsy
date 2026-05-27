@@ -11,9 +11,11 @@ import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
@@ -55,6 +57,29 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _members = members;
         _loadingMembers = false;
       });
+    }
+  }
+
+  // §6.1 : invite an existing keepsy user by their keepsy_id. The server gates
+  // the actual add to admin/co-admin : a non-admin caller surfaces the generic
+  // error in the dialog (i think i might need to come back on this later)
+  Future<void> _openAddMember() async {
+    final albumIdBytes = _uuidStringToBytes(widget.album.id);
+    if (albumIdBytes == null) return;
+    final initiator = context.read<InviteInitiator>();
+    final messenger = ScaffoldMessenger.of(context);
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (_) => AddMemberDialog(
+        onInvite: (keepsyId) async {
+          await initiator.inviteExistingUser(
+              keepsyId: keepsyId, albumId: albumIdBytes);
+        },
+      ),
+    );
+    if (added == true && mounted) {
+      await _loadMembers();
+      messenger.showSnackBar(const SnackBar(content: Text('Invite sent')));
     }
   }
 
@@ -140,7 +165,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.person_add_outlined, color: K.t2(dark)),
-            onPressed: () {},
+            onPressed: _openAddMember,
           ),
           IconButton(
             icon: Icon(Icons.settings_outlined, color: K.t2(dark)),
@@ -247,8 +272,7 @@ class _MediaGrid extends StatelessWidget {
               ),
             ),
           ),
-          child:
-              EncryptedThumbnail(record: items[i], aks: aks, media: media),
+          child: EncryptedThumbnail(record: items[i], aks: aks, media: media),
         ),
       ),
     );
