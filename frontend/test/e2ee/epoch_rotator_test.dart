@@ -70,6 +70,10 @@ class _StubPrekeyApi implements PrekeyApi {
           required int spkTs}) async =>
       throw UnimplementedError();
   @override
+  Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle) =>
+      throw UnimplementedError();
+
+  @override
   Future<PrekeyBundle> fetchPrekeyBundle(String userId) async =>
       bundleFor(userId);
 }
