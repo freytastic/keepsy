@@ -55,11 +55,14 @@ class AppState extends ChangeNotifier {
 
   String? _userId;
   String? _email;
+  String? _keepsyId;
   String? _avatarKey;
   String _profileName = 'User';
 
   String? get userId => _userId;
   String? get email => _email;
+
+  String? get keepsyId => _keepsyId;
   String? get avatarKey => _avatarKey;
   String get profileName => _profileName;
 
@@ -74,6 +77,7 @@ class AppState extends ChangeNotifier {
     // per album in album_members.name_ct, client caches its own typed name
     // via StorageService.saveName + setProfileName
     _userId = data['id'];
+    _keepsyId = data['keepsy_id'] as String?;
 
     if (data['accent_color'] != null) {
       _accent = K.hexColor(data['accent_color']);

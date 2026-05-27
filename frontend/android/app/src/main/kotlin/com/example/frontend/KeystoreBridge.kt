@@ -3,6 +3,8 @@ package com.example.frontend
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
@@ -13,6 +15,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.spec.GCMParameterSpec
@@ -35,38 +38,77 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
     }
     private val rng = SecureRandom()
 
+    // All keystore + envelope I/O runs on this single serial worker so it never
+    // blocks the platform (UI) thread. Serial keeps the envelope file's
+    // read-modify-write ordering intact (the main thread serialised it before)
+    // ks + rng become single-thread-confined as a result
+    private val worker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "keepsy-keystore").apply { isDaemon = true }
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Args are read here on the platform thread
+    // the heavy keystore work runs on the worker via dispatch. An
+    // arg-parsing failure stays on this thread and maps to E_NATIVE, matching
+    // the previous catch-all
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
-                "initialize" -> { initialize(); result.success(null) }
+                "initialize" -> dispatch(result) { initialize(); null }
                 "put" -> {
                     val label = call.argument<String>("label")!!
                     val pt = call.argument<ByteArray>("plaintext")!!
-                    result.success(mapOf("handleId" to put(label, pt)))
+                    dispatch(result) { mapOf("handleId" to put(label, pt)) }
                 }
+
                 "putMany" -> {
                     val entries = call.argument<List<Map<String, Any?>>>("entries")!!
-                    result.success(putMany(entries).map { mapOf("handleId" to it) })
+                    dispatch(result) { putMany(entries).map { mapOf("handleId" to it) } }
                 }
+
                 "getOnce" -> {
                     val id = call.argument<String>("handleId")!!
-                    result.success(mapOf("plaintext" to getOnce(id)))
+                    dispatch(result) { mapOf("plaintext" to getOnce(id)) }
                 }
+
                 "delete" -> {
                     val id = call.argument<String>("handleId")!!
-                    delete(id); result.success(null)
+                    dispatch(result) { delete(id); null }
                 }
+
                 "list" -> {
                     val prefix = call.argument<String>("labelPrefix")
-                    result.success(list(prefix).map { mapOf("handleId" to it.first, "label" to it.second) })
+                    dispatch(result) {
+                        list(prefix).map { mapOf("handleId" to it.first, "label" to it.second) }
+                    }
                 }
-                "wipeAll" -> { wipeAll(); result.success(null) }
+
+                "wipeAll" -> dispatch(result) { wipeAll(); null }
                 else -> result.notImplemented()
             }
-        } catch (e: TamperException)         { result.error("E_KEY_TAMPER", e.message, null) }
-        catch (e: NotFoundException)         { result.error("E_KEY_NOT_FOUND", e.message, null) }
-        catch (e: UninitializedException)    { result.error("E_STORE_UNINITIALIZED", e.message, null) }
-        catch (e: Exception)                 { result.error("E_NATIVE", e.message, e.stackTraceToString()) }
+        } catch (e: Exception) {
+            result.error("E_NATIVE", e.message, e.stackTraceToString())
+        }
+    }
+
+    // Runs work on the serial worker, then posts success/error back on the main
+    // thread. Error code mapping is identical to the previous inline handler
+    private fun dispatch(result: MethodChannel.Result, work: () -> Any?) {
+        worker.execute {
+            try {
+                val value = work()
+                mainHandler.post { result.success(value) }
+            } catch (e: TamperException) {
+                mainHandler.post { result.error("E_KEY_TAMPER", e.message, null) }
+            } catch (e: NotFoundException) {
+                mainHandler.post { result.error("E_KEY_NOT_FOUND", e.message, null) }
+            } catch (e: UninitializedException) {
+                mainHandler.post { result.error("E_STORE_UNINITIALIZED", e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post { result.error("E_NATIVE", e.message, e.stackTraceToString()) }
+            }
+        }
     }
 
     private fun initialize() {
@@ -86,7 +128,7 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
         // Use StrongBox (dedicated HSM) if available (Android 9+)
         // fallback to TEE if not supported on this specific hardware
         val wantStrongBox = Build.VERSION.SDK_INT >= 28 &&
-            ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
+                ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
         if (wantStrongBox) builder.setIsStrongBoxBacked(true)
 
         try {
@@ -143,10 +185,10 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
         if (ks.containsAlias(WRAP_ALIAS)) ks.deleteEntry(WRAP_ALIAS)
     }
 
-     //Reads the encrypted envelope from disk and decrypts it using the master key
+    //Reads the encrypted envelope from disk and decrypts it using the master key
 
-     // The master key material stays inside the TEE/StrongBox : the main CPU only
-     // sees the decrypted "envelope" contents
+    // The master key material stays inside the TEE/StrongBox : the main CPU only
+    // sees the decrypted "envelope" contents
     private fun loadMap(): MutableMap<String, Pair<String, ByteArray>> {
         if (!ks.containsAlias(WRAP_ALIAS)) throw UninitializedException("wrapper key absent")
         val f = File(ctx.filesDir, ENVELOPE_FILE)
@@ -170,8 +212,8 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
         return decode(pt)
     }
 
-     // Encrypts and saves the envelope
-     // Uses an atomic rename pattern to ensure file integrity on crash
+    // Encrypts and saves the envelope
+    // Uses an atomic rename pattern to ensure file integrity on crash
     private fun saveMap(map: Map<String, Pair<String, ByteArray>>) {
         if (!ks.containsAlias(WRAP_ALIAS)) throw UninitializedException("wrapper key absent")
         val pt = encode(map)
@@ -195,9 +237,9 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
             throw RuntimeException("atomic rename failed")
     }
 
-     //Custom binary format for cross platform parity with iOS
-     //[count: u16 BE]
-     //For each: [idLen: u8] [id: ASCII] [labelLen: u16 BE] [label: UTF-8] [valLen: u16 BE] [val: bytes]
+    //Custom binary format for cross platform parity with iOS
+    //[count: u16 BE]
+    //For each: [idLen: u8] [id: ASCII] [labelLen: u16 BE] [label: UTF-8] [valLen: u16 BE] [val: bytes]
     private fun encode(map: Map<String, Pair<String, ByteArray>>): ByteArray {
         val bb = ByteBuffer.allocate(estimateSize(map)).order(ByteOrder.BIG_ENDIAN)
         bb.putShort(map.size.toShort())
