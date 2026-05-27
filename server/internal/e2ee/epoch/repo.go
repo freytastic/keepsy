@@ -1,6 +1,7 @@
 package epoch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -163,7 +164,7 @@ func (r *Repo) InsertEpoch(ctx context.Context, in InsertEpochInput) error {
 	}
 
 	gotHash := MemberSetHash(active)
-	if !bytesEqual(gotHash, in.ExpectedMemberSetHash) {
+	if !bytes.Equal(gotHash, in.ExpectedMemberSetHash) {
 		return ErrMemberSetDrift
 	}
 
@@ -262,14 +263,34 @@ func (r *Repo) UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uu
 	return out, rows.Err()
 }
 
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
+// PendingMembers returns the member_tokens of non revoked members who have not
+// proven (via join_complete) that they installed recent epochs and whose last
+// acknowledgement (if any) is more than 24h old. newEpoch is the epoch just
+// committed : a member is current if they acked >= newEpoch-1
+
+// drives an admin "these members are behind" surface
+func (r *Repo) PendingMembers(ctx context.Context, albumID uuid.UUID, newEpoch int) ([][]byte, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT am.member_token
+		 FROM album_members am
+		 JOIN album_member_identities amid ON amid.member_token = am.member_token
+		 WHERE am.album_id = $1
+		   AND am.revoked_at IS NULL
+		   AND (amid.last_received_epoch IS NULL OR amid.last_received_epoch < $2 - 1)
+		   AND (amid.last_received_at IS NULL OR amid.last_received_at < now() - interval '24 hours')`,
+		albumID, newEpoch,
+	)
+	if err != nil {
+		return nil, err
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	defer rows.Close()
+	var out [][]byte
+	for rows.Next() {
+		var tok []byte
+		if err := rows.Scan(&tok); err != nil {
+			return nil, err
 		}
+		out = append(out, tok)
 	}
-	return true
+	return out, rows.Err()
 }
