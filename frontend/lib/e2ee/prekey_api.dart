@@ -65,6 +65,21 @@ abstract class PrekeyApi {
   // GET /users/{id}/prekey-bundle. Returns the raw bytes-in/bytes-out value
   // type : caller MUST gate on PrekeyBundle.verify() before X3dhSession.initiate
   Future<PrekeyBundle> fetchPrekeyBundle(String userId);
+
+  // GET /users/by-handle/{handle}/prekey-bundle (§6.1 discovery). The returned
+  // bundle's userId field carries the keepsy_id, not the real user_id (server
+  // never emits it) : X3dhSession.initiate ignores userId anyway hehe. Throws
+  // HandleNotFoundException on 404 (unknown or malformed handle, indistinguishable)
+  Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle);
+}
+
+// Thrown when a keepsy_id resolves to no user (or is malformed) : the UI shows
+// a "no such keepsy ID" rather than leaking which case it was
+class HandleNotFoundException implements Exception {
+  final String handle;
+  const HandleNotFoundException(this.handle);
+  @override
+  String toString() => 'HandleNotFoundException($handle)';
 }
 
 class HttpPrekeyApi implements PrekeyApi {
@@ -126,5 +141,19 @@ class HttpPrekeyApi implements PrekeyApi {
   Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
     final body = await _client.getJson('/users/$userId/prekey-bundle');
     return PrekeyBundle.fromJson(body);
+  }
+
+  @override
+  Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle) async {
+    try {
+      final body =
+          await _client.getJson('/users/by-handle/$handle/prekey-bundle');
+      return PrekeyBundle.fromJson(body);
+    } on PrekeyApiException catch (e) {
+      if (e.httpStatus == 404) {
+        throw HandleNotFoundException(handle);
+      }
+      rethrow;
+    }
   }
 }

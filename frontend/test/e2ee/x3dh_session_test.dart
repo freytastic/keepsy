@@ -41,6 +41,10 @@ class _SilentPrekeyApi implements PrekeyApi {
       required Uint8List spkSig,
       required int spkTs}) async {}
   @override
+  Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle) =>
+      throw UnimplementedError();
+
+  @override
   Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
     throw UnimplementedError();
   }

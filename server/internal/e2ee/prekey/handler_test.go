@@ -48,7 +48,16 @@ func newRouter(h *Handler) http.Handler {
 	r.HandleFunc("/users/me/opks", h.ReplenishOPKs).Methods(http.MethodPost)
 	r.HandleFunc("/users/me/opks/count", h.GetOPKCount).Methods(http.MethodGet)
 	r.HandleFunc("/users/{id}/prekey-bundle", h.GetPrekeyBundle).Methods(http.MethodGet)
+	r.HandleFunc("/users/by-handle/{handle}/prekey-bundle", h.GetPrekeyBundleByHandle).Methods(http.MethodGet)
 	return r
+}
+
+type stubResolver struct {
+	fn func(ctx context.Context, keepsyID string) (uuid.UUID, error)
+}
+
+func (s stubResolver) FindUserIDByKeepsyID(ctx context.Context, k string) (uuid.UUID, error) {
+	return s.fn(ctx, k)
 }
 
 func authReq(method, path string, body []byte, userID uuid.UUID) *http.Request {
@@ -82,7 +91,7 @@ func TestUpsertIdentity_OneShot(t *testing.T) {
 	}
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
-	h := NewHandler(svc, nil)
+	h := NewHandler(svc, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"ik_pub":  base64.StdEncoding.EncodeToString(ikPub),
@@ -133,7 +142,7 @@ func TestPrekeyBundle_OpkLowEmitted(t *testing.T) {
 	svc.SetClock(fixedClock)
 
 	notif := &captureNotifier{ch: make(chan emittedEvent, 1)}
-	h := NewHandler(svc, notif)
+	h := NewHandler(svc, notif, nil)
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodGet, "/users/"+target.String()+"/prekey-bundle", nil, requester)
@@ -172,7 +181,7 @@ func TestPrekeyBundle_DoesNotEmitWhenAtOrAboveThreshold(t *testing.T) {
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
 	notif := &captureNotifier{ch: make(chan emittedEvent, 1)}
-	h := NewHandler(svc, notif)
+	h := NewHandler(svc, notif, nil)
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodGet, "/users/"+uuid.NewString()+"/prekey-bundle", nil, uuid.New())
@@ -223,7 +232,7 @@ func TestPrekeyBundle_ConcurrentConsumesDistinctOPKs(t *testing.T) {
 	}
 
 	svc := NewService(repo)
-	h := NewHandler(svc, nil)
+	h := NewHandler(svc, nil, nil)
 	router := newRouter(h)
 
 	type result struct {
@@ -278,6 +287,128 @@ func TestPrekeyBundle_ConcurrentConsumesDistinctOPKs(t *testing.T) {
 	}
 }
 
+func TestPrekeyBundleByHandle(t *testing.T) {
+	ikPub, _, spk, sig := genIdentity(t, fixedTs)
+	ts := int64(fixedTs)
+	target := uuid.New()
+	const goodHandle = "K7F29QXM"
+
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{IKPub: []byte(ikPub), LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: &ts}, nil
+		},
+		popRandomFn: func(_ context.Context, uid uuid.UUID) (*model.OneTimePrekey, error) {
+			return &model.OneTimePrekey{ID: uuid.New(), UserID: uid, OPKIdx: 7, KeyPub: make([]byte, 32)}, nil
+		},
+		countFn: func(_ context.Context, _ uuid.UUID) (int, error) { return 10, nil },
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+	resolver := stubResolver{fn: func(_ context.Context, k string) (uuid.UUID, error) {
+		if k == goodHandle {
+			return target, nil
+		}
+		return uuid.Nil, repository.ErrUserNotFound
+	}}
+	h := NewHandler(svc, nil, resolver)
+
+	t.Run("valid handle -> 200 with user_id=keepsy_id (not UUID)", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		// lowercase+dash form exercises Normalize on the way in
+		req := authReq(http.MethodGet, "/users/by-handle/k7f2-9qxm/prekey-bundle", nil, uuid.New())
+		newRouter(h).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d want 200; body=%s", rec.Code, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["user_id"] != goodHandle {
+			t.Fatalf("user_id=%v want %q", body["user_id"], goodHandle)
+		}
+		if _, err := uuid.Parse(fmt.Sprint(body["user_id"])); err == nil {
+			t.Fatalf("user_id is a UUID (%v): real id must never reach the wire", body["user_id"])
+		}
+		for _, k := range []string{"ik_pub", "lk_pub", "spk_pub", "spk_sig", "spk_ts", "opk"} {
+			if _, ok := body[k]; !ok {
+				t.Errorf("missing field %q", k)
+			}
+		}
+	})
+
+	t.Run("unknown handle -> 404", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := authReq(http.MethodGet, "/users/by-handle/ZZZZZZZZ/prekey-bundle", nil, uuid.New())
+		newRouter(h).ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status=%d want 404", rec.Code)
+		}
+	})
+
+	t.Run("malformed handle -> 404 (indistinguishable)", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := authReq(http.MethodGet, "/users/by-handle/bad!!handle/prekey-bundle", nil, uuid.New())
+		newRouter(h).ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status=%d want 404; body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func TestPrekeyBundleByHandle_RateLimit(t *testing.T) {
+	redisURL := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	if redisURL == "" {
+		t.Skip("set KEEPSY_TEST_REDIS_URL to run rate-limit test")
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
+	t.Cleanup(func() { _ = rdb.Close() })
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis ping: %v", err)
+	}
+	limiter := middleware.NewRateLimiter(rdb)
+
+	ikPub, _, spk, sig := genIdentity(t, fixedTs)
+	ts := int64(fixedTs)
+	target := uuid.New()
+	const goodHandle = "K7F29QXM"
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{IKPub: []byte(ikPub), LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: &ts}, nil
+		},
+		popRandomFn: func(_ context.Context, _ uuid.UUID) (*model.OneTimePrekey, error) { return nil, nil },
+		countFn:     func(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil },
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+	resolver := stubResolver{fn: func(_ context.Context, _ string) (uuid.UUID, error) { return target, nil }}
+	h := NewHandler(svc, nil, resolver)
+
+	r := mux.NewRouter()
+	r.Handle(
+		"/users/by-handle/{handle}/prekey-bundle",
+		limiter.Middleware(KeyByRequesterAndHandle, 5, 60*time.Second)(http.HandlerFunc(h.GetPrekeyBundleByHandle)),
+	).Methods(http.MethodGet)
+
+	requester := uuid.New()
+	_ = rdb.Del(context.Background(), "prekey-bundle-handle:"+requester.String()+":"+goodHandle).Err()
+
+	for i := range 5 {
+		rec := httptest.NewRecorder()
+		req := authReq(http.MethodGet, "/users/by-handle/"+goodHandle+"/prekey-bundle", nil, requester)
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("call %d: status=%d want 200", i+1, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := authReq(http.MethodGet, "/users/by-handle/"+goodHandle+"/prekey-bundle", nil, requester)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th call status=%d want 429", rec.Code)
+	}
+}
+
 // TestPrekeyBundle_RateLimit drives the actual middleware.RateLimiter against a
 // real Redis. Skipped without KEEPSY_TEST_REDIS_URL
 func TestPrekeyBundle_RateLimit(t *testing.T) {
@@ -303,7 +434,7 @@ func TestPrekeyBundle_RateLimit(t *testing.T) {
 	}
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
-	h := NewHandler(svc, nil)
+	h := NewHandler(svc, nil, nil)
 
 	r := mux.NewRouter()
 	r.Handle(
@@ -344,7 +475,8 @@ func mustSeedUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	id := uuid.New()
 	email := fmt.Sprintf("test-%s@example.com", id.String())
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email) VALUES ($1, $2)`, id, email); err != nil {
+		`INSERT INTO users (id, email_hmac, keepsy_id) VALUES ($1, $2, $3)`,
+		id, []byte(email), id.String()); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	return id

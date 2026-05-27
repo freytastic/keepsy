@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -21,6 +22,7 @@ type store interface {
 	AdminIKByMemberToken(ctx context.Context, memberToken []byte) ([]byte, error)
 	InsertEpoch(ctx context.Context, in InsertEpochInput) error
 	GetWrap(ctx context.Context, albumID uuid.UUID, epoch int, recipient []byte) (*Wrap, error)
+	PendingMembers(ctx context.Context, albumID uuid.UUID, newEpoch int) ([][]byte, error)
 }
 
 type Service struct {
@@ -59,46 +61,48 @@ type SetEpochInput struct {
 }
 
 // SetEpoch validates a rotation request and writes the ledger row + per
-// recipient wraps in one tx via the repo. Role gate: admin or co-admin only
-func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken []byte, callerRole string, in SetEpochInput) error {
+// recipient wraps in one tx via the repo. Role gate : admin or co admin only
+// On success returns the member_tokens that are >24h behind on their
+// join_complete receipt (never blocks the rotation).
+func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken []byte, callerRole string, in SetEpochInput) ([][]byte, error) {
 	if callerRole != "admin" && callerRole != "co-admin" {
-		return apierr.Forbidden("only admin or co-admin can rotate epoch")
+		return nil, apierr.Forbidden("only admin or co-admin can rotate epoch")
 	}
 	if in.Epoch < 0 {
-		return apierr.Validation("epoch must be >= 0")
+		return nil, apierr.Validation("epoch must be >= 0")
 	}
 	if len(in.MemberSetHash) != sha256.Size {
-		return apierr.Validation("member_set_hash must be 32 bytes")
+		return nil, apierr.Validation("member_set_hash must be 32 bytes")
 	}
 	if len(in.EnvelopeSig) != sigLen {
-		return apierr.Validation("envelope_sig must be 64 bytes")
+		return nil, apierr.Validation("envelope_sig must be 64 bytes")
 	}
 	if len(in.Wraps) == 0 {
-		return apierr.Validation("wraps must be a non-empty array")
+		return nil, apierr.Validation("wraps must be a non-empty array")
 	}
 	for i, w := range in.Wraps {
 		if len(w.RecipientToken) != tokenLen {
-			return apierr.Validation("wraps[].recipient_token must be 32 bytes")
+			return nil, apierr.Validation("wraps[].recipient_token must be 32 bytes")
 		}
 		if len(w.EkPub) != keyLen {
-			return apierr.Validation("wraps[].ek_pub must be 32 bytes")
+			return nil, apierr.Validation("wraps[].ek_pub must be 32 bytes")
 		}
 		if len(w.SenderSig) != sigLen {
-			return apierr.Validation("wraps[].sender_sig must be 64 bytes")
+			return nil, apierr.Validation("wraps[].sender_sig must be 64 bytes")
 		}
 		if len(w.Wrap) < 1+gcmNonceLen+gcmTagLen {
-			return apierr.Validation("wraps[].wrap is shorter than VER+NONCE+TAG")
+			return nil, apierr.Validation("wraps[].wrap is shorter than VER+NONCE+TAG")
 		}
 		if w.Wrap[0] != verAesGcm {
-			return apierr.Validation("wraps[].wrap must start with VER=0x01 (AES-GCM)")
+			return nil, apierr.Validation("wraps[].wrap must start with VER=0x01 (AES-GCM)")
 		}
 		if w.OpkIdxUsed != nil && *w.OpkIdxUsed < 0 {
-			return apierr.Validation("wraps[].opk_idx_used must be >= 0 when present")
+			return nil, apierr.Validation("wraps[].opk_idx_used must be >= 0 when present")
 		}
 		// recipient_tokens must be unique within the request
 		for j := range i {
 			if bytes.Equal(in.Wraps[j].RecipientToken, w.RecipientToken) {
-				return apierr.Validation("wraps[].recipient_token duplicated in request")
+				return nil, apierr.Validation("wraps[].recipient_token duplicated in request")
 			}
 		}
 	}
@@ -108,7 +112,7 @@ func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken [
 		tokens[i] = w.RecipientToken
 	}
 	if !bytes.Equal(MemberSetHash(tokens), in.MemberSetHash) {
-		return apierr.Validation("member_set_hash does not match recipient_tokens")
+		return nil, apierr.Validation("member_set_hash does not match recipient_tokens")
 	}
 
 	wHash := WrapsHash(in.Wraps)
@@ -117,12 +121,12 @@ func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken [
 	ikPub, err := s.repo.AdminIKByMemberToken(ctx, callerToken)
 	if err != nil {
 		if errors.Is(err, ErrAdminNotFound) {
-			return apierr.IdentityNotSet("caller has no published identity")
+			return nil, apierr.IdentityNotSet("caller has no published identity")
 		}
-		return err
+		return nil, err
 	}
 	if err := crypto.VerifyEd25519(ed25519.PublicKey(ikPub), signedMsg, in.EnvelopeSig); err != nil {
-		return apierr.SigInvalid("envelope_sig verification failed").WithCause(err)
+		return nil, apierr.SigInvalid("envelope_sig verification failed").WithCause(err)
 	}
 
 	wraps := make([]WrapInsert, len(in.Wraps))
@@ -147,13 +151,23 @@ func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken [
 	})
 	switch {
 	case errors.Is(err, ErrEpochReplay):
-		return apierr.EpochReplay("epoch must equal current+1")
+		return nil, apierr.EpochReplay("epoch must equal current+1")
 	case errors.Is(err, ErrMemberSetDrift):
-		return apierr.MemberSetDrift("active member set drifted between request and commit")
+		return nil, apierr.MemberSetDrift("active member set drifted between request and commit")
 	case errors.Is(err, ErrAlbumNotFound):
-		return apierr.NotFound("album not found")
+		return nil, apierr.NotFound("album not found")
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+
+	// Rotation is committed. Pending detection is best effort and never fails it
+	pending, perr := s.repo.PendingMembers(ctx, albumID, in.Epoch)
+	if perr != nil {
+		slog.Default().Warn("epoch: pending-members query failed", "album_id", albumID, "err", perr)
+		return nil, nil
+	}
+	return pending, nil
 }
 
 // CurrentResult is the shape the GET /epoch endpoint returns

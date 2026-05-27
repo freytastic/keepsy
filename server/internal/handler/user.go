@@ -32,9 +32,11 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Email + name + avatar intentionally absent : server stores email_hmac
 	// (M8), display name lives encrypted per album in album_members.name_ct
 	// (M7), avatar comes back in Phase 5. Client persists own email + name
+	// keepsy_id IS surfaced : it's the user's own shareable discovery handle (§6.1)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":           u.ID,
+		"keepsy_id":    u.KeepsyID,
 		"accent_color": u.AccentColor,
 		"theme":        u.Theme,
 		"created_at":   u.CreatedAt,

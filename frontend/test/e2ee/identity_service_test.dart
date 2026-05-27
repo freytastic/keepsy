@@ -82,6 +82,10 @@ class _StubPrekeyApi implements PrekeyApi {
   }
 
   @override
+  Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle) =>
+      throw UnimplementedError();
+
+  @override
   Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
     throw UnimplementedError('fetchPrekeyBundle not used by IdentityService');
   }
@@ -112,7 +116,8 @@ void main() {
   setUpAll(ensureSodium);
 
   group('IdentityService', () {
-    test('bootstrap creates kBootstrapOpkPool OPKs and uploads a valid '
+    test(
+        'bootstrap creates kBootstrapOpkPool OPKs and uploads a valid '
         'replenish_sig', () async {
       final fixed = DateTime.utc(2026, 5, 4, 12);
       final r = await _newService(now: fixed);
@@ -290,8 +295,8 @@ void main() {
       expect(await r.labels.areInitialOpksPublished(), isFalse);
       expect(r.api.upsertCalls, 1);
       expect(r.labels.handleId(kLabelIK), isNotNull);
-      expect(r.labels.labelsWithPrefix(kLabelOpkPrefix).length,
-          kBootstrapOpkPool);
+      expect(
+          r.labels.labelsWithPrefix(kLabelOpkPrefix).length, kBootstrapOpkPool);
 
       // Second attempt: only /opks should be retried; /keys must NOT be
       // called again (server would 409 and we'd surface conflict spuriously)

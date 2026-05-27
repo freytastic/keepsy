@@ -4,10 +4,13 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:keepsy/crypto/primitives.dart';
+import 'package:keepsy/secure_store/key_handle_adapter.dart';
 
 import 'album_keys.dart';
 import 'epoch_api.dart';
 import 'identity.dart';
+import 'invite_api.dart';
+import 'join.dart';
 import 'member_directory.dart';
 import 'wrap_envelope.dart';
 import 'x3dh_session.dart';
@@ -39,6 +42,9 @@ class EpochProcessor {
   final MemberDirectory _directory;
   final BackoffSchedule _backoff;
   final int _maxRetries;
+  // §6.3 join_complete receipt. Null when the processor is wired without invite
+  // support (older callers / tests that don't exercise the join path)
+  final InviteApi? _invites;
 
   // hex(albumId) -> tail of the in flight chain : new events queue behind it
   final Map<String, Future<void>> _chains = {};
@@ -48,19 +54,24 @@ class EpochProcessor {
     required IdentityService identity,
     required AlbumKeyStore store,
     required MemberDirectory directory,
+    InviteApi? invites,
     BackoffSchedule? backoff,
     int maxRetries = 3,
   })  : _api = api,
         _identity = identity,
         _store = store,
         _directory = directory,
+        _invites = invites,
         _backoff = backoff ?? _defaultBackoff,
         _maxRetries = maxRetries;
 
   // Mutexed per albumId. Serial within an album, parallel across albums
+  // joined==true (§6.1 epoch_changed{joined:true} or cold start with zero local
+  // MKs) backfills every epoch 0..epoch and posts the join_complete receipt
   Future<void> handleEvent({
     required Uint8List albumId,
     required int epoch,
+    bool joined = false,
   }) async {
     final hex = _hexAlbum(albumId);
     final prev = _chains[hex];
@@ -72,7 +83,11 @@ class EpochProcessor {
           // Prior failure must not poison the chain : the next event still runs
         }
       }
-      await _doHandle(albumId, epoch);
+      if (joined) {
+        await _backfillJoin(albumId, epoch);
+      } else {
+        await _doHandle(albumId, epoch);
+      }
     }
 
     final mine = chained();
@@ -94,8 +109,14 @@ class EpochProcessor {
         final cur = await _api.getCurrentEpoch(_uuidString(id));
         if (cur == null) continue;
         final latest = await _store.latestEpoch(id);
-        for (var n = latest + 1; n <= cur.currentEpoch; n++) {
-          await handleEvent(albumId: id, epoch: n);
+        if (latest < 0) {
+          // Zero local MKs but the album has epochs : this client just joined and
+          // missed the live event (EmitToUsers is live-only) treat as a join
+          await handleEvent(albumId: id, epoch: cur.currentEpoch, joined: true);
+        } else {
+          for (var n = latest + 1; n <= cur.currentEpoch; n++) {
+            await handleEvent(albumId: id, epoch: n);
+          }
         }
       } catch (e, s) {
         developer.log('catchUpAll failed for album',
@@ -105,6 +126,36 @@ class EpochProcessor {
   }
 
   Future<void> _doHandle(Uint8List albumId, int epoch) async {
+    await _installEpoch(albumId, epoch, backfill: false);
+  }
+
+  // _backfillJoin installs every epoch 0..current (out-of-order safe via
+  // backfill:true) then posts a single join_complete receipt for 'current'
+  // ek_pub_admin is the shared X3DH ephemeral carried on the delivered wraps
+  Future<void> _backfillJoin(Uint8List albumId, int current) async {
+    Uint8List? ekPubAdmin;
+    for (var e = 0; e <= current; e++) {
+      final ek = await _installEpoch(albumId, e, backfill: true);
+      ekPubAdmin ??= ek;
+    }
+    if (ekPubAdmin == null || _invites == null) return;
+    final msg = joinCompleteMsg(albumId, current, ekPubAdmin);
+    final sig = await _identity.useIk<Uint8List>((seed) async {
+      final kp = await KeyHandleAdapter.toEd25519(seed);
+      return Sign.sign(kp, msg);
+    });
+    await _invites.postJoinComplete(
+      albumId: _uuidString(albumId),
+      epoch: current,
+      ekPubAdmin: ekPubAdmin,
+      sig: sig,
+    );
+  }
+
+  // Fetch + verify + derive + decrypt + install one epoch's wrap. Returns the
+  // wrap's ek_pub (the X3DH ephemeral) so the join path can build the receipt
+  Future<Uint8List> _installEpoch(Uint8List albumId, int epoch,
+      {required bool backfill}) async {
     final albumIdStr = _uuidString(albumId);
     final envelope = await _fetchWithRetry(albumIdStr, epoch);
     envelope.verifyShape();
@@ -143,12 +194,13 @@ class EpochProcessor {
         albumId: albumId,
         epoch: epoch,
         mk: mk,
-        backfill: false,
+        backfill: backfill,
       );
     } finally {
       if (sk != null) sk.fillRange(0, sk.length, 0);
       if (mk != null) mk.fillRange(0, mk.length, 0);
     }
+    return envelope.ekPub;
   }
 
   Future<WrapEnvelope> _fetchWithRetry(String albumId, int epoch) async {

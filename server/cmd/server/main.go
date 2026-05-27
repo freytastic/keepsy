@@ -14,6 +14,7 @@ import (
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/config"
 	"github.com/freytastic/keepsy/internal/e2ee/epoch"
+	"github.com/freytastic/keepsy/internal/e2ee/invite"
 	"github.com/freytastic/keepsy/internal/e2ee/prekey"
 	"github.com/freytastic/keepsy/internal/handler"
 	"github.com/freytastic/keepsy/internal/middleware"
@@ -88,11 +89,15 @@ func main() {
 
 	prekeyEx := prekey.NewRepo(dbPool, prekeyRepo)
 	prekeyService := prekey.NewService(prekeyEx)
-	prekeyHandler := prekey.NewHandler(prekeyService, hub)
+	prekeyHandler := prekey.NewHandler(prekeyService, hub, userRepo)
 
 	epochRepo := epoch.NewRepo(dbPool, linker)
 	epochService := epoch.NewService(epochRepo)
 	epochHandler := epoch.NewHandler(epochService, epochRepo, hub)
+
+	inviteRepo := invite.NewRepo(dbPool, linker, userRepo)
+	inviteService := invite.NewService(inviteRepo)
+	memberInviteHandler := invite.NewHandler(inviteService, inviteRepo, hub)
 
 	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client})
 
@@ -141,6 +146,14 @@ func main() {
 			),
 		),
 	).Methods(http.MethodGet)
+	// resolve a random keepsy_id to a prekey bundle. Same
+	// per-(requester, handle) 5/min limit : the real user_id never leaves here
+	authed.Handle(
+		"/users/by-handle/{handle}/prekey-bundle",
+		rateLimiter.Middleware(prekey.KeyByRequesterAndHandle, 5, 60*time.Second)(
+			http.HandlerFunc(prekeyHandler.GetPrekeyBundleByHandle),
+		),
+	).Methods(http.MethodGet)
 
 	authed.HandleFunc("/albums", albumHandler.CreateAlbum).Methods(http.MethodPost)
 	authed.HandleFunc("/albums", albumHandler.ListAlbums).Methods(http.MethodGet)
@@ -155,6 +168,8 @@ func main() {
 	scoped.HandleFunc("/members", albumHandler.AddMember).Methods(http.MethodPost)
 	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
+	scoped.HandleFunc("/invites/existing-user", memberInviteHandler.DeliverExistingUser).Methods(http.MethodPost)
+	scoped.HandleFunc("/joins", memberInviteHandler.JoinComplete).Methods(http.MethodPost)
 	scoped.HandleFunc("/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)
 	scoped.HandleFunc("/invite-blob", inviteHandler.CreateInviteBlob).Methods(http.MethodPost)
 	scoped.HandleFunc("/invite-blob", inviteHandler.GetInviteBlob).Methods(http.MethodGet)

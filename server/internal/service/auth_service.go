@@ -12,9 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freytastic/keepsy/internal/handle"
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/repository"
 )
+
+const maxKeepsyIDAttempts = 5
 
 var (
 	ErrInvalidOTP      = errors.New("invalid or expired OTP")
@@ -125,7 +128,7 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 				AccentColor: "#2dd4bf",
 				Theme:       "dark",
 			}
-			if err := s.UserRepo.Create(ctx, user); err != nil {
+			if err := s.createWithKeepsyID(ctx, user); err != nil {
 				log.Printf("VerifyOTP: user create failed: %v", err)
 				return "", err
 			}
@@ -152,6 +155,26 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 	}
 
 	return token, nil
+}
+
+// createWithKeepsyID assigns a fresh random keepsy_id and inserts, retrying on
+// the (astronomically rare) UNIQUE collision so registration never fails for it
+func (s *AuthService) createWithKeepsyID(ctx context.Context, user *model.User) error {
+	var err error
+	for range maxKeepsyIDAttempts {
+		var id string
+		if id, err = handle.Generate(rand.Reader); err != nil {
+			return err
+		}
+		user.KeepsyID = id
+		if err = s.UserRepo.Create(ctx, user); err == nil {
+			return nil
+		}
+		if !errors.Is(err, repository.ErrKeepsyIDTaken) {
+			return err
+		}
+	}
+	return err
 }
 
 func (s *AuthService) RefreshSession(ctx context.Context, refreshToken string) (string, string, time.Time, error) {

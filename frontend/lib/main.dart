@@ -11,6 +11,7 @@ import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/data/api/epoch_api.dart' as data_epoch;
 import 'package:keepsy/data/api/error_mapper.dart';
+import 'package:keepsy/data/api/invite_json_client.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
@@ -20,6 +21,8 @@ import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
+import 'package:keepsy/e2ee/invite.dart';
+import 'package:keepsy/e2ee/invite_api.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
@@ -111,11 +114,13 @@ void main() async {
     return out;
   });
   final epochApi = HttpEpochApi(data_epoch.ApiClientEpochJsonClient(apiClient));
+  final inviteApi = HttpInviteApi(ApiClientInviteJsonClient(apiClient));
   final epochProcessor = EpochProcessor(
     api: epochApi,
     identity: identityService,
     store: albumKeyStore,
     directory: memberDirectory,
+    invites: inviteApi, // §6.3 : backfill posts the join_complete receipt
   );
   // EpochRotator : initiator side of an epoch transition. Used rn for the
   // §5 bootstrap (epoch 0 on album create) : §6 invites + §7 removals will
@@ -123,6 +128,13 @@ void main() async {
   final epochRotator = EpochRotator(
     epochs: epochApi,
     prekeys: prekeyApi,
+    identity: identityService,
+    aks: albumKeyStore,
+  );
+  // look up an invitee by keepsy_id + ship all historical MKs
+  final inviteInitiator = InviteInitiator(
+    prekeys: prekeyApi,
+    invites: inviteApi,
     identity: identityService,
     aks: albumKeyStore,
   );
@@ -178,6 +190,7 @@ void main() async {
         Provider<MemberDirectory>.value(value: memberDirectory),
         Provider<EpochProcessor>.value(value: epochProcessor),
         Provider<EpochRotator>.value(value: epochRotator),
+        Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<SodiumSumo>.value(value: sodium),
       ],
       child: const KeepsyApp(),

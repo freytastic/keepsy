@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/freytastic/keepsy/internal/apierr"
+	"github.com/freytastic/keepsy/internal/handle"
 	"github.com/freytastic/keepsy/internal/middleware"
+	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -22,14 +25,21 @@ type Notifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }
 
-// Handler routes the five §2.2 endpoints into the service layer
+// HandleResolver maps a normalized keepsy_id to its user_id. *repository.UserRepository
+// satisfies it : the by-handle bundle lookup never exposes the resolved UUID
+type HandleResolver interface {
+	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
+}
+
+// Handler routes the §2.2 endpoints + the §6.1 by-handle lookup into the service layer
 type Handler struct {
 	svc      *Service
 	notifier Notifier
+	resolver HandleResolver
 }
 
-func NewHandler(svc *Service, notifier Notifier) *Handler {
-	return &Handler{svc: svc, notifier: notifier}
+func NewHandler(svc *Service, notifier Notifier, resolver HandleResolver) *Handler {
+	return &Handler{svc: svc, notifier: notifier, resolver: resolver}
 }
 
 type upsertIdentityReq struct {
@@ -202,8 +212,45 @@ func (h *Handler) GetPrekeyBundle(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, err)
 		return
 	}
+	h.writeBundle(w, bundle.UserID, bundle, targetID)
+}
+
+// GetPrekeyBundleByHandle handles GET /users/by-handle/{handle}/prekey-bundle
+// It resolves the random keepsy_id to a user_id server side and returns the
+// same bundle shape, but with the user_id field set to the handle , the real
+// UUID never reaches the wire (§6.1 D10). Unknown/invalid handles 404 alike
+func (h *Handler) GetPrekeyBundleByHandle(w http.ResponseWriter, r *http.Request) {
+	if _, ok := middleware.MustGetUserID(w, r); !ok {
+		return
+	}
+	norm, err := handle.Normalize(mux.Vars(r)["handle"])
+	if err != nil {
+		apierr.Write(w, r, apierr.NotFound("user not found"))
+		return
+	}
+	targetID, err := h.resolver.FindUserIDByKeepsyID(r.Context(), norm)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			apierr.Write(w, r, apierr.NotFound("user not found"))
+			return
+		}
+		apierr.Write(w, r, apierr.Internal("handle lookup failed").WithCause(err))
+		return
+	}
+	bundle, err := h.svc.GetPrekeyBundle(r.Context(), targetID)
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	h.writeBundle(w, norm, bundle, targetID)
+}
+
+// writeBundle encodes the bundle JSON and fires the post commit opk_low fanout
+// userIDField is the value of the response "user_id": the real UUID for the
+// by id route, the keepsy_id handle for the by handle route
+func (h *Handler) writeBundle(w http.ResponseWriter, userIDField any, bundle *PrekeyBundle, targetID uuid.UUID) {
 	out := map[string]any{
-		"user_id": bundle.UserID,
+		"user_id": userIDField,
 		"ik_pub":  base64.StdEncoding.EncodeToString(bundle.IKPub),
 		"lk_pub":  base64.StdEncoding.EncodeToString(bundle.LKPub),
 		"spk_pub": base64.StdEncoding.EncodeToString(bundle.SPKPub),
@@ -245,6 +292,25 @@ func KeyByRequesterAndTarget(r *http.Request) string {
 		return ""
 	}
 	return "prekey-bundle:" + uid.String() + ":" + target
+}
+
+// KeyByRequesterAndHandle keys the by-handle lookup limit per (requester, handle)
+// Normalizing first means dash/case variants of one handle share a bucket and
+// cant multiply an attacker's probe budget
+func KeyByRequesterAndHandle(r *http.Request) string {
+	uid, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		return ""
+	}
+	raw := mux.Vars(r)["handle"]
+	if raw == "" {
+		return ""
+	}
+	norm, err := handle.Normalize(raw)
+	if err != nil {
+		norm = raw
+	}
+	return "prekey-bundle-handle:" + uid.String() + ":" + norm
 }
 
 // KeyByRequesterTargetHourly returns (set_key, member) for the distinct
