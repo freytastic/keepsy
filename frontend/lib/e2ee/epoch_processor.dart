@@ -49,6 +49,14 @@ class EpochProcessor {
   // hex(albumId) -> tail of the in flight chain : new events queue behind it
   final Map<String, Future<void>> _chains = {};
 
+  // Fires after a successful _backfillJoin + postJoinComplete : main.dart
+  // listens to refresh AppState.albums for the freshly joined album. We
+  // emit AFTER the receipt POST succeeds so a listener can trust the keys
+  // are durably installed
+  final StreamController<Uint8List> _joined =
+      StreamController<Uint8List>.broadcast();
+  Stream<Uint8List> get joinedAlbums => _joined.stream;
+
   EpochProcessor({
     required EpochApi api,
     required IdentityService identity,
@@ -133,23 +141,33 @@ class EpochProcessor {
   // backfill:true) then posts a single join_complete receipt for 'current'
   // ek_pub_admin is the shared X3DH ephemeral carried on the delivered wraps
   Future<void> _backfillJoin(Uint8List albumId, int current) async {
+    final albumStr = _uuidString(albumId);
     Uint8List? ekPubAdmin;
     for (var e = 0; e <= current; e++) {
       final ek = await _installEpoch(albumId, e, backfill: true);
       ekPubAdmin ??= ek;
     }
-    if (ekPubAdmin == null || _invites == null) return;
+    if (ekPubAdmin == null) return;
+    if (_invites == null) return;
     final msg = joinCompleteMsg(albumId, current, ekPubAdmin);
     final sig = await _identity.useIk<Uint8List>((seed) async {
       final kp = await KeyHandleAdapter.toEd25519(seed);
       return Sign.sign(kp, msg);
     });
     await _invites.postJoinComplete(
-      albumId: _uuidString(albumId),
+      albumId: albumStr,
       epoch: current,
       ekPubAdmin: ekPubAdmin,
       sig: sig,
     );
+    _joined.add(albumId);
+  }
+
+  // Close the joinedAlbums stream. Tests + the eventual app shutdown path
+  // call this : the runtime app holds the processor for its lifetime so
+  // normal use never invokes it
+  void dispose() {
+    _joined.close();
   }
 
   // Fetch + verify + derive + decrypt + install one epoch's wrap. Returns the

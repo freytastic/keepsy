@@ -104,31 +104,13 @@ class EpochRotator {
         Uint8List memberToken
       })>[];
       for (final r in recipients) {
-        final sw = Stopwatch()..start();
         final bundle = await _prekeys.fetchPrekeyBundle(r.userId);
-        print('[perf] rotate: fetchPrekeyBundle(GET) '
-            '${sw.elapsedMilliseconds}ms');
-
-        sw
-          ..reset()
-          ..start();
         await bundle.verify(now: _now);
-        print('[perf] rotate: bundle.verify ${sw.elapsedMilliseconds}ms');
-
-        sw
-          ..reset()
-          ..start();
         final init = await X3dhSession.initiate(
           bundle: bundle,
           albumId: albumIdBytes,
           identity: _identity,
         );
-        print('[perf] rotate: X3dhSession.initiate '
-            '${sw.elapsedMilliseconds}ms');
-
-        sw
-          ..reset()
-          ..start();
         final wrap = await _wrapMK(
           sk: init.sharedSecret,
           mk: mk,
@@ -137,7 +119,6 @@ class EpochRotator {
         );
         init.sharedSecret.fillRange(0, init.sharedSecret.length, 0);
         final senderMsg = await _buildSenderMsg(albumIdBytes, epoch, wrap);
-        print('[perf] rotate: wrapMK ${sw.elapsedMilliseconds}ms');
 
         partials.add((
           ekPub: init.ekPub,
@@ -149,7 +130,6 @@ class EpochRotator {
       }
 
       // Single IK fetch : sign all sender msgs, compute hashes, sign envelope
-      final swSign = Stopwatch()..start();
       final tokens = recipients.map((r) => r.memberToken).toList();
       final memberSetHash = await _memberSetHash(tokens);
       final signed = await _identity
@@ -175,8 +155,6 @@ class EpochRotator {
         final envSig = await Sign.sign(kp, envMsg);
         return (sender: senderSigs, envelope: envSig);
       });
-      print('[perf] rotate: signAll(${partials.length}+1) '
-          '${swSign.elapsedMilliseconds}ms');
 
       final wraps = <SetEpochWrap>[
         for (var i = 0; i < partials.length; i++)
@@ -189,12 +167,8 @@ class EpochRotator {
           )
       ];
       final envelopeSig = signed.envelope;
-      final swPost = Stopwatch()..start();
 
       // POST /albums/{id}/epoch. Server validates everything atomically
-      swPost
-        ..reset()
-        ..start();
       await _epochs.setEpoch(
         _uuidStringFromBytes(albumIdBytes),
         SetEpochRequest(
@@ -204,21 +178,16 @@ class EpochRotator {
           envelopeSig: envelopeSig,
         ),
       );
-      print('[perf] rotate: setEpoch(POST) ${swPost.elapsedMilliseconds}ms');
 
       //install MK locally. installVerified is idempotent on byte
       // equal re install so if a fanout race already installed it (via §4.2
       // responder path) we no op cleanly
-      swPost
-        ..reset()
-        ..start();
       await _aks.installVerified(
         albumId: albumIdBytes,
         epoch: epoch,
         mk: mk,
         backfill: false,
       );
-      print('[perf] rotate: installVerified ${swPost.elapsedMilliseconds}ms');
     } finally {
       mk.fillRange(0, mk.length, 0);
     }
