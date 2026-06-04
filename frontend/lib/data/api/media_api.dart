@@ -12,7 +12,16 @@ import 'api_client.dart';
 // PUT to S3, confirm. It's in lib/data/api/ since it touches package:http
 // and the bearer auth pipeline : lib/e2ee/ stays free of those imports
 
-class MediaApi {
+// MediaApiInterface : the read path slice MediaCacheManager depends on
+// Carved out so cache tests can stub without faking the upload pipeline
+abstract class MediaApiInterface {
+  Future<List<MediaRecord>> listMedia(String albumId);
+  Future<String> requestDownloadURL(String albumId, String mediaId,
+      {String asset = 'file'});
+  Future<Uint8List> downloadCiphertext(String url);
+}
+
+class MediaApi implements MediaApiInterface {
   final ApiClient _api;
   // S3 PUT goes through bare http.Client : the presigned URL carries auth
   // already (no Bearer header needed) and ApiClient would helpfully retry on

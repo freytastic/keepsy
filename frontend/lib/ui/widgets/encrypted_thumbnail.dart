@@ -1,29 +1,25 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/e2ee/file_decryptor.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/widgets/encrypted_image.dart';
 
-// EncryptedThumbnail : renders the thumb cipher. Falls through to the
-// full EncryptedImage when the row predates or is a video (no
-// thumb minted at upload time). 20 KB AES-GCM blob, single MethodChannel
-// trip for MK, then full decrypt before any pixel hits screen (same P5
-// rule as EncryptedImage)
+// EncryptedThumbnail : routes through MediaCacheManager for the thumb cipher
+// Falls through to the full EncryptedImage when the row has no thumb (legacy
+// rows or videos). Same rule : full decrypt before any pixel
+// hits screen
 
 class EncryptedThumbnail extends StatefulWidget {
   final MediaRecord record;
-  final AlbumKeyStore aks;
-  final MediaApi media;
+  final MediaCacheManager cache;
   final BoxFit fit;
 
   const EncryptedThumbnail({
     super.key,
     required this.record,
-    required this.aks,
-    required this.media,
+    required this.cache,
     this.fit = BoxFit.cover,
   });
 
@@ -59,15 +55,7 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
 
   Future<void> _decrypt() async {
     try {
-      final url = await widget.media.requestDownloadURL(
-          widget.record.albumId, widget.record.id,
-          asset: 'thumb');
-      final pt = await FileDecryptor.downloadAndDecryptThumb(
-        aks: widget.aks,
-        record: widget.record,
-        presignedUrl: url,
-        download: widget.media.downloadCiphertext,
-      );
+      final pt = await widget.cache.getDecrypted(widget.record, thumb: true);
       if (!mounted) return;
       setState(() {
         _bytes = pt;
@@ -91,12 +79,10 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
   @override
   Widget build(BuildContext context) {
     if (!widget.record.hasThumb) {
-      // row or video : fall back to the full file render. Slower i know
-      // but functionally identical so the grid never shows a blank tile
+      // row or video : fall back to full file render (cache path is identical)
       return EncryptedImage(
         record: widget.record,
-        aks: widget.aks,
-        media: widget.media,
+        cache: widget.cache,
         fit: widget.fit,
       );
     }

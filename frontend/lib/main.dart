@@ -14,7 +14,11 @@ import 'package:keepsy/data/api/error_mapper.dart';
 import 'package:keepsy/data/api/invite_json_client.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/crypto/primitives.dart';
+import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/storage/media_ciphertext_cache.dart';
+import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
@@ -23,6 +27,7 @@ import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/invite_api.dart';
+import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
@@ -139,6 +144,20 @@ void main() async {
     aks: albumKeyStore,
   );
 
+  // Media cache : L1 RAM + L2 disk ciphertext. L2 MUST be open before any
+  // album detail screen renders since the cache manager awaits readBlob
+  // on the first widget build. Plaintext lives only in L1 (RAM), never
+  // touches disk
+  final mediaApi = MediaApi(apiClient);
+  final mediaCiphertextCache = await MediaCiphertextCache.open();
+  final mediaPlaintextCache = MediaPlaintextCache();
+  final mediaCacheManager = MediaCacheManager(
+    plaintext: mediaPlaintextCache,
+    ciphertext: mediaCiphertextCache,
+    api: mediaApi,
+    aks: albumKeyStore,
+  );
+
   // WS dispatcher: e2ee.opk_low → replenishOpks (service level mutex
   // collapses bursts), e2ee.epoch_changed → EpochProcessor.handleEvent
   // (per album mutex serialises events). OpkNotFoundException + verification
@@ -150,16 +169,48 @@ void main() async {
     } else if (ev.type == 'e2ee.epoch_changed') {
       final albumStr = ev.payload['album_id'] as String?;
       final epoch = ev.payload['epoch'];
+      final joined = ev.payload['joined'] == true;
       if (albumStr == null || epoch is! int) return;
       final albumId = _uuidStringToBytes(albumStr);
       if (albumId == null) return;
       epochProcessor
-          .handleEvent(albumId: albumId, epoch: epoch)
+          .handleEvent(albumId: albumId, epoch: epoch, joined: joined)
           .catchError((Object e, StackTrace s) {
         developer.log('epoch_changed handler failed',
             name: 'keepsy.e2ee', error: e, stackTrace: s);
       });
+    } else if (ev.type == 'e2ee.media_added') {
+      final albumStr = ev.payload['album_id'] as String?;
+      final mediaStr = ev.payload['media_id'] as String?;
+      if (albumStr == null || mediaStr == null) return;
+      final recJson = ev.payload['record'];
+      if (recJson is Map<String, dynamic>) {
+        try {
+          final r = MediaRecord.fromJson(recJson);
+          unawaited(mediaCacheManager.acceptNewMedia(r));
+        } catch (_) {
+          unawaited(mediaCacheManager.prefetch(albumStr, mediaStr));
+        }
+      } else {
+        unawaited(mediaCacheManager.prefetch(albumStr, mediaStr));
+      }
+      appState.notifyMediaAdded(albumStr, mediaStr);
     }
+  });
+
+  // EpochProcessor signals a brand new album after _backfillJoin + receipt
+  // succeed : refresh AppState.albums so the home grid shows the new tile
+  // Fires post install so a fast tap never lands on a "syncing keys"
+  // placeholder. Composes with both live joined:true events and the cold
+  // start catchUpAll path (both go through _backfillJoin)
+  epochProcessor.joinedAlbums.listen((albumIdBytes) {
+    final albumIdStr = _uuidStringFromBytes(albumIdBytes);
+    appState
+        .refreshAlbumOnJoin(albumIdStr, albumService)
+        .catchError((Object e, StackTrace s) {
+      developer.log('joinedAlbums dispatch failed',
+          name: 'keepsy.e2ee', error: e, stackTrace: s);
+    });
   });
 
   // WS reconnect catch up : every successful WS open replays the cold start
@@ -191,9 +242,10 @@ void main() async {
         Provider<EpochProcessor>.value(value: epochProcessor),
         Provider<EpochRotator>.value(value: epochRotator),
         Provider<InviteInitiator>.value(value: inviteInitiator),
+        Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<SodiumSumo>.value(value: sodium),
       ],
-      child: const KeepsyApp(),
+      child: KeepsyApp(mediaCacheManager: mediaCacheManager),
     ),
   );
 }
@@ -250,8 +302,40 @@ void _showApiError(ApiError err) {
   }
 }
 
-class KeepsyApp extends StatelessWidget {
-  const KeepsyApp({super.key});
+class KeepsyApp extends StatefulWidget {
+  final MediaCacheManager mediaCacheManager;
+  const KeepsyApp({super.key, required this.mediaCacheManager});
+
+  @override
+  State<KeepsyApp> createState() => _KeepsyAppState();
+}
+
+class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Drop L1 (plaintext) on background or screen lock. L2 ciphertext stays on
+  // disk : same security level as what S3 holds
+  // inactive is excluded : image picker + transient interruptions fire
+  // inactive then resume in ~1s , clearing L1 there nukes the thumb cache
+  // every upload and forces L2→decrypt for everything visible on resume
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      widget.mediaCacheManager.onAppPaused();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

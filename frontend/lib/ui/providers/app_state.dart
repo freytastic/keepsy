@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
+import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
@@ -27,6 +30,46 @@ class AppState extends ChangeNotifier {
 
   void setAlbums(List<AlbumModel> newAlbums) {
     _albums = newAlbums;
+    notifyListeners();
+  }
+
+  // Insert a freshly joined album at the front of the home grid. Idempotent
+  // by id : a duplicate signal (live event + cold-start replay) wont double
+  // the tile
+  void prependAlbum(AlbumModel a) {
+    if (_albums.any((x) => x.id == a.id)) return;
+    _albums = [a, ..._albums];
+    notifyListeners();
+  }
+
+  Future<void> refreshAlbumOnJoin(
+      String albumIdStr, AlbumService service) async {
+    try {
+      final a = await service.getAlbum(albumIdStr);
+      if (a != null) {
+        prependAlbum(a);
+        return;
+      }
+      final all = await service.getMyAlbums();
+      setAlbums(all);
+    } catch (e, s) {
+      developer.log('refreshAlbumOnJoin failed',
+          name: 'keepsy.albums', error: e, stackTrace: s);
+    }
+  }
+
+  // last (albumId, mediaId) seen on e2ee.media_added
+  // AlbumDetailScreen watches AppState and re-runs _loadMedia when the
+  // matching album_id arrives. Tuple is overwritten on each event : the
+  // screen tracks last seen locally so it only reacts once per id
+  String? _lastMediaAddedAlbumId;
+  String? _lastMediaAddedMediaId;
+  String? get lastMediaAddedAlbumId => _lastMediaAddedAlbumId;
+  String? get lastMediaAddedMediaId => _lastMediaAddedMediaId;
+
+  void notifyMediaAdded(String albumId, String mediaId) {
+    _lastMediaAddedAlbumId = albumId;
+    _lastMediaAddedMediaId = mediaId;
     notifyListeners();
   }
 
