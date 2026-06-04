@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
@@ -42,11 +43,39 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _loadingMedia = true;
   bool _uploading = false;
 
+  //  track the last (album,media) tuple we acted on so a
+  // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
+  // _appState is captured in didChangeDependencies for symmetric add/remove
+  String? _lastSeenMediaAddedId;
+  AppState? _appState;
+
   @override
   void initState() {
     super.initState();
     _media = widget.mediaApi ?? MediaApi(ApiClient());
     _loadMembers();
+    _loadMedia();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = context.read<AppState>();
+    if (!identical(_appState, next)) {
+      _appState?.removeListener(_onAppStateChange);
+      _appState = next;
+      _appState!.addListener(_onAppStateChange);
+    }
+  }
+
+  void _onAppStateChange() {
+    final s = _appState;
+    if (s == null) return;
+    if (s.lastMediaAddedAlbumId != widget.album.id) return;
+    final mid = s.lastMediaAddedMediaId;
+    if (mid == null) return;
+    if (mid == _lastSeenMediaAddedId) return;
+    _lastSeenMediaAddedId = mid;
     _loadMedia();
   }
 
@@ -99,16 +128,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _pickAndUpload() async {
     if (_uploading) return;
-    // Capture providers up front so we never re read context across async gaps
+    // Flip the guard BEFORE pickImage so a fast double tap on the FAB cant
+    // race past the if return and open the picker twice (PlatformException
+    // already_active). reset in finally so a cancelled pick doesnt sticky lock
+    setState(() => _uploading = true);
     final aks = context.read<AlbumKeyStore>();
+    final cache = context.read<MediaCacheManager>();
     final messenger = ScaffoldMessenger.of(context);
 
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
-
-    setState(() => _uploading = true);
     try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(source: ImageSource.gallery);
+      if (picked == null) return;
       final bytes = await picked.readAsBytes();
       final albumIdBytes = _uuidStringToBytes(widget.album.id);
       if (albumIdBytes == null) throw Exception('bad album id');
@@ -126,6 +157,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         mimeType: picked.mimeType ?? 'image/jpeg',
       );
       await _media.upload(albumId: widget.album.id, envelope: env);
+      // Seed before _loadMedia : the grid rebuild that fires when setState
+      // swaps _items will hit L1 instead of going to S3
+      await cache.seedFromUpload(albumId: widget.album.id, env: env);
       await _loadMedia();
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
@@ -136,6 +170,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   void dispose() {
+    _appState?.removeListener(_onAppStateChange);
     if (widget.mediaApi == null) _media.dispose();
     super.dispose();
   }
@@ -200,7 +235,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     items: _items,
                     loading: _loadingMedia,
                     dark: dark,
-                    media: _media,
                   ),
           ),
         ],
@@ -231,13 +265,11 @@ class _MediaGrid extends StatelessWidget {
   final List<MediaRecord> items;
   final bool loading;
   final bool dark;
-  final MediaApi media;
 
   const _MediaGrid({
     required this.items,
     required this.loading,
     required this.dark,
-    required this.media,
   });
 
   @override
@@ -248,7 +280,7 @@ class _MediaGrid extends StatelessWidget {
     if (items.isEmpty) {
       return _MediaEmpty(dark: dark);
     }
-    final aks = context.read<AlbumKeyStore>();
+    final cache = context.read<MediaCacheManager>();
     return GridView.builder(
       padding: const EdgeInsets.all(8),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -267,12 +299,11 @@ class _MediaGrid extends StatelessWidget {
             MaterialPageRoute(
               builder: (_) => PhotoViewerScreen(
                 record: items[i],
-                aks: aks,
-                media: media,
+                cache: cache,
               ),
             ),
           ),
-          child: EncryptedThumbnail(record: items[i], aks: aks, media: media),
+          child: EncryptedThumbnail(record: items[i], cache: cache),
         ),
       ),
     );

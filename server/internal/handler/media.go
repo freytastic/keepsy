@@ -145,6 +145,10 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	uploaderUserID, ok := middleware.MustGetUserID(w, r)
+	if !ok {
+		return
+	}
 	var req confirmUploadReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
@@ -155,7 +159,7 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.Validation("invalid media_id").WithCause(err))
 		return
 	}
-	if err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID); err != nil {
+	if err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID, uploaderUserID); err != nil {
 		apierr.Write(w, r, err)
 		return
 	}

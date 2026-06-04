@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/google/uuid"
 )
 
@@ -43,6 +45,19 @@ type ObjectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
+// Notifier matches *ws.Hub.EmitToUsers : ConfirmUpload fanout uses it so the
+// e2ee.media_added event reaches every active album member within ~1s of the
+// row going confirmed. Mirrors the pattern in internal/e2ee/invite/handler.go
+type Notifier interface {
+	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
+}
+
+// MemberLookup matches *invite.Repo.ActiveMemberUserIDs : the existing repo
+// satisfies it implicitly
+type MemberLookup interface {
+	ActiveMemberUserIDs(ctx context.Context, albumID uuid.UUID) ([]uuid.UUID, error)
+}
+
 // PresignedUpload mirrors storage.PresignedUpload : duplicated here so the
 // service layer doesnt force handler tests to import internal/storage
 type PresignedUpload struct {
@@ -51,13 +66,18 @@ type PresignedUpload struct {
 }
 
 type MediaService struct {
-	repo   MediaStore
-	epochs EpochLookup
-	s3     ObjectStore
+	repo     MediaStore
+	epochs   EpochLookup
+	s3       ObjectStore
+	notifier Notifier
+	lookup   MemberLookup
 }
 
-func NewMediaService(repo MediaStore, epochs EpochLookup, s3 ObjectStore) *MediaService {
-	return &MediaService{repo: repo, epochs: epochs, s3: s3}
+// NewMediaService : notifier + lookup are nil-safe so tests that don't
+// exercise the fanout can keep the old 3-arg shape via wrapper. The
+// production wiring in cmd/server/main.go always passes both
+func NewMediaService(repo MediaStore, epochs EpochLookup, s3 ObjectStore, notifier Notifier, lookup MemberLookup) *MediaService {
+	return &MediaService{repo: repo, epochs: epochs, s3: s3, notifier: notifier, lookup: lookup}
 }
 
 // Wrap byte budgets pinned by the §1.1 wrap format (VER=0x01) and §4.1 wrap
@@ -204,7 +224,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 // ConfirmUpload validates the S3 object against the claimed size + sha256
 // On match : flips confirmed=TRUE. On mismatch : DELETEs the S3 object +
 // pending row. The client gets a typed error so it can retry the whole flow
-func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID uuid.UUID) error {
+func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID) error {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
@@ -253,6 +273,61 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID uuid.
 
 	if err := s.repo.MarkConfirmed(ctx, mediaID, albumID); err != nil {
 		return apierr.Internal("failed to mark confirmed").WithCause(err)
+	}
+
+	// Fanout e2ee.media_added to every active member EXCEPT the uploader
+	// The uploader's UI updates from the local upload success path : sending
+	// them the event back would only re trigger _loadMedia and a wasted
+	// prefetch for ciphertext they already have in memory
+	// Payload embeds the full record (same shape as ListMedia) so recipients
+	// can warm L2 without a separate listMedia roundtrip
+	if s.notifier != nil && s.lookup != nil {
+		go func() {
+			bg := context.Background()
+			members, err := s.lookup.ActiveMemberUserIDs(bg, albumID)
+			if err != nil {
+				slog.Warn("media_added: lookup failed", "err", err, "album_id", albumID)
+				return
+			}
+			ids := make([]uuid.UUID, 0, len(members))
+			for _, m := range members {
+				if m == uploaderUserID {
+					continue
+				}
+				ids = append(ids, m)
+			}
+			if len(ids) == 0 {
+				return
+			}
+			rec := map[string]any{
+				"id":             mediaID,
+				"album_id":       albumID,
+				"uploader_token": base64.StdEncoding.EncodeToString(row.UploaderToken),
+				"wrap_nonce":     base64.StdEncoding.EncodeToString(row.WrapNonce),
+				"wrap_tag_ct":    base64.StdEncoding.EncodeToString(row.WrapTagCT),
+				"epoch_tag":      row.EpochTag,
+				"blob_size":      row.BlobSize,
+				"blob_sha256":    base64.StdEncoding.EncodeToString(row.BlobSHA256),
+				"media_type":     row.MediaType,
+				"mime_type":      row.MimeType,
+				"created_at":     row.CreatedAt,
+			}
+			if row.ThumbSize != nil {
+				rec["thumb_wrap_nonce"] = base64.StdEncoding.EncodeToString(row.ThumbWrapNonce)
+				rec["thumb_wrap_tag_ct"] = base64.StdEncoding.EncodeToString(row.ThumbWrapTagCT)
+				rec["thumb_size"] = *row.ThumbSize
+				rec["thumb_sha256"] = base64.StdEncoding.EncodeToString(row.ThumbSHA256)
+			}
+			if err := s.notifier.EmitToUsers(bg, ids, ws.EventMediaAdded, map[string]any{
+				"album_id": albumID.String(),
+				"media_id": mediaID.String(),
+				"record":   rec,
+			}); err != nil {
+				slog.Warn("media_added: emit failed", "err", err, "album_id", albumID)
+			}
+		}()
+	} else {
+		slog.Warn("media_added: notifier or lookup is nil — fanout skipped", "album_id", albumID)
 	}
 	return nil
 }

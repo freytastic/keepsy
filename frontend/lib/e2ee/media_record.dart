@@ -47,6 +47,29 @@ class MediaRecord {
 
   bool get hasThumb => thumbWrapNonce != null;
 
+  // Mirror of fromJson : produces the same wire shape ListMedia emits
+  // Used by the L2 ciphertext cache to persist rows in records.db so a
+  // restart can still decrypt offline without re listing the album
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'album_id': albumId,
+        'uploader_token': uploaderToken,
+        'wrap_nonce': base64Encode(wrapNonce),
+        'wrap_tag_ct': base64Encode(wrapTagCT),
+        'epoch_tag': epochTag,
+        'blob_size': blobSize,
+        'blob_sha256': base64Encode(blobSha256),
+        'media_type': mediaType,
+        'mime_type': mimeType,
+        'created_at': createdAt.toIso8601String(),
+        if (thumbWrapNonce != null)
+          'thumb_wrap_nonce': base64Encode(thumbWrapNonce!),
+        if (thumbWrapTagCT != null)
+          'thumb_wrap_tag_ct': base64Encode(thumbWrapTagCT!),
+        if (thumbSize != null) 'thumb_size': thumbSize,
+        if (thumbSha256 != null) 'thumb_sha256': base64Encode(thumbSha256!),
+      };
+
   factory MediaRecord.fromJson(Map<String, dynamic> json) {
     final thumbNonce = json['thumb_wrap_nonce'] as String?;
     final thumbTag = json['thumb_wrap_tag_ct'] as String?;

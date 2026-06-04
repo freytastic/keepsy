@@ -1,28 +1,24 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/e2ee/file_decryptor.dart';
+import 'package:keepsy/e2ee/media_record.dart';
 
-// EncryptedImage : renders a §5.1 encrypted photo. The full decrypt happens
-// before any pixel hits the screen (P5 / §5.2 DoD) : on tamper the user
-// sees a clean error tile, never a half decrypted JPEG. Plaintext bytes are
-// held in this widget's State only : not cached to disk in §5.2 (the §2.13
-// at rest plaintext cache is a §5.x follow up)
+// EncryptedImage : renders an encrypted photo through MediaCacheManager
+// L1 (RAM) -> L2 (disk ciphertext) -> L3 (S3). The full decrypt completes
+// before any pixel hits the screen , so a tamper surfaces as
+// a clean error tile, never a half decrypted JPEG
 
 class EncryptedImage extends StatefulWidget {
   final MediaRecord record;
-  final AlbumKeyStore aks;
-  final MediaApi media;
+  final MediaCacheManager cache;
   final BoxFit fit;
 
   const EncryptedImage({
     super.key,
     required this.record,
-    required this.aks,
-    required this.media,
+    required this.cache,
     this.fit = BoxFit.cover,
   });
 
@@ -54,14 +50,7 @@ class _EncryptedImageState extends State<EncryptedImage> {
 
   Future<void> _decrypt() async {
     try {
-      final url = await widget.media
-          .requestDownloadURL(widget.record.albumId, widget.record.id);
-      final pt = await FileDecryptor.downloadAndDecrypt(
-        aks: widget.aks,
-        record: widget.record,
-        presignedUrl: url,
-        download: widget.media.downloadCiphertext,
-      );
+      final pt = await widget.cache.getDecrypted(widget.record, thumb: false);
       if (!mounted) return;
       setState(() {
         _bytes = pt;
@@ -73,7 +62,7 @@ class _EncryptedImageState extends State<EncryptedImage> {
         _error = e.reason;
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _error = 'unexpected';

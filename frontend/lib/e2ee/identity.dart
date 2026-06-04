@@ -104,43 +104,16 @@ class IdentityService {
     if (_bootstrapDone.isCompleted) {
       _bootstrapDone = Completer<void>();
     }
-    final swAll = Stopwatch()..start();
 
     try {
-      final sw = Stopwatch()..start();
       await _store.initialize();
-      print('[perf] bootstrap: store.initialize ${sw.elapsedMilliseconds}ms');
-
-      sw
-        ..reset()
-        ..start();
       final keys = await _ensureKeysGenerated();
-      print(
-        '[perf] bootstrap: ensureKeysGenerated '
-        '${sw.elapsedMilliseconds}ms',
-      );
-
       if (!await _labels.isIdentityPublished()) {
-        sw
-          ..reset()
-          ..start();
         await _publishIdentity(keys);
-        print(
-          '[perf] bootstrap: publishIdentity(PUT) '
-          '${sw.elapsedMilliseconds}ms',
-        );
       }
       if (!await _labels.areInitialOpksPublished()) {
-        sw
-          ..reset()
-          ..start();
         await _publishInitialOpks(keys);
-        print(
-          '[perf] bootstrap: publishInitialOpks(POST) '
-          '${sw.elapsedMilliseconds}ms',
-        );
       }
-      print('[perf] bootstrap: TOTAL ${swAll.elapsedMilliseconds}ms');
       _bootstrapDone.complete();
     } catch (e, s) {
       _bootstrapDone.completeError(e, s);
@@ -191,7 +164,6 @@ class IdentityService {
     // Generate every key first, then persist the whole set in one putMany.
     // 23 separate native puts (each re-encrypting + rewriting the entire
     // envelope) was the bootstrap bottleneck
-    final swGen = Stopwatch()..start();
     final entries = <({String label, Uint8List plaintext})>[];
     final seeds = <Uint8List>[];
 
@@ -225,14 +197,9 @@ class IdentityService {
       entries.add((label: '$kLabelOpkPrefix$i', plaintext: priv));
       opks.add(PrekeyOpk(idx: i, keyPub: kp.publicKey));
     }
-    print(
-      '[perf] genKeys: generate ${entries.length} keys (crypto) '
-      '${swGen.elapsedMilliseconds}ms',
-    );
 
     // Single batched persist. Seeds are zeroed once the bytes have been
     // handed to the store, whether putMany succeeds or throws
-    final swPut = Stopwatch()..start();
     final List<KeyHandle> handles;
     try {
       handles = await _store.putMany(entries);
@@ -241,20 +208,11 @@ class IdentityService {
         s.fillRange(0, s.length, 0);
       }
     }
-    print(
-      '[perf] genKeys: putMany(${entries.length}) '
-      '${swPut.elapsedMilliseconds}ms',
-    );
 
     // handles[i] aligns with entries[i] : same order in, same order out
-    final swLabels = Stopwatch()..start();
     for (var i = 0; i < handles.length; i++) {
       await _labels.set(entries[i].label, handles[i].id);
     }
-    print(
-      '[perf] genKeys: labels.set x${handles.length} '
-      '${swLabels.elapsedMilliseconds}ms',
-    );
 
     return _BootstrapKeys(
       ikHandle: handles[0],

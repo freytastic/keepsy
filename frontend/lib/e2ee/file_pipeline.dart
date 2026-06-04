@@ -53,6 +53,12 @@ class UploadEnvelope {
   final Uint8List? thumbWrapNonce;
   final Uint8List? thumbWrapTagCT;
   final Uint8List? thumbSha256;
+  // Cleartext bytes carried alongside the wire for the post upload cache
+  // seed : the uploader already has the plaintext in memory, no reason to
+  // pay an L3 fetch + decrypt to render their own freshly uploaded grid
+  // tile. These DO NOT i repeat soldier DO NOT touch disk (L1 RAM only)
+  final Uint8List filePlaintext;
+  final Uint8List? thumbPlaintext;
 
   const UploadEnvelope({
     required this.mediaId,
@@ -64,10 +70,12 @@ class UploadEnvelope {
     required this.blobSha256,
     required this.mediaType,
     required this.mimeType,
+    required this.filePlaintext,
     this.thumbCipherBytes,
     this.thumbWrapNonce,
     this.thumbWrapTagCT,
     this.thumbSha256,
+    this.thumbPlaintext,
   });
 
   bool get hasThumb => thumbCipherBytes != null;
@@ -202,10 +210,12 @@ abstract class FilePipeline {
         blobSha256: blobSha256,
         mediaType: mediaType,
         mimeType: mimeType,
+        filePlaintext: bytesToEncrypt,
         thumbCipherBytes: thumbCipher,
         thumbWrapNonce: thumbWrapNonce,
         thumbWrapTagCT: thumbWrapTagCT,
         thumbSha256: thumbSha256,
+        thumbPlaintext: thumbPlaintext,
       );
     } finally {
       dek.fillRange(0, dek.length, 0);

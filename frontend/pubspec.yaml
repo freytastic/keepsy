@@ -31,6 +31,11 @@ dependencies:
   uuid: ^4.5.1
   collection: ^1.18.0
   image: ^4.3.0
+  # Disk cache for §5.x media : sqflite-backed records.db + raw ciphertext
+  # blobs in <appCacheDir>/keepsy_media/. path_provider gives us cacheDir
+  sqflite: ^2.3.0
+  path_provider: ^2.1.5
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:
@@ -41,9 +46,9 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   test: ^1.25.8
   build_runner: ^2.4.13
-  # Used by integration_test/secure_store/tamper_test.dart to locate the
-  # on disk envelope : pinned directly so a transitive bump cant drop it
-  path_provider: ^2.1.5
+  # sqflite host-test factory : the L2 cache tests open a real sqlite over a
+  # tmp dir, which needs the FFI backend on the test runner
+  sqflite_common_ffi: ^2.3.0
 
 flutter:
   uses-material-design: true
