@@ -99,7 +99,7 @@ func main() {
 	inviteService := invite.NewService(inviteRepo)
 	memberInviteHandler := invite.NewHandler(inviteService, inviteRepo, hub)
 
-	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client})
+	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client}, hub, inviteRepo)
 
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
