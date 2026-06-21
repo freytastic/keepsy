@@ -20,8 +20,9 @@ class MediaCacheKey {
 
   // diskFilename omits epoch_tag : disk blobs are 1:1 with media_id (epoch
   // pins which MK unwraps the DEK, lives on the row in records.db instead)
+  // .kec = "keepsy encrypted cache", sealed under cache_root_key
   String get diskFilename =>
-      asset == CacheAsset.thumb ? '$mediaId.thumb.bin' : '$mediaId.bin';
+      asset == CacheAsset.thumb ? '$mediaId.thumb.kec' : '$mediaId.kec';
 
   @override
   bool operator ==(Object other) =>

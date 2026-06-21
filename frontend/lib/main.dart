@@ -16,9 +16,10 @@ import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:keepsy/data/storage/cache_root_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_ciphertext_cache.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
+import 'package:keepsy/data/storage/media_sealed_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
@@ -92,14 +93,12 @@ void main() async {
   // installVerified). MemberDirectory's fetcher closure is the single point
   // where the e2ee/ layer touches lib/data/api/album_api.dart
   final albumKeyStore = AlbumKeyStore(secureKeyStore);
-  // Warm SecureKeyStore (wrapper key creation) + AlbumKeyStore (_store.list
-  // for _rebuildPresence) during login/landing idle
-  // cold first album installVerified ~700ms for the
-  // _store.list() inside _rebuildPresence, this folds that cost into the
-  // network bound login flow instead of the album create blocking path
-  // Must call SecureKeyStore.initialize first : AlbumKeyStore.initialize calls
-  // _store.list which throws KeyStoreUninitializedException without it
-  unawaited(_prewarmKeyStores(secureKeyStore, albumKeyStore));
+  // SecureKeyStore.initialize (wrapper key load) is cheap and is a hard
+  // prerequisite for both the cache_root_key load below and
+  // AlbumKeyStore.initialize (which calls _store.list)
+
+  await secureKeyStore.initialize();
+  unawaited(_prewarmAlbumKeyStore(albumKeyStore));
   final albumService = AlbumService();
   final memberDirectory = MemberDirectory((albumId) async {
     final members =
@@ -144,16 +143,19 @@ void main() async {
     aks: albumKeyStore,
   );
 
-  // Media cache : L1 RAM + L2 disk ciphertext. L2 MUST be open before any
-  // album detail screen renders since the cache manager awaits readBlob
-  // on the first widget build. Plaintext lives only in L1 (RAM), never
-  // touches disk
+  // Media cache : L1 RAM plaintext + L2 disk plaintext sealed under
+  // cache_root_key. The cache key is pulled out of the keystore exactly once
+  // here (the only per session AndroidKeyStore IPC for media) and held in RAM
+  // for the process lifetime. L2 MUST be open before any album detail screen
+  // renders since the cache manager awaits readBlob on the first widget build
   final mediaApi = MediaApi(apiClient);
-  final mediaCiphertextCache = await MediaCiphertextCache.open();
+  final cacheRootKey = await loadOrCreateCacheRootKey(secureKeyStore);
+  final mediaSealedCache =
+      await MediaSealedCache.open(cacheRootKey: cacheRootKey);
   final mediaPlaintextCache = MediaPlaintextCache();
   final mediaCacheManager = MediaCacheManager(
     plaintext: mediaPlaintextCache,
-    ciphertext: mediaCiphertextCache,
+    ciphertext: mediaSealedCache,
     api: mediaApi,
     aks: albumKeyStore,
   );
@@ -250,12 +252,11 @@ void main() async {
   );
 }
 
-Future<void> _prewarmKeyStores(SecureKeyStore store, AlbumKeyStore aks) async {
+Future<void> _prewarmAlbumKeyStore(AlbumKeyStore aks) async {
   try {
-    await store.initialize();
     await aks.initialize();
   } catch (e, s) {
-    developer.log('keystore prewarm failed (non-fatal)',
+    developer.log('AlbumKeyStore prewarm failed (non-fatal)',
         name: 'keepsy.startup', error: e, stackTrace: s);
   }
 }

@@ -5,7 +5,10 @@ import 'package:provider/provider.dart';
 import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/data/api/auth_api.dart';
 import 'package:keepsy/data/api/user_api.dart';
+import 'package:keepsy/data/session_teardown.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/ui/widgets/shared_widgets.dart';
 import 'package:keepsy/ui/screens/login_screen.dart';
 
@@ -39,7 +42,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Temporarily set to local path to stop compile errors.
       // S3 Network hook goes here.
       context.read<AppState>().setProfileAvatar(img.path);
-      // TODO: Implement S3 network upload flow and updateMe({'avatar_key': ...}) 
+      // TODO: Implement S3 network upload flow and updateMe({'avatar_key': ...})
     }
   }
 
@@ -103,10 +106,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   border: Border.all(
                                       color: K.cardCol(dark), width: 2),
                                 ),
-                                child: const Icon(
-                                    Icons.camera_alt_rounded,
-                                    color: Colors.white,
-                                    size: 12),
+                                child: const Icon(Icons.camera_alt_rounded,
+                                    color: Colors.white, size: 12),
                               ),
                             ),
                           ],
@@ -118,45 +119,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             children: [
                               _editingName
                                   ? TextField(
-                                controller: _nameCtrl,
-                                style: TextStyle(
-                                    color: K.t1(dark),
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700),
-                                decoration: InputDecoration(
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  hintStyle: TextStyle(
-                                      color: K.t3(dark)),
-                                ),
-                                onSubmitted: (v) async {
-                                  // M7 : name is not stored on the server
-                                  // anymore. setProfileName persists locally ;
-                                  // per album name_ct publishing wires in
-                                  // Phase 5 alongside encrypted media display
-                                  state.setProfileName(v);
-                                  setState(
-                                          () => _editingName = false);
-                                },
-                                autofocus: true,
-                              )
+                                      controller: _nameCtrl,
+                                      style: TextStyle(
+                                          color: K.t1(dark),
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w700),
+                                      decoration: InputDecoration(
+                                        border: InputBorder.none,
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.zero,
+                                        hintStyle: TextStyle(color: K.t3(dark)),
+                                      ),
+                                      onSubmitted: (v) async {
+                                        // M7 : name is not stored on the server
+                                        // anymore. setProfileName persists locally ;
+                                        // per album name_ct publishing wires in
+                                        // Phase 5 alongside encrypted media display
+                                        state.setProfileName(v);
+                                        setState(() => _editingName = false);
+                                      },
+                                      autofocus: true,
+                                    )
                                   : Row(
-                                children: [
-                                  Text(
-                                    state.profileName,
-                                    style: TextStyle(
-                                        color: K.t1(dark),
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w700),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: () => setState(() => _editingName = true),
-                                    child: Icon(Icons.edit_rounded, size: 16, color: K.t3(dark)),
-                                  ),
-                                ],
-                              ),
+                                      children: [
+                                        Text(
+                                          state.profileName,
+                                          style: TextStyle(
+                                              color: K.t1(dark),
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w700),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        GestureDetector(
+                                          onTap: () => setState(
+                                              () => _editingName = true),
+                                          child: Icon(Icons.edit_rounded,
+                                              size: 16, color: K.t3(dark)),
+                                        ),
+                                      ],
+                                    ),
                               const SizedBox(height: 4),
                               Text(state.email ?? '',
                                   style: TextStyle(
@@ -175,8 +176,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     InkWell(
                                       onTap: () {
                                         Clipboard.setData(ClipboardData(
-                                            text: formatHandle(
-                                                state.keepsyId!)));
+                                            text:
+                                                formatHandle(state.keepsyId!)));
                                         ScaffoldMessenger.of(context)
                                             .showSnackBar(const SnackBar(
                                                 content:
@@ -262,14 +263,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 fontWeight: FontWeight.w600)),
                         const SizedBox(height: 14),
                         Row(
-                          mainAxisAlignment:
-                          MainAxisAlignment.spaceBetween,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: K.accentOptions.map((c) {
                             final sel = state.accent.value == c.value;
                             return GestureDetector(
                               onTap: () {
                                 state.setAccent(c);
-                                final hex = '#${c.value.toRadixString(16).padLeft(8, '0').substring(2).toUpperCase()}';
+                                final hex =
+                                    '#${c.value.toRadixString(16).padLeft(8, '0').substring(2).toUpperCase()}';
                                 UserService().updateMe({'accent_color': hex});
                               },
                               child: AnimatedContainer(
@@ -281,22 +282,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   shape: BoxShape.circle,
                                   border: sel
                                       ? Border.all(
-                                      color: Colors.white, width: 3)
+                                          color: Colors.white, width: 3)
                                       : null,
                                   boxShadow: sel
                                       ? [
-                                    BoxShadow(
-                                        color:
-                                        c.withOpacity(0.6),
-                                        blurRadius: 14,
-                                        offset:
-                                        const Offset(0, 4))
-                                  ]
+                                          BoxShadow(
+                                              color: c.withOpacity(0.6),
+                                              blurRadius: 14,
+                                              offset: const Offset(0, 4))
+                                        ]
                                       : null,
                                 ),
                                 child: sel
                                     ? const Icon(Icons.check_rounded,
-                                    color: Colors.white, size: 18)
+                                        color: Colors.white, size: 18)
                                     : null,
                               ),
                             );
@@ -313,16 +312,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   // Sign out
                   GestureDetector(
-                    onTap: () {
+                    onTap: () async {
+                      // Tear down session state before leaving the screen :
+                      // auth tokens + the plaintext media cache. Device bound
+                      // key material (cache_root_key, album/identity MKs) is
+                      // kept so re login stays warm
+                      final mediaCache = context.read<MediaCacheManager>();
+                      await performLogout(
+                        auth: AuthService(),
+                        mediaCache: mediaCache,
+                      );
+                      if (!context.mounted) return;
                       Navigator.of(context).pushAndRemoveUntil(
                         PageRouteBuilder(
                           pageBuilder: (_, __, ___) => const LoginScreen(),
                           transitionsBuilder: (_, a, __, child) =>
                               FadeTransition(opacity: a, child: child),
-                          transitionDuration:
-                          const Duration(milliseconds: 400),
+                          transitionDuration: const Duration(milliseconds: 400),
                         ),
-                            (_) => false,
+                        (_) => false,
                       );
                     },
                     child: Container(
@@ -331,8 +339,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       decoration: BoxDecoration(
                         color: Colors.red.withOpacity(0.08),
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                            color: Colors.red.withOpacity(0.25)),
+                        border: Border.all(color: Colors.red.withOpacity(0.25)),
                       ),
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -354,8 +361,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   Center(
                     child: Text('Keepsy v1.0.0',
-                        style: TextStyle(
-                            color: K.t3(dark), fontSize: 12)),
+                        style: TextStyle(color: K.t3(dark), fontSize: 12)),
                   ),
                 ],
               ),
@@ -388,8 +394,7 @@ class _StatCard extends StatelessWidget {
       child: GlassCard(
         dark: dark,
         radius: BorderRadius.circular(18),
-        padding:
-        const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
         child: Column(
           children: [
             Container(
@@ -408,8 +413,7 @@ class _StatCard extends StatelessWidget {
                     fontSize: 20,
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
-            Text(label,
-                style: TextStyle(color: K.t3(dark), fontSize: 11)),
+            Text(label, style: TextStyle(color: K.t3(dark), fontSize: 11)),
           ],
         ),
       ),
@@ -463,11 +467,11 @@ class _ThemeChip extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             boxShadow: selected
                 ? [
-              BoxShadow(
-                  color: accent.withOpacity(0.35),
-                  blurRadius: 12,
-                  offset: const Offset(0, 3))
-            ]
+                    BoxShadow(
+                        color: accent.withOpacity(0.35),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3))
+                  ]
                 : null,
           ),
           child: Center(
@@ -475,9 +479,7 @@ class _ThemeChip extends StatelessWidget {
                 style: TextStyle(
                     color: selected ? Colors.white : K.t2(dark),
                     fontSize: 14,
-                    fontWeight: selected
-                        ? FontWeight.w600
-                        : FontWeight.w400)),
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400)),
           ),
         ),
       ),

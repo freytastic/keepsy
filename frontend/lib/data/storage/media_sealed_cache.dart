@@ -6,33 +6,42 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'package:keepsy/crypto/primitives.dart';
+import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
 import 'media_cache_key.dart';
 
-// L2 disk cache : raw ciphertext blobs byte identical to what S3 holds, plus
-// a sqlite index (records.db) so MediaRecord fields (wrap_nonce/wrap_tag_ct/
-// epoch_tag) survive a restart. Decryption never happens here : that's L1
-// territory via FileDecryptor. Eviction LRU by last_access, default 500 MB
+// L2 disk cache : each blob is sealed under cache_root_key as the Aead wire
+// VER‖NONCE‖TAG‖CT, NOT the S3 ciphertext. readBlob/writeBlob deal in
+// plaintext, seal/unseal is internal. A filesystem dump yields opaque blobs
+// AAD = media_id‖asset binds a file to its slot so a swapped blob auth-fails
+// records.db doubles as the LRU access time index (size = sealed footprint)
 
-class MediaCiphertextCache {
+const String _formatSentinel = 'format_v2';
+
+class MediaSealedCache {
   final Directory _root;
   final Database _db;
+  final Uint8List _cacheKey;
   final int budgetBytes;
 
-  MediaCiphertextCache._(this._root, this._db, this.budgetBytes);
+  MediaSealedCache._(this._root, this._db, this._cacheKey, this.budgetBytes);
 
-  static Future<MediaCiphertextCache> open({
+  static Future<MediaSealedCache> open({
     Directory? rootDir,
-    int budgetBytes = 500 * 1024 * 1024,
+    required Uint8List cacheRootKey,
+    int budgetBytes = 1024 * 1024 * 1024,
   }) async {
+    // getApplicationCacheDirectory : Android app cache dir (covered by
+    // allowBackup="false" in the manifest) / iOS Library/Caches (excluded from
+    // iCloud backup by OS default). Sealed blobs never reach cloud backup
     final root = rootDir ??
         Directory(p.join(
             (await getApplicationCacheDirectory()).path, 'keepsy_media'));
     if (!root.existsSync()) root.createSync(recursive: true);
-    final dbPath = p.join(root.path, 'records.db');
     final db = await openDatabase(
-      dbPath,
+      p.join(root.path, 'records.db'),
       version: 1,
       onCreate: (db, _) async {
         await db.execute('''
@@ -51,10 +60,35 @@ class MediaCiphertextCache {
             'CREATE INDEX idx_records_access ON media_records(last_access)');
       },
     );
-    return MediaCiphertextCache._(root, db, budgetBytes);
+    final cache = MediaSealedCache._(root, db, cacheRootKey, budgetBytes);
+    await cache._migrateIfNeeded();
+    return cache;
   }
 
   Future<void> close() => _db.close();
+
+  // First boot on the sealed format : wipe any prior-layout blobs + index
+  // rows (D9′ : zero prod users, no dual format read path). Also self heals a
+  // wholesale key mismatch (sentinel lost) by starting clean
+  Future<void> _migrateIfNeeded() async {
+    final sentinel = File(p.join(_root.path, _formatSentinel));
+    if (sentinel.existsSync()) return;
+    await _db.delete('media_records');
+    for (final e in _root.listSync()) {
+      if (e is File && _isBlobFile(e.path)) e.deleteSync();
+    }
+    sentinel.writeAsStringSync('2');
+  }
+
+  static bool _isBlobFile(String path) =>
+      path.endsWith('.kec') || path.endsWith('.bin') || path.endsWith('.tmp');
+
+  Uint8List _aad(MediaCacheKey k) => Uint8List.fromList(
+        utf8.encode(k.mediaId) +
+            utf8.encode(k.asset == CacheAsset.thumb ? 'thumb' : 'file'),
+      );
+
+  File _blobFile(MediaCacheKey k) => File(p.join(_root.path, k.diskFilename));
 
   Future<MediaRecord?> readRecord(String mediaId) async {
     final rows = await _db.query('media_records',
@@ -81,30 +115,45 @@ class MediaCiphertextCache {
     );
   }
 
-  File _blobFile(MediaCacheKey k) => File(p.join(_root.path, k.diskFilename));
-
   Future<Uint8List?> readBlob(MediaCacheKey k) async {
     final f = _blobFile(k);
     if (!f.existsSync()) return null;
+    Uint8List wire;
     try {
-      final b = await f.readAsBytes();
+      wire = await f.readAsBytes();
+    } catch (_) {
+      return null;
+    }
+    try {
+      final pt = await Aead.decrypt(wire: wire, key: _cacheKey, aad: _aad(k));
       await _db.update('media_records',
           {'last_access': DateTime.now().millisecondsSinceEpoch},
           where: 'media_id = ?', whereArgs: [k.mediaId]);
-      return b;
-    } catch (_) {
+      return pt;
+    } on AeadAuthFailed {
+      // D12′ : tampered or wrong key (eg cache_root_key changed) → purge + miss
+      await invalidate(k.mediaId);
+      return null;
+    } on FormatException {
+      await invalidate(k.mediaId);
       return null;
     }
   }
 
-  Future<void> writeBlob(MediaCacheKey k, Uint8List ciphertext) async {
+  Future<void> writeBlob(MediaCacheKey k, Uint8List plaintext) async {
+    final sealed = await Aead.encrypt(
+        version: kVerAesGcm,
+        key: _cacheKey,
+        plaintext: plaintext,
+        aad: _aad(k));
     final f = _blobFile(k);
     final tmp = File('${f.path}.tmp');
-    await tmp.writeAsBytes(ciphertext, flush: true);
+    await tmp.writeAsBytes(sealed, flush: true);
     await tmp.rename(f.path);
     final col = k.asset == CacheAsset.thumb ? 'thumb_bytes' : 'blob_bytes';
-    // Make sure the row exists before we update : a writeBlob without a
-    // prior writeRecord (eg prefetch race) would silently no-op otherwise
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // Row may not exist yet (writeBlob without a prior writeRecord, eg a
+    // prefetch race) : insert a placeholder so the size isnt lost
     final exists = await _db.query('media_records',
         columns: ['media_id'],
         where: 'media_id = ?',
@@ -115,19 +164,13 @@ class MediaCiphertextCache {
         'media_id': k.mediaId,
         'album_id': k.albumId,
         'record_json': '{}',
-        col: ciphertext.length,
-        'last_access': DateTime.now().millisecondsSinceEpoch,
+        col: sealed.length,
+        'last_access': now,
       });
     } else {
       await _db.update(
-        'media_records',
-        {
-          col: ciphertext.length,
-          'last_access': DateTime.now().millisecondsSinceEpoch,
-        },
-        where: 'media_id = ?',
-        whereArgs: [k.mediaId],
-      );
+          'media_records', {col: sealed.length, 'last_access': now},
+          where: 'media_id = ?', whereArgs: [k.mediaId]);
     }
     await _evictIfOverBudget();
   }
@@ -140,9 +183,8 @@ class MediaCiphertextCache {
         orderBy: 'last_access ASC');
     for (final row in rows) {
       if (total <= budgetBytes) break;
-      final id = row['media_id'] as String;
       final freed = (row['blob_bytes'] as int) + (row['thumb_bytes'] as int);
-      await invalidate(id);
+      await invalidate(row['media_id'] as String);
       total -= freed;
     }
   }
@@ -151,8 +193,9 @@ class MediaCiphertextCache {
     await _db
         .delete('media_records', where: 'media_id = ?', whereArgs: [mediaId]);
     for (final asset in CacheAsset.values) {
-      final f = File(p.join(_root.path,
-          asset == CacheAsset.thumb ? '$mediaId.thumb.bin' : '$mediaId.bin'));
+      final name =
+          asset == CacheAsset.thumb ? '$mediaId.thumb.kec' : '$mediaId.kec';
+      final f = File(p.join(_root.path, name));
       if (f.existsSync()) f.deleteSync();
     }
   }
@@ -168,7 +211,7 @@ class MediaCiphertextCache {
   Future<void> clearAll() async {
     await _db.delete('media_records');
     for (final e in _root.listSync()) {
-      if (e is File && e.path.endsWith('.bin')) e.deleteSync();
+      if (e is File && e.path.endsWith('.kec')) e.deleteSync();
     }
   }
 
