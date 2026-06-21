@@ -19,7 +19,7 @@ void main() {
         albumId: 'A', mediaId: 'M', epochTag: 7, asset: CacheAsset.file);
     const t = MediaCacheKey(
         albumId: 'A', mediaId: 'M', epochTag: 7, asset: CacheAsset.thumb);
-    expect(k.diskFilename, 'M.bin');
-    expect(t.diskFilename, 'M.thumb.bin');
+    expect(k.diskFilename, 'M.kec');
+    expect(t.diskFilename, 'M.thumb.kec');
   });
 }

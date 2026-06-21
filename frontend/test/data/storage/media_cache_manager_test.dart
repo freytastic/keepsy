@@ -2,13 +2,14 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/storage/media_cache_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_ciphertext_cache.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
+import 'package:keepsy/data/storage/media_sealed_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/media_record.dart';
@@ -16,8 +17,18 @@ import 'package:keepsy/e2ee/media_record.dart';
 import '../../secure_store/mock_secure_key_store.dart';
 
 Uint8List _albumIdBytes() => Uint8List.fromList(List<int>.filled(16, 0xA1));
-Uint8List _mediaIdBytes() => Uint8List.fromList(List<int>.filled(16, 0xB2));
 Uint8List _mk() => Uint8List.fromList(List<int>.filled(32, 0x42));
+Uint8List _cacheKey() => Uint8List.fromList(List<int>.filled(32, 0x11));
+Uint8List _plain() => Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
+
+// Solid color JPEG that decodes cleanly so prepareUpload runs the thumb gen path
+Uint8List _syntheticJpegBytes({int w = 200, int h = 150}) {
+  final image = img.Image(width: w, height: h);
+  for (final p in image) {
+    p.setRgb(120, 200, 80);
+  }
+  return img.encodeJpg(image, quality: 90);
+}
 
 String _uuidString(Uint8List bytes) {
   final s = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -46,7 +57,11 @@ MediaRecord _recordFromEnvelope(UploadEnvelope env) => MediaRecord(
       blobSha256: env.blobSha256,
       mediaType: env.mediaType,
       mimeType: env.mimeType,
-      createdAt: DateTime.utc(2026, 6, 3),
+      createdAt: DateTime.utc(2026, 6, 7),
+      thumbWrapNonce: env.thumbWrapNonce,
+      thumbWrapTagCT: env.thumbWrapTagCT,
+      thumbSize: env.hasThumb ? env.thumbSize : null,
+      thumbSha256: env.thumbSha256,
     );
 
 class _FakeMediaApi implements MediaApiInterface {
@@ -88,7 +103,7 @@ void main() {
   });
 
   late Directory tmp;
-  late MediaCiphertextCache l2;
+  late MediaSealedCache l2;
   late MediaPlaintextCache l1;
   late _FakeMediaApi api;
   late AlbumKeyStore aks;
@@ -99,8 +114,8 @@ void main() {
 
   setUp(() async {
     tmp = Directory.systemTemp.createTempSync('mcm_');
-    l2 =
-        await MediaCiphertextCache.open(rootDir: tmp, budgetBytes: 1024 * 1024);
+    l2 = await MediaSealedCache.open(
+        rootDir: tmp, cacheRootKey: _cacheKey(), budgetBytes: 1024 * 1024);
     l1 = MediaPlaintextCache(budgetBytes: 1024 * 1024);
     api = _FakeMediaApi();
     aks = await _newAks();
@@ -110,7 +125,7 @@ void main() {
       aks: aks,
       albumIdBytes: _albumIdBytes(),
       currentEpoch: 0,
-      plaintext: Uint8List.fromList(List.generate(256, (i) => i & 0xFF)),
+      plaintext: _plain(),
       mediaType: 'photo',
     );
     record = _recordFromEnvelope(env);
@@ -130,53 +145,109 @@ void main() {
   });
 
   test('L1 hit short-circuits L2 and MediaApi', () async {
-    final plaintext = Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
-    l1.put(fileKey, plaintext);
+    l1.put(fileKey, _plain());
     final got = await mgr.getDecrypted(record, thumb: false);
-    expect(got, equals(plaintext));
+    expect(got, equals(_plain()));
     expect(api.requestDownloadURLCalls, 0);
     expect(api.downloadCiphertextCalls, 0);
   });
 
-  test('L2 hit decrypts without S3', () async {
+  test('L2 warm hit returns plaintext without S3 and without useMk', () async {
+    // L2 now holds sealed *plaintext* : seed it directly
     await l2.writeRecord(record);
-    await l2.writeBlob(fileKey, env.cipherBytes);
-    final got = await mgr.getDecrypted(record, thumb: false);
-    final expected = Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
-    expect(got, equals(expected));
+    await l2.writeBlob(fileKey, _plain());
+    final counter = _CountingAks(aks);
+    final mgr2 = MediaCacheManager(
+        plaintext: l1, ciphertext: l2, api: api, aks: counter);
+    final got = await mgr2.getDecrypted(record, thumb: false);
+    expect(got, equals(_plain()));
     expect(api.requestDownloadURLCalls, 0);
     expect(api.downloadCiphertextCalls, 0);
-    // L1 now has the plaintext
+    expect(counter.useMkCalls, 0);
     expect(l1.get(fileKey), isNotNull);
   });
 
-  test('cold miss populates both layers', () async {
+  test('cold miss fetches S3, decrypts, and seals plaintext into L2', () async {
     final got = await mgr.getDecrypted(record, thumb: false);
-    final expected = Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
-    expect(got, equals(expected));
+    expect(got, equals(_plain()));
     expect(api.requestDownloadURLCalls, 1);
     expect(api.downloadCiphertextCalls, 1);
-    expect(await l2.readBlob(fileKey), equals(env.cipherBytes));
+    // L2 now holds the decrypted plaintext (sealed under cache_root_key)
+    expect(await l2.readBlob(fileKey), equals(_plain()));
     expect(await l2.readRecord(record.id), isNotNull);
-    expect(l1.get(fileKey), equals(expected));
+    expect(l1.get(fileKey), equals(_plain()));
   });
 
-  test('prefetch warms L2 without calling useMk', () async {
-    // Wire a counting AKS wrapper to assert useMk is NEVER touched
+  test('acceptNewMedia warms ONLY the thumb, never the full file', () async {
+    // Thumbed envelope : a real JPEG so prepareUpload emits a thumb cipher
+    final tenv = await FilePipeline.prepareUpload(
+      aks: aks,
+      albumIdBytes: _albumIdBytes(),
+      currentEpoch: 0,
+      plaintext: _syntheticJpegBytes(),
+      mediaType: 'photo',
+      mimeType: 'image/jpeg',
+    );
+    expect(tenv.hasThumb, isTrue, reason: 'fixture must have a thumb');
+    final trecord = _recordFromEnvelope(tenv);
+    api.records.add(trecord);
+    api.bytesByUrl['fake://${trecord.id}'] = tenv.cipherBytes;
+    api.bytesByUrl['fake://${trecord.id}#thumb'] = tenv.thumbCipherBytes!;
+
+    final counter = _CountingAks(aks);
+    final mgr2 = MediaCacheManager(
+        plaintext: l1, ciphertext: l2, api: api, aks: counter);
+    await mgr2.acceptNewMedia(trecord);
+
+    final thumbKey = MediaCacheKey(
+        albumId: trecord.albumId,
+        mediaId: trecord.id,
+        epochTag: 0,
+        asset: CacheAsset.thumb);
+    final fileKey2 = MediaCacheKey(
+        albumId: trecord.albumId,
+        mediaId: trecord.id,
+        epochTag: 0,
+        asset: CacheAsset.file);
+    // thumb warmed (tiny, keeps the grid instant) ...
+    expect(await l2.readBlob(thumbKey), isNotNull);
+    expect(counter.useMkCalls, 1);
+    // ... but the full file is NOT instantly pulled : it loads lazily
+    // only when the user actually opens the photo (EncryptedImage)
+    expect(await l2.readBlob(fileKey2), isNull);
+    expect(api.lastRequestedAsset, 'thumb');
+  });
+
+  test('acceptNewMedia on a thumbless record fetches nothing eagerly',
+      () async {
+    // Legacy / no thumb media : the full file loads lazily on view, not on
+    // arrival. Record is still indexed so listMedia ordering etc. is unaffected
     final counter = _CountingAks(aks);
     final mgr2 = MediaCacheManager(
         plaintext: l1, ciphertext: l2, api: api, aks: counter);
     await mgr2.prefetch(record.albumId, record.id);
-    expect(await l2.readBlob(fileKey), equals(env.cipherBytes));
-    expect(await l2.readRecord(record.id), isNotNull);
+    expect(await l2.readBlob(fileKey), isNull);
+    expect(api.requestDownloadURLCalls, 0);
     expect(counter.useMkCalls, 0);
+    expect(await l2.readRecord(record.id), isNotNull);
+  });
+
+  test('seedFromUpload seals plaintext into L2', () async {
+    await mgr.seedFromUpload(albumId: record.albumId, env: env);
+    final mid = env.mediaIdString;
+    final k = MediaCacheKey(
+        albumId: record.albumId,
+        mediaId: mid,
+        epochTag: env.epoch,
+        asset: CacheAsset.file);
+    expect(l1.get(k), equals(env.filePlaintext));
+    expect(await l2.readBlob(k), equals(env.filePlaintext));
   });
 
   test('invalidate drops both layers', () async {
-    final plaintext = Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
-    l1.put(fileKey, plaintext);
+    l1.put(fileKey, _plain());
     await l2.writeRecord(record);
-    await l2.writeBlob(fileKey, env.cipherBytes);
+    await l2.writeBlob(fileKey, _plain());
     await mgr.invalidate(record.id);
     expect(l1.get(fileKey), isNull);
     expect(await l2.readBlob(fileKey), isNull);
@@ -184,19 +255,18 @@ void main() {
   });
 
   test('clearAlbum drops both layers for that album', () async {
-    final plaintext = Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
-    l1.put(fileKey, plaintext);
+    l1.put(fileKey, _plain());
     await l2.writeRecord(record);
-    await l2.writeBlob(fileKey, env.cipherBytes);
+    await l2.writeBlob(fileKey, _plain());
     await mgr.clearAlbum(record.albumId);
     expect(l1.get(fileKey), isNull);
     expect(await l2.readBlob(fileKey), isNull);
   });
 }
 
-// Counts useMk calls so prefetch's "no-MK" guarantee is testable. Delegates
-// every other AlbumKeyStore call to the real instance so installVerified +
-// _present stay consistent
+// Counts useMk calls so the warm-hit "no-MK" guarantee + the cold-fill
+// "exactly one MK" guarantee are testable. Delegates every other call to the
+// real instance so installVerified + _present stay consistent
 class _CountingAks implements AlbumKeyStore {
   final AlbumKeyStore _inner;
   int useMkCalls = 0;
