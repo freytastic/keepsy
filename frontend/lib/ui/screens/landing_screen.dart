@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -82,7 +83,8 @@ class _LandingPageState extends State<LandingPage> {
             if (b != null) albumIds.add(b);
           }
         }
-        unawaited(_runCryptoHygiene(identity, epochProcessor, albumIds));
+        unawaited(
+            _runCryptoHygiene(identity, epochProcessor, appState, albumIds));
       }
     }
 
@@ -105,8 +107,11 @@ class _LandingPageState extends State<LandingPage> {
   // Runs cold start crypto hygiene off the navigation critical path. Album
   // detail screens watch AppState.isSyncing to render a "syncing keys"
   // placeholder until catchUpAll lands the MK
-  Future<void> _runCryptoHygiene(IdentityService identity,
-      EpochProcessor epochProcessor, List<Uint8List> albumIds) async {
+  Future<void> _runCryptoHygiene(
+      IdentityService identity,
+      EpochProcessor epochProcessor,
+      AppState appState,
+      List<Uint8List> albumIds) async {
     try {
       await identity.bootstrap();
     } catch (_) {/* logged via identity.cryptoReady error */}
@@ -122,25 +127,15 @@ class _LandingPageState extends State<LandingPage> {
         trigger: kTargetOpkPool,
       );
     } catch (_) {/* best effort */}
-    if (albumIds.isNotEmpty) {
-      final ids = albumIds.map(_uuidStringFromBytes).toList();
-      if (!mounted) return;
-      context.read<AppState>().markSyncing(ids);
-      try {
-        await epochProcessor.catchUpAll(albumIds);
-      } catch (_) {/* best effort */}
-      if (!mounted) return;
-      for (final id in ids) {
-        context.read<AppState>().clearSyncing(id);
-      }
-    }
-  }
-
-  // 16B UUID -> canonical hex string. Matches the form server uses for IDs
-  String _uuidStringFromBytes(Uint8List b) {
-    final s = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
-    return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
-        '-${s.substring(16, 20)}-${s.substring(20)}';
+    // _appState captured up front : the sync lifecycle outlives this screen
+    // (fire'n'forget + immediate pushReplacement), so it MUST NOT be gated on
+    // `mounted`. clearing after unmount is
+    // safe and is the only thing that lifts the "Syncing keys" overlay
+    await syncAlbumKeys(
+      appState: appState,
+      albumIds: albumIds,
+      catchUp: epochProcessor.catchUpAll,
+    );
   }
 
   // 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
@@ -197,5 +192,37 @@ class _LandingPageState extends State<LandingPage> {
         ),
       ),
     );
+  }
+}
+
+// 16B UUID -> canonical hex string. Matches the form the server uses for IDs
+String uuidStringFromBytes(Uint8List b) {
+  final s = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
+      '-${s.substring(16, 20)}-${s.substring(20)}';
+}
+
+// Drives the per album "Syncing encryption keys" overlay around a key catch up
+// Mark on, run, clear in a finally : the overlay state lives in the app level
+// AppState singleton and outlives the (fire'n'forget) screen that triggers it,
+// so cleanup must NOT depend on any widget being mounted. Forgetting to clear
+// (the prior `if (!mounted) return` bug) stranded the overlay forever
+Future<void> syncAlbumKeys({
+  required AppState appState,
+  required List<Uint8List> albumIds,
+  required Future<void> Function(List<Uint8List>) catchUp,
+}) async {
+  if (albumIds.isEmpty) return;
+  final ids = albumIds.map(uuidStringFromBytes).toList();
+  appState.markSyncing(ids);
+  try {
+    await catchUp(albumIds);
+  } catch (e, s) {
+    developer.log('album key catch-up failed',
+        name: 'keepsy.e2ee', error: e, stackTrace: s);
+  } finally {
+    for (final id in ids) {
+      appState.clearSyncing(id);
+    }
   }
 }
