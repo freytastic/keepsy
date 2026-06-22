@@ -131,6 +131,16 @@ func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte
 	}
 	defer tx.Rollback(ctx)
 
+	// Lock the album row to serialize concurrent joins (same pattern as the
+	// epoch rotator). Without this, READ COMMITTED lets two invites both read
+	// active=N below and both insert, overshooting MaxAlbumMembers. The lock
+	// forces the second tx to block until the first commits, so it sees the
+	// updated roster count
+	var locked uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM albums WHERE id = $1 FOR UPDATE`, in.AlbumID).Scan(&locked); err != nil {
+		return nil, err
+	}
+
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
 		return nil, err
@@ -150,6 +160,22 @@ func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte
 			return nil, ErrAlreadyMember
 		}
 		return nil, err
+	}
+
+	// Cap check runs after the already member detection above (so a re invite of
+	// an existing member surfaces ErrAlreadyMember, not ErrAlbumFull) and before
+	// the roster insert. The album row is locked FOR UPDATE above, so this count
+	// is serialized against concurrent joins, a rejection rolls back the identity
+	// row written above
+	var active int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM album_members WHERE album_id = $1 AND revoked_at IS NULL`,
+		in.AlbumID,
+	).Scan(&active); err != nil {
+		return nil, err
+	}
+	if active >= MaxAlbumMembers {
+		return nil, ErrAlbumFull
 	}
 
 	if _, err := tx.Exec(ctx,

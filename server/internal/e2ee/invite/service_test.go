@@ -172,3 +172,14 @@ func TestDeliverExistingUser_AlreadyMember(t *testing.T) {
 		t.Fatalf("err = %v, want E_CONFLICT", err)
 	}
 }
+
+func TestDeliverExistingUser_AlbumFull(t *testing.T) {
+	store := newAlbumStore(2, func(_ context.Context, _ DeliverMemberInput) ([]byte, error) {
+		return nil, ErrAlbumFull
+	})
+	svc := NewService(store)
+	_, _, err := svc.DeliverExistingUser(context.Background(), uuid.New(), nil, "admin", baseInput())
+	if !apierr.IsCode(err, "E_ALBUM_FULL") {
+		t.Fatalf("err = %v, want E_ALBUM_FULL", err)
+	}
+}
