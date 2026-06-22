@@ -156,6 +156,12 @@ func (r *AlbumRepository) LookupMember(ctx context.Context, userID uuid.UUID, al
 
 // AddMember mints a member_token for userID in albumID and inserts the bridge
 // row and album_members row. Returns the new token.
+
+// TEST FIXTURE ONLY. This is a raw DB insert with NO X3DH MK delivery, so a
+// member added this way cannot decrypt anything ("member without keys"). It is
+// retained solely to seed realistic roster fixtures in tests. Production member
+// onboarding MUST go through the E2EE invite path (internal/e2ee/invite,
+// DeliverMember). Do NOT call this from a request handler or service
 func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -287,15 +293,6 @@ func (r *AlbumRepository) UpdateMemberNameCT(ctx context.Context, albumID uuid.U
 		nameCT, albumID, memberToken,
 	)
 	return err
-}
-
-func (r *AlbumRepository) CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error) {
-	var n int
-	err := r.DB.QueryRow(ctx,
-		`SELECT COUNT(*) FROM album_members WHERE album_id = $1 AND revoked_at IS NULL`,
-		albumID,
-	).Scan(&n)
-	return n, err
 }
 
 func (r *AlbumRepository) UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error {

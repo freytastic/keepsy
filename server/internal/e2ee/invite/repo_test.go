@@ -135,6 +135,44 @@ func TestDeliverMember_WritesRowsAndConsumesOPK(t *testing.T) {
 	}
 }
 
+// TestDeliverMember_RejectsWhenAlbumFull proves the MaxAlbumMembers cap is
+// enforced inside the DeliverMember tx: exactly MaxAlbumMembers deliveries
+// succeed, and the next is rejected with ErrAlbumFull (the roster insert rolls
+// back with the identity row written earlier in the tx)
+func TestDeliverMember_RejectsWhenAlbumFull(t *testing.T) {
+	repo, _, pool := testRepo(t)
+	ctx := context.Background()
+
+	albumID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO albums (id, name_ct) VALUES ($1, $2)`, albumID, []byte("nm")); err != nil {
+		t.Fatalf("seed album: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM album_members WHERE album_id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM album_member_identities WHERE album_id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM albums WHERE id = $1`, albumID)
+	})
+
+	deliver := func(userID uuid.UUID) error {
+		_, err := repo.DeliverMember(ctx, DeliverMemberInput{
+			AlbumID:   albumID,
+			UserID:    userID,
+			EKPub:     make([]byte, 32),
+			Envelopes: nil, // repo-level cap test: roster count is what matters
+		})
+		return err
+	}
+
+	for i := range MaxAlbumMembers {
+		if err := deliver(uuid.New()); err != nil {
+			t.Fatalf("delivery %d/%d should succeed, got: %v", i+1, MaxAlbumMembers, err)
+		}
+	}
+	if err := deliver(uuid.New()); !errors.Is(err, ErrAlbumFull) {
+		t.Fatalf("delivery past cap err = %v, want ErrAlbumFull", err)
+	}
+}
+
 func TestIKByMemberToken_And_MarkReceivedHighWaterMark(t *testing.T) {
 	repo, linker, pool := testRepo(t)
 	ctx := context.Background()

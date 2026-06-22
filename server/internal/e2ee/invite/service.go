@@ -23,6 +23,12 @@ const (
 // row already exists : the caller maps it to 409 for idempotent reinvite UX
 var ErrAlreadyMember = errors.New("invite: target already a member of this album")
 
+var ErrAlbumFull = errors.New("invite: album has reached the maximum number of members")
+
+// Onboarding only happens through DeliverExistingUser now, so this is the only
+// point for the cap
+const MaxAlbumMembers = 10
+
 // store is the repo surface DeliverExistingUser needs. Tests substitute a mock
 type store interface {
 	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
@@ -135,6 +141,9 @@ func (s *Service) DeliverExistingUser(ctx context.Context, albumID uuid.UUID, ca
 	})
 	if errors.Is(err, ErrAlreadyMember) {
 		return nil, uuid.Nil, apierr.Conflict("target is already a member of this album")
+	}
+	if errors.Is(err, ErrAlbumFull) {
+		return nil, uuid.Nil, apierr.AlbumFull(err.Error())
 	}
 	if err != nil {
 		return nil, uuid.Nil, err

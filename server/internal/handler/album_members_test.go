@@ -38,12 +38,6 @@ func (m *mockAlbumStore) GetByID(_ context.Context, _ uuid.UUID) (*model.Album, 
 func (m *mockAlbumStore) ListForUser(_ context.Context, _ uuid.UUID) ([]model.AlbumWithMemberInfo, error) {
 	return nil, nil
 }
-func (m *mockAlbumStore) AddMember(_ context.Context, _, _ uuid.UUID, _ string) ([]byte, error) {
-	return nil, nil
-}
-func (m *mockAlbumStore) CountActiveMembers(_ context.Context, _ uuid.UUID) (int, error) {
-	return 0, nil
-}
 func (m *mockAlbumStore) UpdateName(_ context.Context, _ uuid.UUID, _ []byte) error { return nil }
 func (m *mockAlbumStore) UpdateMemberNameCT(_ context.Context, _ uuid.UUID, _, _ []byte) error {
 	return nil
@@ -58,6 +52,33 @@ func membersRouter(store *mockAlbumStore) http.Handler {
 	scoped.Use(middleware.RequireMember(store, "id"))
 	scoped.HandleFunc("/members", h.ListAlbumMembers).Methods(http.MethodGet)
 	return r
+}
+
+// Onboarding must go through POST /invites/existing-user only. The member
+// subrouter registers /members for GET (and never POST), so a POST must be
+// rejected with 405. If anyone re wires an add-member POST handler here, this
+// test fails
+func TestAddMember_LegacyRouteRemoved(t *testing.T) {
+	albumID := uuid.New()
+	callerToken := []byte("callertoken12345678901234567890ab")
+	store := &mockAlbumStore{
+		lookupMemberFn: func(_ context.Context, _, _ uuid.UUID) ([]byte, string, error) {
+			return callerToken, "admin", nil // admin: proves it's the route, not authz, that rejects
+		},
+		listMembersFn: func(_ context.Context, _ uuid.UUID) ([]model.MemberWithProfile, error) {
+			return nil, nil
+		},
+	}
+
+	body := bytes.NewBufferString(`{"user_id":"` + uuid.New().String() + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/albums/"+albumID.String()+"/members", body)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+	membersRouter(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /members status = %d, want 405 (legacy add-member bypass must stay removed)", rec.Code)
+	}
 }
 
 func TestListAlbumMembers_MemberGets200WithList(t *testing.T) {

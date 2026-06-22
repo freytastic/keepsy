@@ -9,12 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	ErrUnauthorized = errors.New("unauthorized")
-	ErrAlbumFull    = errors.New("album has reached the maximum number of members")
-)
+var ErrUnauthorized = errors.New("unauthorized")
 
-const MaxAlbumMembers = 10
+// The album member cap (MaxAlbumMembers) is enforced in the E2EE invite
+// delivery path : internal/e2ee/invite. Onboarding only happens there, so the
+// cap lives next to its only point rather than here
 
 type AlbumStore interface {
 	CreateWithAdmin(ctx context.Context, nameCT []byte, creatorUserID uuid.UUID) (*model.Album, []byte, error)
@@ -22,8 +21,6 @@ type AlbumStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error)
 	LookupMember(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error)
 	ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error)
-	AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error)
-	CountActiveMembers(ctx context.Context, albumID uuid.UUID) (int, error)
 	UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error
 	UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -115,25 +112,4 @@ func (s *AlbumService) UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID
 		return errors.New("name_ct is required")
 	}
 	return s.albumRepo.UpdateMemberNameCT(ctx, albumID, memberToken, nameCT)
-}
-
-// AddMember (P0.2): adds a new member at role='member' with a fresh
-// member_token. The full E2EE invite flow (X3DH MK delivery) lands in P6.
-// Until then this is admin only and returns the new token to the caller.
-func (s *AlbumService) AddMember(ctx context.Context, albumID, requesterID, newUserID uuid.UUID) ([]byte, error) {
-	_, role, err := s.albumRepo.LookupMember(ctx, requesterID, albumID)
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	if role != "admin" && role != "co-admin" {
-		return nil, ErrUnauthorized
-	}
-	count, err := s.albumRepo.CountActiveMembers(ctx, albumID)
-	if err != nil {
-		return nil, err
-	}
-	if count >= MaxAlbumMembers {
-		return nil, ErrAlbumFull
-	}
-	return s.albumRepo.AddMember(ctx, albumID, newUserID, "member")
 }

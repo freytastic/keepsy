@@ -165,7 +165,10 @@ func main() {
 	scoped.HandleFunc("", albumHandler.UpdateAlbum).Methods(http.MethodPatch)
 	scoped.HandleFunc("", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
 	scoped.HandleFunc("/members", albumHandler.ListAlbumMembers).Methods(http.MethodGet)
-	scoped.HandleFunc("/members", albumHandler.AddMember).Methods(http.MethodPost)
+	// Member onboarding goes through the E2EE invite path only
+	// (POST /invites/existing-user). The legacy direct add-member route was
+	// removed: it inserted DB membership without X3DH MK delivery, leaving a
+	// "member without keys" state and bypassing the crypto envelope.
 	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
 	scoped.HandleFunc("/invites/existing-user", memberInviteHandler.DeliverExistingUser).Methods(http.MethodPost)

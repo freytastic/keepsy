@@ -80,16 +80,4 @@ class AlbumService {
       return false;
     }
   }
-
-  Future<bool> addMember(String albumId, String userId) async {
-    try {
-      final response = await _client.post(
-        '/albums/$albumId/members',
-        body: {'user_id': userId},
-      );
-      return response.statusCode == 201;
-    } catch (_) {
-      return false;
-    }
-  }
 }
