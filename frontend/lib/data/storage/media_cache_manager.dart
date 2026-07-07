@@ -1,4 +1,3 @@
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:keepsy/data/api/media_api.dart';
@@ -131,10 +130,7 @@ class MediaCacheManager {
       if (await _l2.readBlob(thumbK) == null) {
         await _coldFill(r, thumbK, thumb: true);
       }
-    } catch (e, s) {
-      developer.log('acceptNewMedia failed',
-          name: 'keepsy.cache', error: e, stackTrace: s);
-    }
+    } catch (_) {}
   }
 
   // Fallback : pre-Fix-5 path, listMedia + dispatch by id. kept for callers
@@ -148,10 +144,7 @@ class MediaCacheManager {
           return;
         }
       }
-    } catch (e, s) {
-      developer.log('prefetch failed',
-          name: 'keepsy.cache', error: e, stackTrace: s);
-    }
+    } catch (_) {}
   }
 
   // Uploader side seed : after PUT+confirm the plaintext is still in process

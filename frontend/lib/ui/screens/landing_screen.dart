@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -217,9 +216,7 @@ Future<void> syncAlbumKeys({
   appState.markSyncing(ids);
   try {
     await catchUp(albumIds);
-  } catch (e, s) {
-    developer.log('album key catch-up failed',
-        name: 'keepsy.e2ee', error: e, stackTrace: s);
+  } catch (_) {
   } finally {
     for (final id in ids) {
       appState.clearSyncing(id);

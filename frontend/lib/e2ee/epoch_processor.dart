@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
@@ -126,10 +125,7 @@ class EpochProcessor {
             await handleEvent(albumId: id, epoch: n);
           }
         }
-      } catch (e, s) {
-        developer.log('catchUpAll failed for album',
-            name: 'keepsy.e2ee', error: e, stackTrace: s);
-      }
+      } catch (_) {}
     }
   }
 

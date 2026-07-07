@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -187,9 +186,7 @@ class _LoginScreenState extends State<LoginScreen>
         duration: Duration(seconds: 6),
       ));
       return;
-    } catch (e, s) {
-      developer.log('signup bootstrap failed',
-          name: 'keepsy.signup', error: e, stackTrace: s);
+    } catch (_) {
       messenger.showSnackBar(const SnackBar(
         content: Text('Encryption setup failed. Please reopen the app.'),
         duration: Duration(seconds: 5),
