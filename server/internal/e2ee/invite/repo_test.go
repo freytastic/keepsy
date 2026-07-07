@@ -135,6 +135,94 @@ func TestDeliverMember_WritesRowsAndConsumesOPK(t *testing.T) {
 	}
 }
 
+// TestDeliverMember_ReactivatesRevokedMember proves a kicked/left member can be
+// re invited: revoke the tombstone, then DeliverMember reuses the SAME
+// member_token, clears revoked_at, resets role to member, and upserts the fresh
+// wraps (no unique/PK collision), rather than raising ErrAlreadyMember
+func TestDeliverMember_ReactivatesRevokedMember(t *testing.T) {
+	repo, _, pool := testRepo(t)
+	ctx := context.Background()
+
+	albumID := uuid.New()
+	targetID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO albums (id, name_ct) VALUES ($1, $2)`, albumID, []byte("nm")); err != nil {
+		t.Fatalf("seed album: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, keepsy_id) VALUES ($1, $2, $3)`,
+		targetID, targetID[:], targetID.String()); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM album_epoch_wraps WHERE album_id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM album_members WHERE album_id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM album_member_identities WHERE album_id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM albums WHERE id = $1`, albumID)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, targetID)
+	})
+
+	first, err := repo.DeliverMember(ctx, DeliverMemberInput{
+		AlbumID: albumID, UserID: targetID, SenderToken: randToken(t),
+		EKPub: make([]byte, 32), Envelopes: envs(0, 1),
+	})
+	if err != nil {
+		t.Fatalf("first deliver: %v", err)
+	}
+	// Promote so we can prove reactivation resets role back to member
+	if _, err := pool.Exec(ctx, `UPDATE album_members SET role = 'admin' WHERE member_token = $1`, first); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	// Kick: tombstone the membership
+	if _, err := pool.Exec(ctx, `UPDATE album_members SET revoked_at = NOW() WHERE member_token = $1`, first); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	// Re invite the revoked member: must succeed and reuse the same token
+	second, err := repo.DeliverMember(ctx, DeliverMemberInput{
+		AlbumID: albumID, UserID: targetID, SenderToken: randToken(t),
+		EKPub: make([]byte, 32), Envelopes: envs(0, 1, 2),
+	})
+	if err != nil {
+		t.Fatalf("re-invite of revoked member should reactivate, got: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("reactivation should reuse the same member_token (M-bridge 1:1 slot)")
+	}
+
+	var role string
+	var revoked bool
+	if err := pool.QueryRow(ctx,
+		`SELECT role, revoked_at IS NOT NULL FROM album_members WHERE member_token = $1`, first,
+	).Scan(&role, &revoked); err != nil {
+		t.Fatalf("read reactivated row: %v", err)
+	}
+	if revoked {
+		t.Fatal("revoked_at should be cleared after reactivation")
+	}
+	if role != "member" {
+		t.Fatalf("role = %q, want member (rejoin as plain member)", role)
+	}
+
+	// Exactly one identity row for the user (slot preserved), and wraps upserted
+	// to cover epochs 0..2 with no duplicate/PK collision
+	var idCount, wrapCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM album_member_identities WHERE album_id = $1`, albumID,
+	).Scan(&idCount); err != nil {
+		t.Fatal(err)
+	}
+	if idCount != 1 {
+		t.Fatalf("identity rows = %d, want 1 (reused slot)", idCount)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM album_epoch_wraps WHERE album_id = $1 AND recipient_token = $2`, albumID, first,
+	).Scan(&wrapCount); err != nil {
+		t.Fatal(err)
+	}
+	if wrapCount != 3 {
+		t.Fatalf("wrap rows = %d, want 3 (epochs 0..2 upserted)", wrapCount)
+	}
+}
+
 // TestDeliverMember_RejectsWhenAlbumFull proves the MaxAlbumMembers cap is
 // enforced inside the DeliverMember tx: exactly MaxAlbumMembers deliveries
 // succeed, and the next is rejected with ErrAlbumFull (the roster insert rolls

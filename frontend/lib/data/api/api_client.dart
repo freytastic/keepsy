@@ -8,6 +8,15 @@ class ApiClient {
   final StorageService _storage = StorageService();
   static Future<bool>? _refreshFuture;
 
+  // Set once at startup. Fired when any album scoped request comes back
+  // E_MEMBER_REVOKED : RequireMember only returns that for the *caller's* own
+  // revoked membership, so this is the durable 403 fallback for the removed
+  // device when the live member_revoked WS event was missed. The argument is
+  // the album id parsed from the request path
+  static void Function(String albumId)? onMemberRevoked;
+
+  static final RegExp _albumIdRe = RegExp(r'/albums/([0-9a-fA-F-]{36})');
+
   Future<Map<String, String>> _headers() async {
     final token = await _storage.getToken();
     return {
@@ -54,7 +63,7 @@ class ApiClient {
   }
 
   Future<http.Response> _sendWithRetry(
-      Future<http.Response> Function() requestAction) async {
+      String path, Future<http.Response> Function() requestAction) async {
     http.Response response = await requestAction();
 
     if (response.statusCode == 401) {
@@ -69,18 +78,23 @@ class ApiClient {
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return response;
     }
-    throw ApiError.fromResponse(response);
+    final err = ApiError.fromResponse(response);
+    if (err.code == 'E_MEMBER_REVOKED' && onMemberRevoked != null) {
+      final m = _albumIdRe.firstMatch(path);
+      if (m != null) onMemberRevoked!(m.group(1)!);
+    }
+    throw err;
   }
 
   Future<http.Response> get(String path) async {
-    return _sendWithRetry(() async {
+    return _sendWithRetry(path, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.get(url, headers: await _headers());
     });
   }
 
   Future<http.Response> post(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(() async {
+    return _sendWithRetry(path, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.post(
         url,
@@ -91,7 +105,7 @@ class ApiClient {
   }
 
   Future<http.Response> put(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(() async {
+    return _sendWithRetry(path, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.put(
         url,
@@ -102,14 +116,14 @@ class ApiClient {
   }
 
   Future<http.Response> delete(String path) async {
-    return _sendWithRetry(() async {
+    return _sendWithRetry(path, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.delete(url, headers: await _headers());
     });
   }
 
   Future<http.Response> patch(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(() async {
+    return _sendWithRetry(path, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.patch(
         url,

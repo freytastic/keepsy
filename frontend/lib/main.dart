@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +29,7 @@ import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/invite_api.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
+import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
@@ -134,6 +134,9 @@ void main() async {
     prekeys: prekeyApi,
     identity: identityService,
     aks: albumKeyStore,
+    // member removal rotates for members known only by token (identity
+    // hidden) : HttpPrekeyApi doubles as the by token bundle fetcher
+    memberBundles: prekeyApi,
   );
   // look up an invitee by keepsy_id + ship all historical MKs
   final inviteInitiator = InviteInitiator(
@@ -160,6 +163,48 @@ void main() async {
     aks: albumKeyStore,
   );
 
+  // member removal : orchestrates revoke→rotate (kick), revoke→wipe (leave),
+  // and the pending rotation recovery. Pure logic lives in the coordinator, the
+  // real API / rotator / cache closures are wired here. Album ids cross the port
+  // boundary as raw 16-byte ids and are rendered to UUID strings for the data
+  // layer inside each closure
+  final memberRemoval = MemberRemovalCoordinator(
+    revoke: (albumId, token) => albumService.removeMember(
+        _uuidStringFromBytes(albumId), base64.encode(token)),
+    activeTokens: (albumId) async {
+      final members =
+          await albumService.listMembers(_uuidStringFromBytes(albumId));
+      return [
+        for (final m in members)
+          if (!m.revoked) base64.decode(base64.normalize(m.memberToken)),
+      ];
+    },
+    currentEpoch: (albumId) => albumKeyStore.latestEpoch(albumId),
+    rotate: (albumId, epoch, recipients) => epochRotator.rotate(
+        albumIdBytes: albumId, epoch: epoch, recipients: recipients),
+    dropDirectory: (albumId, token) => memberDirectory.drop(albumId, token),
+    wipeLocalAlbum: (albumId) async {
+      final albumStr = _uuidStringFromBytes(albumId);
+      await mediaCacheManager.clearAlbum(albumStr);
+      await albumKeyStore.deleteAlbumMKs(albumId);
+      appState.removeAlbum(albumStr);
+    },
+    isPendingRotation: (albumId) async {
+      final cur = await epochApi.getCurrentEpoch(_uuidStringFromBytes(albumId));
+      return cur?.pendingRotation ?? false;
+    },
+  );
+
+  // Durable 403 fallback: if the live member_revoked WS event was
+  // missed, the first album scoped request that comes back E_MEMBER_REVOKED
+  // triggers the same local wipe. Idempotent with the WS path (the album may
+  // already be gone)
+  ApiClient.onMemberRevoked = (albumStr) {
+    final albumId = _uuidStringToBytes(albumStr);
+    if (albumId == null) return;
+    memberRemoval.onSelfRemoved(albumId).catchError((_) {});
+  };
+
   // WS dispatcher: e2ee.opk_low → replenishOpks (service level mutex
   // collapses bursts), e2ee.epoch_changed → EpochProcessor.handleEvent
   // (per album mutex serialises events). OpkNotFoundException + verification
@@ -177,10 +222,7 @@ void main() async {
       if (albumId == null) return;
       epochProcessor
           .handleEvent(albumId: albumId, epoch: epoch, joined: joined)
-          .catchError((Object e, StackTrace s) {
-        developer.log('epoch_changed handler failed',
-            name: 'keepsy.e2ee', error: e, stackTrace: s);
-      });
+          .catchError((_) {});
     } else if (ev.type == 'e2ee.media_added') {
       final albumStr = ev.payload['album_id'] as String?;
       final mediaStr = ev.payload['media_id'] as String?;
@@ -197,6 +239,34 @@ void main() async {
         unawaited(mediaCacheManager.prefetch(albumStr, mediaStr));
       }
       appState.notifyMediaAdded(albumStr, mediaStr);
+    } else if (ev.type == 'e2ee.member_revoked') {
+      // Either I was removed (wipe this album's local data) or another member
+      // was (drop them from the directory so the roster re fetches). The server
+      // emits member_revoked to the removed member specifically, so a self
+      // wipe fires even though ive already left the active set
+      final albumStr = ev.payload['album_id'] as String?;
+      final tokenB64 = ev.payload['member_token'] as String?;
+      if (albumStr == null || tokenB64 == null) return;
+      final albumId = _uuidStringToBytes(albumStr);
+      if (albumId == null) return;
+      final token = base64.decode(base64.normalize(tokenB64));
+      String? myTokenB64;
+      for (final a in appState.albums) {
+        if (a.id == albumStr) {
+          myTokenB64 = a.memberToken;
+          break;
+        }
+      }
+      final isSelf = myTokenB64 != null &&
+          _bytesEqual(base64.decode(base64.normalize(myTokenB64)), token);
+      if (isSelf) {
+        memberRemoval.onSelfRemoved(albumId).catchError((_) {});
+      } else {
+        memberRemoval.onOtherRemoved(albumId, token);
+      }
+      // Tell any open album screen its roster changed so the removed member
+      // disappears live (self case pops the screen anyway; harmless there).
+      appState.notifyMemberChanged(albumStr);
     }
   });
 
@@ -207,12 +277,7 @@ void main() async {
   // start catchUpAll path (both go through _backfillJoin)
   epochProcessor.joinedAlbums.listen((albumIdBytes) {
     final albumIdStr = _uuidStringFromBytes(albumIdBytes);
-    appState
-        .refreshAlbumOnJoin(albumIdStr, albumService)
-        .catchError((Object e, StackTrace s) {
-      developer.log('joinedAlbums dispatch failed',
-          name: 'keepsy.e2ee', error: e, stackTrace: s);
-    });
+    appState.refreshAlbumOnJoin(albumIdStr, albumService).catchError((_) {});
   });
 
   // WS reconnect catch up : every successful WS open replays the cold start
@@ -226,10 +291,7 @@ void main() async {
       if (b != null) ids.add(b);
     }
     if (ids.isEmpty) return;
-    epochProcessor.catchUpAll(ids).catchError((Object e, StackTrace s) {
-      developer.log('reconnect catchUpAll failed',
-          name: 'keepsy.e2ee', error: e, stackTrace: s);
-    });
+    epochProcessor.catchUpAll(ids).catchError((_) {});
   });
 
   runApp(
@@ -243,6 +305,7 @@ void main() async {
         Provider<MemberDirectory>.value(value: memberDirectory),
         Provider<EpochProcessor>.value(value: epochProcessor),
         Provider<EpochRotator>.value(value: epochRotator),
+        Provider<MemberRemovalCoordinator>.value(value: memberRemoval),
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<SodiumSumo>.value(value: sodium),
@@ -255,10 +318,7 @@ void main() async {
 Future<void> _prewarmAlbumKeyStore(AlbumKeyStore aks) async {
   try {
     await aks.initialize();
-  } catch (e, s) {
-    developer.log('AlbumKeyStore prewarm failed (non-fatal)',
-        name: 'keepsy.startup', error: e, stackTrace: s);
-  }
+  } catch (_) {}
 }
 
 // Canonical 8-4-4-4-12 hex form for raw 16B UUIDs. Inline here so main.dart
@@ -282,6 +342,16 @@ Uint8List? _uuidStringToBytes(String s) {
     out[i] = v;
   }
   return out;
+}
+
+// Plain byte compare for "is this my member_token" : not a secrecy check, so a
+// constant time compare isn't needed.
+bool _bytesEqual(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 void _showApiError(ApiError err) {

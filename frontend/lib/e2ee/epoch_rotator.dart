@@ -9,6 +9,7 @@ import 'album_keys.dart';
 import 'epoch_api.dart';
 import 'identity.dart';
 import 'prekey_api.dart';
+import 'prekey_bundle.dart';
 import 'x3dh_session.dart';
 
 // EpochRotator : the initiator side of an epoch transition (§4.1 + §4.2 + §5
@@ -25,10 +26,12 @@ import 'x3dh_session.dart';
 class RotateRecipient {
   // memberToken : 32B raw token (the same bytes that appear in album_members
   // member_token on the server). userId : canonical UUID string used to fetch
-  // the recipient's prekey bundle via GET /users/{id}/prekey-bundle
+  // the recipient's prekey bundle via GET /users/{id}/prekey-bundle. When null
+  // (member removal : the admin knows remaining members only by token, identity
+  // hidden) the rotator fetches by member_token via MemberBundleFetcher instead
   final Uint8List memberToken;
-  final String userId;
-  const RotateRecipient({required this.memberToken, required this.userId});
+  final String? userId;
+  const RotateRecipient({required this.memberToken, this.userId});
 }
 
 class EpochRotator {
@@ -36,6 +39,7 @@ class EpochRotator {
   final PrekeyApi _prekeys;
   final IdentityService _identity;
   final AlbumKeyStore _aks;
+  final MemberBundleFetcher? _memberBundles;
   final Now _now;
 
   EpochRotator({
@@ -43,11 +47,13 @@ class EpochRotator {
     required PrekeyApi prekeys,
     required IdentityService identity,
     required AlbumKeyStore aks,
+    MemberBundleFetcher? memberBundles,
     Now? now,
   })  : _epochs = epochs,
         _prekeys = prekeys,
         _identity = identity,
         _aks = aks,
+        _memberBundles = memberBundles,
         _now = now ?? DateTime.now;
 
   // Bootstrap : first epoch (=0) for a brand new album with the creator as
@@ -104,7 +110,7 @@ class EpochRotator {
         Uint8List memberToken
       })>[];
       for (final r in recipients) {
-        final bundle = await _prekeys.fetchPrekeyBundle(r.userId);
+        final bundle = await _fetchBundle(albumIdBytes, r);
         await bundle.verify(now: _now);
         final init = await X3dhSession.initiate(
           bundle: bundle,
@@ -191,6 +197,23 @@ class EpochRotator {
     } finally {
       mk.fillRange(0, mk.length, 0);
     }
+  }
+
+  // _fetchBundle : by user_id when known (bootstrap / self-wrap), else by
+  // member_token (member removal : identity hidden). A by token recipient with
+  // no MemberBundleFetcher wired is a programming error, not a runtime state
+  Future<PrekeyBundle> _fetchBundle(Uint8List albumIdBytes, RotateRecipient r) {
+    final userId = r.userId;
+    if (userId != null) {
+      return _prekeys.fetchPrekeyBundle(userId);
+    }
+    final fetcher = _memberBundles;
+    if (fetcher == null) {
+      throw StateError(
+          'by-token recipient requires a MemberBundleFetcher (none wired)');
+    }
+    return fetcher.fetchPrekeyBundleByMemberToken(
+        _uuidStringFromBytes(albumIdBytes), r.memberToken);
   }
 
   // _wrapMK : AES-GCM(SK, fresh_nonce, MK, aad = album_id ‖ u32_be(epoch))

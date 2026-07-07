@@ -21,6 +21,7 @@ import (
 type mockAlbumStore struct {
 	lookupMemberFn func(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error)
 	listMembersFn  func(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error)
+	revokeTxFn     func(ctx context.Context, albumID uuid.UUID, callerToken, targetToken []byte) (string, bool, error)
 }
 
 func (m *mockAlbumStore) LookupMember(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error) {
@@ -43,10 +44,16 @@ func (m *mockAlbumStore) UpdateMemberNameCT(_ context.Context, _ uuid.UUID, _, _
 	return nil
 }
 func (m *mockAlbumStore) Delete(_ context.Context, _ uuid.UUID) error { return nil }
+func (m *mockAlbumStore) RevokeMemberTx(ctx context.Context, albumID uuid.UUID, callerToken, targetToken []byte) (string, bool, error) {
+	if m.revokeTxFn != nil {
+		return m.revokeTxFn(ctx, albumID, callerToken, targetToken)
+	}
+	return "member", false, nil
+}
 
 func membersRouter(store *mockAlbumStore) http.Handler {
 	svc := service.NewAlbumService(store)
-	h := NewAlbumHandler(svc)
+	h := NewAlbumHandler(svc, nil, nil)
 	r := mux.NewRouter()
 	scoped := r.PathPrefix("/api/v1/albums/{id}").Subrouter()
 	scoped.Use(middleware.RequireMember(store, "id"))

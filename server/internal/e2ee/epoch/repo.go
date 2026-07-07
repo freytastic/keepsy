@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/freytastic/keepsy/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -229,6 +230,60 @@ func (r *Repo) GetWrap(ctx context.Context, albumID uuid.UUID, epochN int, recip
 	w.Epoch = epochN
 	w.OpkIdxUsed = opk
 	return &w, nil
+}
+
+// reports whether the album is in the transient window bw
+// a member revoke and the admin's rotation : the live active member set differs
+// from the current (max) epoch's recipient set. True when either an active
+// member has no wrap at the current epoch (set shrank / member without keys) or
+// a current epoch recipient is no longer an active member (a revoked member the
+// rotation hasn't dropped yet). Backs the media upload freeze
+func (r *Repo) PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error) {
+	var pending bool
+	err := r.db.QueryRow(ctx, `
+WITH cur AS (
+  SELECT COALESCE(MAX(epoch), -1) AS e FROM album_epochs WHERE album_id = $1
+)
+SELECT
+  EXISTS (
+    SELECT 1 FROM album_members m, cur
+    WHERE m.album_id = $1 AND m.revoked_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM album_epoch_wraps w
+        WHERE w.album_id = $1 AND w.epoch = cur.e AND w.recipient_token = m.member_token)
+  )
+  OR EXISTS (
+    SELECT 1 FROM album_epoch_wraps w, cur
+    WHERE w.album_id = $1 AND w.epoch = cur.e
+      AND NOT EXISTS (
+        SELECT 1 FROM album_members m
+        WHERE m.album_id = $1 AND m.revoked_at IS NULL AND m.member_token = w.recipient_token)
+  )`, albumID).Scan(&pending)
+	return pending, err
+}
+
+// resolves a single member_token to its user_id,
+// scoped to one album so a token that belongs to a different album is treated
+// as not found. Backs the by nickname prekey bundle fetch : the seal is Opened
+// with the token itself (M bridge nonce). repository.ErrMemberNotFound when the
+// row is absent or the seal cannot be opened
+func (r *Repo) UserIDByAlbumMemberToken(ctx context.Context, albumID uuid.UUID, token []byte) (uuid.UUID, error) {
+	var sealed []byte
+	err := r.db.QueryRow(ctx,
+		`SELECT user_id_enc FROM album_member_identities WHERE album_id = $1 AND member_token = $2`,
+		albumID, token,
+	).Scan(&sealed)
+	if err == pgx.ErrNoRows {
+		return uuid.Nil, repository.ErrMemberNotFound
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	u, err := r.linker.Open(sealed, token)
+	if err != nil {
+		return uuid.Nil, repository.ErrMemberNotFound
+	}
+	return u, nil
 }
 
 // UserIDsByMemberTokens resolves a set of member_tokens to their user_ids

@@ -82,9 +82,53 @@ class HandleNotFoundException implements Exception {
   String toString() => 'HandleNotFoundException($handle)';
 }
 
-class HttpPrekeyApi implements PrekeyApi {
+// MemberBundleFetcher : the by nickname bundle lookup used by member removal
+// An admin rotating an album fetches remaining members' bundles by member_token
+// (identity hidden) rather than by user_id, which it does not know. Kept a
+// separate narrow interface so EpochRotator can depend on just this capability
+// and the many PrekeyApi test fakes stay untouched. HttpPrekeyApi implements both
+abstract class MemberBundleFetcher {
+  // GET /albums/{albumId}/members/{member_token}/prekey-bundle. The returned
+  // bundle's userId field carries the member_token, not the real user_id
+  // Throws MemberBundleNotFoundException on 404 (token not in this album)
+  Future<PrekeyBundle> fetchPrekeyBundleByMemberToken(
+    String albumId,
+    Uint8List memberToken,
+  );
+}
+
+// Thrown when a member_token resolves to no member of the album (revoked,
+// removed, or foreign token) : indistinguishable on purpose
+class MemberBundleNotFoundException implements Exception {
+  const MemberBundleNotFoundException();
+  @override
+  String toString() => 'MemberBundleNotFoundException()';
+}
+
+class HttpPrekeyApi implements PrekeyApi, MemberBundleFetcher {
   final PrekeyJsonClient _client;
   HttpPrekeyApi(this._client);
+
+  @override
+  Future<PrekeyBundle> fetchPrekeyBundleByMemberToken(
+    String albumId,
+    Uint8List memberToken,
+  ) async {
+    // member_token goes in the URL path : std base64 has '/' and '+' which
+    // break routing, so carry it as base64url with the padding stripped
+    // (the server accepts padded or unpadded url/std)
+    final tokenPath = base64Url.encode(memberToken).replaceAll('=', '');
+    try {
+      final body = await _client
+          .getJson('/albums/$albumId/members/$tokenPath/prekey-bundle');
+      return PrekeyBundle.fromJson(body);
+    } on PrekeyApiException catch (e) {
+      if (e.httpStatus == 404) {
+        throw const MemberBundleNotFoundException();
+      }
+      rethrow;
+    }
+  }
 
   @override
   Future<void> upsertIdentity({

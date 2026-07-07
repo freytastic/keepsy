@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -123,9 +122,7 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
         creatorMemberToken: creatorMemberToken,
         creatorUserId: creatorUserId,
       );
-    } catch (e, s) {
-      developer.log('album rotate failed',
-          name: 'keepsy.album', error: e, stackTrace: s);
+    } catch (_) {
       messenger.showSnackBar(const SnackBar(
         content: Text('Encryption setup failed for the new album'),
         duration: Duration(seconds: 4),

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -25,16 +26,24 @@ const PresignTTL = 15 * time.Minute
 // surface small + lets tests stub without pulling pgx
 type EpochLookup interface {
 	CurrentEpoch(ctx context.Context, albumID uuid.UUID) (epoch int, exists bool, startedAt time.Time, err error)
+	// tells whether the album's live active member set differs
+	// from the current epoch's recipient set : true during the window between a
+	// revoke and the admin's rotation
+	PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error)
 }
 
 // MediaStore is the slice of *repository.MediaRepository the service needs
 type MediaStore interface {
-	CreatePending(ctx context.Context, m *model.Media) error
+	// it inserts the pending row under the albums row lock,
+	// re checking (atomically with the insert) that epochTag is still current
+	// and that no rotation is pending
+	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
 	MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) error
 	DeletePending(ctx context.Context, mediaID, albumID uuid.UUID) error
 	GetByID(ctx context.Context, mediaID, albumID uuid.UUID) (*model.Media, error)
 	ListConfirmed(ctx context.Context, albumID uuid.UUID) ([]model.Media, error)
 	Delete(ctx context.Context, mediaID, albumID uuid.UUID) error
+	ListAlbumObjectKeys(ctx context.Context, albumID uuid.UUID) ([]repository.MediaObjectKeys, error)
 }
 
 // ObjectStore is the slice of *storage.S3Client the service needs
@@ -140,6 +149,22 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		return nil, apierr.EpochReplay("epoch_tag does not match current epoch")
 	}
 
+	// the stale epoch gate above passes during the
+	// window between a member revoke and the admin's rotation, bcs
+	// MK_current is unchanged. But a photo sealed under it during that window is
+	// readable by the just removed member (they still hold MK_current), which
+	// breaks "future, not past" under the DB-at-rest model. Freeze new
+	// uploads until the active set and the current epoch's recipients match
+	// again : the admin's rotation (or the client's pending rotation recovery)
+	// lifts it. Existing reads are unaffected
+	pending, err := s.epochs.PendingRotation(ctx, albumID)
+	if err != nil {
+		return nil, apierr.Internal("failed to check rotation state").WithCause(err)
+	}
+	if pending {
+		return nil, apierr.EpochPendingRotation("album has a pending epoch rotation ; uploads are frozen until it completes")
+	}
+
 	// M9 : storage_key is server generated random opaque. NEVER carry album_id
 	// or media_id in the path : the S3 host can group objects by key string
 	// even tho the body is ciphertext
@@ -188,8 +213,22 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		row.ThumbSHA256 = in.ThumbSHA256
 	}
 
-	if err := s.repo.CreatePending(ctx, row); err != nil {
-		return nil, apierr.Internal("failed to write pending media").WithCause(err)
+	// Authoritative check + insert, atomic under the albums row lock. A revoke
+	// or rotation that commits between the pre checks above and here is caught
+	// now : the row is only written while the album is genuinely uploadable
+	if err := s.repo.ReserveUploadRow(ctx, row, in.EpochTag); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrNoEpoch):
+			return nil, apierr.Validation("album has no epoch yet ; cannot upload media")
+		case errors.Is(err, repository.ErrEpochMismatch):
+			return nil, apierr.EpochReplay("epoch_tag does not match current epoch")
+		case errors.Is(err, repository.ErrPendingRotation):
+			return nil, apierr.EpochPendingRotation("album has a pending epoch rotation ; uploads are frozen until it completes")
+		case errors.Is(err, repository.ErrAlbumNotFound):
+			return nil, apierr.NotFound("album not found")
+		default:
+			return nil, apierr.Internal("failed to write pending media").WithCause(err)
+		}
 	}
 
 	sha256B64 := base64.StdEncoding.EncodeToString(in.BlobSHA256)
@@ -399,8 +438,49 @@ func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UU
 	if err := s.s3.DeleteObject(ctx, row.StorageKey); err != nil {
 		return apierr.Internal("failed to delete s3 object").WithCause(err)
 	}
+	// Drop the thumbnail object too, else it orphans in storage. Hard delete:
+	// if it can't be removed, keep the row so the whole delete can be retried
+	if row.ThumbKey != nil && *row.ThumbKey != "" {
+		if err := s.s3.DeleteObject(ctx, *row.ThumbKey); err != nil {
+			return apierr.Internal("failed to delete s3 thumb object").WithCause(err)
+		}
+	}
 	if err := s.repo.Delete(ctx, mediaID, albumID); err != nil {
 		return apierr.Internal("failed to delete media row").WithCause(err)
+	}
+	return nil
+}
+
+// deletes every media object (blob + thumbnail) for an album
+// from object storage. Called before the album row is dropped, since the media
+// rows cascade away with it and the S3 objects would otherwise orphan (S3 is
+// not part of the DB cascade)
+
+// Hard delete semantics: it attempts every object (so a single failure doesn't
+// strand the rest), but if ANY delete failed it returns an error so DeleteAlbum
+// keeps the DB row : that row is the only handle left to retry the cleanup
+// S3 DeleteObject is idempotent, so already gone objects don't count as
+// failures and a retry converges
+func (s *MediaService) PurgeAlbumObjects(ctx context.Context, albumID uuid.UUID) error {
+	keys, err := s.repo.ListAlbumObjectKeys(ctx, albumID)
+	if err != nil {
+		return err
+	}
+	var failed int
+	for _, k := range keys {
+		if err := s.s3.DeleteObject(ctx, k.StorageKey); err != nil {
+			slog.Warn("purge: failed to delete blob", "album_id", albumID, "err", err)
+			failed++
+		}
+		if k.ThumbKey != nil && *k.ThumbKey != "" {
+			if err := s.s3.DeleteObject(ctx, *k.ThumbKey); err != nil {
+				slog.Warn("purge: failed to delete thumb", "album_id", albumID, "err", err)
+				failed++
+			}
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("purge: %d object(s) failed to delete for album %s", failed, albumID)
 	}
 	return nil
 }

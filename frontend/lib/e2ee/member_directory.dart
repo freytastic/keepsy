@@ -38,16 +38,21 @@ class MemberDirectory {
     final cached = _cache[aHex]?[tHex];
     if (cached != null) return cached;
     final list = await _fetch(albumId);
-    final albumCache = _cache.putIfAbsent(aHex, () => {});
-    // TODO(§7.x): on member removal, removed tokens stay in albumCache until a
-    // restart : benign here since installVerified rejects replayed wraps from a
-    // former admin via the monotone+sparse rule, but the removal flow PR should
-    // diff against 'list' and drop entries whose token isn't returned anymore
+    // Rebuild the album's slice from the fresh roster so tokens no longer
+    // returned (a removed member) fall out of the cache rather than lingering
+    final albumCache = <String, MemberPubs>{};
     for (final m in list) {
       albumCache[_hex(m.memberToken)] =
           MemberPubs(ikPub: m.ikPub, lkPub: m.lkPub);
     }
+    _cache[aHex] = albumCache;
     return albumCache[tHex];
+  }
+
+  // Evicts one member from the cache : the member_revoked flow calls this so the
+  // next lookup of that token re fetches and sees it gone. No op if not cached
+  void drop(Uint8List albumId, Uint8List memberToken) {
+    _cache[_hex(albumId)]?.remove(_hex(memberToken));
   }
 }
 

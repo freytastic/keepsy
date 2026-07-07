@@ -93,6 +93,10 @@ func MemberSetDrift(message string) *APIError {
 	return &APIError{Code: "E_MEMBER_SET_DRIFT", HTTPStatus: http.StatusConflict, Message: message}
 }
 
+func EpochPendingRotation(message string) *APIError {
+	return &APIError{Code: "E_EPOCH_PENDING_ROTATION", HTTPStatus: http.StatusConflict, Message: message}
+}
+
 func InviteExpired(message string) *APIError {
 	return &APIError{Code: "E_INVITE_EXPIRED", HTTPStatus: http.StatusGone, Message: message}
 }

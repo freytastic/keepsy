@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,16 +10,49 @@ import (
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
 	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
-type AlbumHandler struct {
-	albumService *service.AlbumService
+// MemberNotifier fans out an e2ee event to a set of users. *ws.Hub satisfies it
+type MemberNotifier interface {
+	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }
 
-func NewAlbumHandler(s *service.AlbumService) *AlbumHandler {
-	return &AlbumHandler{albumService: s}
+// MemberResolver turns member_tokens back into user_ids for WS delivery. The
+// epoch repo satisfies it (M bridge unseal)
+type MemberResolver interface {
+	UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uuid.UUID, error)
+}
+
+type AlbumHandler struct {
+	albumService *service.AlbumService
+	notifier     MemberNotifier
+	resolver     MemberResolver
+}
+
+// notifier and resolver may be nil (WS fanout is then skipped) : handler tests
+// that only exercise authz pass nil
+func NewAlbumHandler(s *service.AlbumService, notifier MemberNotifier, resolver MemberResolver) *AlbumHandler {
+	return &AlbumHandler{albumService: s, notifier: notifier, resolver: resolver}
+}
+
+// decodeMemberTokenPath decodes a member_token carried in a URL path. Tokens
+// are minted as 32 raw bytes and emitted to clients as std base64; when a
+// client puts one in a path it must re encode as base64url (the '/' and '+' of
+// std base64 break routing). We accept any of the four base64 alphabets so a
+// client that forgets to strip padding still round trips
+func decodeMemberTokenPath(s string) ([]byte, error) {
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding, base64.URLEncoding,
+		base64.RawStdEncoding, base64.StdEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, nil
+		}
+	}
+	return nil, errors.New("member_token is not valid base64")
 }
 
 type albumDTO struct {
@@ -251,7 +285,76 @@ func (h *AlbumHandler) UpdateMyProfileCT(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RemoveAlbumMember stub , full implementation in p7.1
+// it handles DELETE /albums/{id}/members/{member_token}. It is
+// both the admin kick and the self leave endpoint : the service decides which
+// by comparing the caller's token to the target. On success it emits
+// e2ee.member_revoked to the album's remaining members AND to the removed
+// member specifically (they have already dropped out of the active set, so a
+// plain album broadcast would miss them and they'd only learn via a later 403)
+// The removal is committed before the notify : a fanout failure never leaves a
+// member un revoked
 func (h *AlbumHandler) RemoveAlbumMember(w http.ResponseWriter, r *http.Request) {
-	apierr.Write(w, r, apierr.NotImplemented("member removal not yet implemented"))
+	userID, ok := middleware.MustGetUserID(w, r)
+	if !ok {
+		return
+	}
+	albumID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
+		return
+	}
+	targetToken, err := decodeMemberTokenPath(mux.Vars(r)["token"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid member_token in path").WithCause(err))
+		return
+	}
+
+	res, err := h.albumService.RemoveMember(r.Context(), albumID, userID, targetToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrLastAdmin):
+			apierr.Write(w, r, apierr.Forbidden("cannot remove the last remaining admin; delete the album instead"))
+		case errors.Is(err, service.ErrMemberNotFound):
+			apierr.Write(w, r, apierr.NotFound("no such member in this album"))
+		case errors.Is(err, service.ErrCallerRevoked):
+			apierr.Write(w, r, apierr.MemberRevoked("your access to this album has been revoked"))
+		case errors.Is(err, service.ErrUnauthorized):
+			apierr.Write(w, r, apierr.Forbidden("only admin or co-admin can remove another member"))
+		default:
+			apierr.Write(w, r, apierr.Internal("failed to remove member").WithCause(err))
+		}
+		return
+	}
+
+	if !res.AlreadyRevoked {
+		h.notifyRevoked(r.Context(), albumID, targetToken)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// it emits e2ee.member_revoked to the removed member plus every
+// still active member of the album , any lookup/emit failure is
+// swallowed (the revoke already committed, clients also self heal on their next
+// 403). Runs synchronously : member removal is rare and clients wipe on receipt,
+// so prompt delivery matters more than shaving the response
+func (h *AlbumHandler) notifyRevoked(ctx context.Context, albumID uuid.UUID, removedToken []byte) {
+	if h.notifier == nil || h.resolver == nil {
+		return
+	}
+	tokens := [][]byte{removedToken}
+	if members, err := h.albumService.ListMembers(ctx, albumID); err == nil {
+		for _, m := range members {
+			if !m.Revoked {
+				tokens = append(tokens, m.MemberToken)
+			}
+		}
+	}
+	users, err := h.resolver.UserIDsByMemberTokens(ctx, tokens)
+	if err != nil || len(users) == 0 {
+		return
+	}
+	_ = h.notifier.EmitToUsers(ctx, users, ws.EventMemberRevoked, map[string]any{
+		"album_id":     albumID.String(),
+		"member_token": base64.StdEncoding.EncodeToString(removedToken),
+	})
 }

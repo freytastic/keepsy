@@ -31,15 +31,24 @@ type HandleResolver interface {
 	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
 }
 
-// Handler routes the §2.2 endpoints + the §6.1 by-handle lookup into the service layer
-type Handler struct {
-	svc      *Service
-	notifier Notifier
-	resolver HandleResolver
+// MemberResolver maps an album's member_token back to its user_id (M bridge
+// unseal, scoped to the album). Backs the by nickname bundle fetch the epoch
+// rotator uses to wrap MK_new for members it only knows by token : the resolved
+// UUID never reaches the wire. The epoch repo satisfies it
+type MemberResolver interface {
+	UserIDByAlbumMemberToken(ctx context.Context, albumID uuid.UUID, token []byte) (uuid.UUID, error)
 }
 
-func NewHandler(svc *Service, notifier Notifier, resolver HandleResolver) *Handler {
-	return &Handler{svc: svc, notifier: notifier, resolver: resolver}
+// Handler routes the §2.2 endpoints + the §6.1 by-handle lookup into the service layer
+type Handler struct {
+	svc            *Service
+	notifier       Notifier
+	resolver       HandleResolver
+	memberResolver MemberResolver
+}
+
+func NewHandler(svc *Service, notifier Notifier, resolver HandleResolver, memberResolver MemberResolver) *Handler {
+	return &Handler{svc: svc, notifier: notifier, resolver: resolver, memberResolver: memberResolver}
 }
 
 type upsertIdentityReq struct {
@@ -245,6 +254,69 @@ func (h *Handler) GetPrekeyBundleByHandle(w http.ResponseWriter, r *http.Request
 	h.writeBundle(w, norm, bundle, targetID)
 }
 
+// GetPrekeyBundleByMemberToken handles
+// GET /albums/{id}/members/{member_token}/prekey-bundle
+
+// Mounted under the album membership gate, so the caller is already a member
+// this additionally requires admin/co admin. The member_token is resolved to a
+// user_id server side (scoped to this album, so a token from another album 404s)
+// and the same bundle shape is returned with the identity field set to the
+// member_token : the real UUID and keepsy_id never reach the wire. Like every
+// bundle fetch it consumes an OPK
+func (h *Handler) GetPrekeyBundleByMemberToken(w http.ResponseWriter, r *http.Request) {
+	role, ok := middleware.MustGetMemberRole(r)
+	if !ok {
+		apierr.Write(w, r, apierr.Auth("missing member context"))
+		return
+	}
+	if role != "admin" && role != "co-admin" {
+		apierr.Write(w, r, apierr.Forbidden("only admin or co admin can fetch a member's prekey bundle"))
+		return
+	}
+	albumID, err := uuid.Parse(mux.Vars(r)["id"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
+		return
+	}
+	token, err := decodeMemberTokenPath(mux.Vars(r)["token"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid member_token in path").WithCause(err))
+		return
+	}
+	targetID, err := h.memberResolver.UserIDByAlbumMemberToken(r.Context(), albumID, token)
+	if err != nil {
+		if errors.Is(err, repository.ErrMemberNotFound) {
+			apierr.Write(w, r, apierr.NotFound("no such member in this album"))
+			return
+		}
+		apierr.Write(w, r, apierr.Internal("member lookup failed").WithCause(err))
+		return
+	}
+	bundle, err := h.svc.GetPrekeyBundle(r.Context(), targetID)
+	if err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	// identity field = member_token (opaque), never the resolved UUID
+	h.writeBundle(w, base64.StdEncoding.EncodeToString(token), bundle, targetID)
+}
+
+// decodeMemberTokenPath decodes a member_token carried in a URL path. Tokens
+// are 32 raw bytes emitted to clients as std base64, a client putting one in a
+// path re encodes as base64url (std base64's '/' and '+' break routing). Accept
+// any of the four alphabets so a forgotten padding strip still round-trips
+func decodeMemberTokenPath(s string) ([]byte, error) {
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding, base64.URLEncoding,
+		base64.RawStdEncoding, base64.StdEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("member_token is not valid base64")
+}
+
 // writeBundle encodes the bundle JSON and fires the post commit opk_low fanout
 // userIDField is the value of the response "user_id": the real UUID for the
 // by id route, the keepsy_id handle for the by handle route
@@ -311,6 +383,23 @@ func KeyByRequesterAndHandle(r *http.Request) string {
 		norm = raw
 	}
 	return "prekey-bundle-handle:" + uid.String() + ":" + norm
+}
+
+// KeyByRequesterAndMemberToken keys the by nickname bundle limit per
+// (requester, album, member_token), mirroring the per (requester, target) pair
+// limit on the by id route so an admin rotating an album repeatedly is cheap
+// while token enumeration stays costly
+func KeyByRequesterAndMemberToken(r *http.Request) string {
+	uid, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		return ""
+	}
+	albumID := mux.Vars(r)["id"]
+	token := mux.Vars(r)["token"]
+	if albumID == "" || token == "" {
+		return ""
+	}
+	return "prekey-bundle-token:" + uid.String() + ":" + albumID + ":" + token
 }
 
 // KeyByRequesterTargetHourly returns (set_key, member) for the distinct

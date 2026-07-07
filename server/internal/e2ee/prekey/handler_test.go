@@ -91,7 +91,7 @@ func TestUpsertIdentity_OneShot(t *testing.T) {
 	}
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
-	h := NewHandler(svc, nil, nil)
+	h := NewHandler(svc, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"ik_pub":  base64.StdEncoding.EncodeToString(ikPub),
@@ -142,7 +142,7 @@ func TestPrekeyBundle_OpkLowEmitted(t *testing.T) {
 	svc.SetClock(fixedClock)
 
 	notif := &captureNotifier{ch: make(chan emittedEvent, 1)}
-	h := NewHandler(svc, notif, nil)
+	h := NewHandler(svc, notif, nil, nil)
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodGet, "/users/"+target.String()+"/prekey-bundle", nil, requester)
@@ -181,7 +181,7 @@ func TestPrekeyBundle_DoesNotEmitWhenAtOrAboveThreshold(t *testing.T) {
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
 	notif := &captureNotifier{ch: make(chan emittedEvent, 1)}
-	h := NewHandler(svc, notif, nil)
+	h := NewHandler(svc, notif, nil, nil)
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodGet, "/users/"+uuid.NewString()+"/prekey-bundle", nil, uuid.New())
@@ -232,7 +232,7 @@ func TestPrekeyBundle_ConcurrentConsumesDistinctOPKs(t *testing.T) {
 	}
 
 	svc := NewService(repo)
-	h := NewHandler(svc, nil, nil)
+	h := NewHandler(svc, nil, nil, nil)
 	router := newRouter(h)
 
 	type result struct {
@@ -310,7 +310,7 @@ func TestPrekeyBundleByHandle(t *testing.T) {
 		}
 		return uuid.Nil, repository.ErrUserNotFound
 	}}
-	h := NewHandler(svc, nil, resolver)
+	h := NewHandler(svc, nil, resolver, nil)
 
 	t.Run("valid handle -> 200 with user_id=keepsy_id (not UUID)", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -382,7 +382,7 @@ func TestPrekeyBundleByHandle_RateLimit(t *testing.T) {
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
 	resolver := stubResolver{fn: func(_ context.Context, _ string) (uuid.UUID, error) { return target, nil }}
-	h := NewHandler(svc, nil, resolver)
+	h := NewHandler(svc, nil, resolver, nil)
 
 	r := mux.NewRouter()
 	r.Handle(
@@ -434,7 +434,7 @@ func TestPrekeyBundle_RateLimit(t *testing.T) {
 	}
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
-	h := NewHandler(svc, nil, nil)
+	h := NewHandler(svc, nil, nil, nil)
 
 	r := mux.NewRouter()
 	r.Handle(

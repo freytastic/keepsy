@@ -33,24 +33,26 @@ func validInput() RequestUploadInput {
 
 type fakeMediaRepo struct {
 	rows          map[uuid.UUID]*model.Media
-	createCalls   int
+	reserveCalls  int
 	confirmCalls  int
 	deletePending int
 	deleteCalls   int
-	createErr     error
+	reserveErr    error
 	confirmErr    error
 	getErr        error
 	deletePendErr error
+	objectKeys    []repository.MediaObjectKeys
+	objectKeysErr error
 }
 
 func newFakeMediaRepo() *fakeMediaRepo {
 	return &fakeMediaRepo{rows: map[uuid.UUID]*model.Media{}}
 }
 
-func (f *fakeMediaRepo) CreatePending(_ context.Context, m *model.Media) error {
-	f.createCalls++
-	if f.createErr != nil {
-		return f.createErr
+func (f *fakeMediaRepo) ReserveUploadRow(_ context.Context, m *model.Media, _ int) error {
+	f.reserveCalls++
+	if f.reserveErr != nil {
+		return f.reserveErr
 	}
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
@@ -105,14 +107,90 @@ func (f *fakeMediaRepo) Delete(_ context.Context, mediaID, _ uuid.UUID) error {
 	return nil
 }
 
+func (f *fakeMediaRepo) ListAlbumObjectKeys(_ context.Context, _ uuid.UUID) ([]repository.MediaObjectKeys, error) {
+	return f.objectKeys, f.objectKeysErr
+}
+
+func TestPurgeAlbumObjects_DeletesBlobsAndThumbs(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
+	thumb := "thumbkey1"
+	repo.objectKeys = []repository.MediaObjectKeys{
+		{StorageKey: "blob1", ThumbKey: &thumb},
+		{StorageKey: "blob2", ThumbKey: nil}, // no thumb
+	}
+	if err := svc.PurgeAlbumObjects(context.Background(), uuid.New()); err != nil {
+		t.Fatalf("PurgeAlbumObjects: %v", err)
+	}
+	// every blob and every thumb must have been deleted from object storage
+	want := map[string]bool{"blob1": true, "thumbkey1": true, "blob2": true}
+	for _, k := range s3.deleteKeys {
+		delete(want, k)
+	}
+	if len(want) != 0 {
+		t.Errorf("objects not deleted from storage: %v (deleted: %v)", want, s3.deleteKeys)
+	}
+}
+
+// Hard delete semantics: if any object delete fails, PurgeAlbumObjects must
+// report an error so the caller does NOT drop the DB rows (which are the only
+// handle for a retry). It still attempts every object first
+func TestPurgeAlbumObjects_FailsWhenObjectDeleteFails(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
+	thumb := "thumbkey1"
+	repo.objectKeys = []repository.MediaObjectKeys{
+		{StorageKey: "blob1", ThumbKey: &thumb},
+		{StorageKey: "blob2", ThumbKey: nil},
+	}
+	s3.deleteErr = errors.New("minio unreachable")
+
+	if err := svc.PurgeAlbumObjects(context.Background(), uuid.New()); err == nil {
+		t.Fatal("PurgeAlbumObjects returned nil, want error when an object delete fails")
+	}
+	// still attempted every object (best effort within the failing pass)
+	if len(s3.deleteKeys) != 3 {
+		t.Errorf("attempted %d deletes, want 3", len(s3.deleteKeys))
+	}
+}
+
+func TestDeleteMedia_DeletesBlobAndThumb(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
+	albumID := uuid.New()
+	mediaID := uuid.New()
+	thumb := "thumbkey1"
+	repo.rows[mediaID] = &model.Media{
+		ID: mediaID, AlbumID: albumID, StorageKey: "blob1", ThumbKey: &thumb,
+		Confirmed: true,
+	}
+
+	if err := svc.DeleteMedia(context.Background(), albumID, mediaID); err != nil {
+		t.Fatalf("DeleteMedia: %v", err)
+	}
+	want := map[string]bool{"blob1": true, "thumbkey1": true}
+	for _, k := range s3.deleteKeys {
+		delete(want, k)
+	}
+	if len(want) != 0 {
+		t.Errorf("objects not deleted: %v (deleted: %v)", want, s3.deleteKeys)
+	}
+	if _, ok := repo.rows[mediaID]; ok {
+		t.Error("media row not deleted")
+	}
+}
+
 type fakeEpochs struct {
-	cur    int
-	exists bool
-	err    error
+	cur        int
+	exists     bool
+	err        error
+	pending    bool
+	pendingErr error
 }
 
 func (f *fakeEpochs) CurrentEpoch(_ context.Context, _ uuid.UUID) (int, bool, time.Time, error) {
 	return f.cur, f.exists, time.Time{}, f.err
+}
+
+func (f *fakeEpochs) PendingRotation(_ context.Context, _ uuid.UUID) (bool, error) {
+	return f.pending, f.pendingErr
 }
 
 type fakeS3 struct {
@@ -125,6 +203,7 @@ type fakeS3 struct {
 	downloadKeys  []string
 	deleteCalls   int
 	deleteKeys    []string
+	deleteErr     error    // when set, DeleteObject records the key then fails
 	presignKeys   []string //  track call order so tests can assert dual presign
 	//per-key HEAD overrides for dual-confirm tests. Empty map → fall
 	// back to headSize/headSHA256B64/headErr (default behavior, same as before)
@@ -166,7 +245,7 @@ func (f *fakeS3) HeadObject(_ context.Context, key string) (int64, string, error
 func (f *fakeS3) DeleteObject(_ context.Context, key string) error {
 	f.deleteCalls++
 	f.deleteKeys = append(f.deleteKeys, key)
-	return nil
+	return f.deleteErr
 }
 
 func newSvc(epochs *fakeEpochs) (*MediaService, *fakeMediaRepo, *fakeS3) {
@@ -219,8 +298,38 @@ func TestRequestUploadURL_RejectsStaleEpoch(t *testing.T) {
 	if !apierr.IsCode(err, "E_EPOCH_REPLAY") {
 		t.Fatalf("err = %v, want E_EPOCH_REPLAY", err)
 	}
-	if repo.createCalls != 0 {
-		t.Errorf("CreatePending called %d times on stale epoch ; expected 0", repo.createCalls)
+	if repo.reserveCalls != 0 {
+		t.Errorf("ReserveUploadRow called %d times on stale epoch ; expected 0", repo.reserveCalls)
+	}
+}
+
+func TestRequestUploadURL_RejectsPendingRotation(t *testing.T) {
+	// A member was revoked but the admin's rotation hasn't landed yet: the live
+	// active set differs from the current epoch's recipient set. Uploading here
+	// would seal a new photo under MK_current, which the removed member still
+	// holds : the freeze blocks it until rotation completes
+	svc, repo, _ := newSvc(&fakeEpochs{cur: 2, exists: true, pending: true})
+	in := validInput()
+	in.EpochTag = 2 // matches current epoch : passes the stale-epoch gate
+	_, err := svc.RequestUploadURL(context.Background(), uuid.New(), []byte{0xCC}, in)
+	if !apierr.IsCode(err, "E_EPOCH_PENDING_ROTATION") {
+		t.Fatalf("err = %v, want E_EPOCH_PENDING_ROTATION", err)
+	}
+	if repo.reserveCalls != 0 {
+		t.Errorf("ReserveUploadRow called %d times during pending rotation ; expected 0", repo.reserveCalls)
+	}
+}
+
+// The pre checks pass (epoch current, not pending), but a revoke commits
+// between the pre check and the insert. The atomic ReserveUploadRow, under the
+// album lock, catches it and still freezes the upload : this is the exact TOCTOU
+// race the album row lock closes
+func TestRequestUploadURL_AtomicReserveCatchesRace(t *testing.T) {
+	svc, repo, _ := newSvc(&fakeEpochs{cur: 3, exists: true, pending: false})
+	repo.reserveErr = repository.ErrPendingRotation
+	_, err := svc.RequestUploadURL(context.Background(), uuid.New(), []byte{0xCC}, validInput())
+	if !apierr.IsCode(err, "E_EPOCH_PENDING_ROTATION") {
+		t.Fatalf("err = %v, want E_EPOCH_PENDING_ROTATION from the atomic reserve", err)
 	}
 }
 
@@ -248,8 +357,8 @@ func TestRequestUploadURL_HappyPath(t *testing.T) {
 		// hex(16 bytes) = 32 chars
 		t.Errorf("storage_key len = %d, want 32 hex chars", len(res.StorageKey))
 	}
-	if repo.createCalls != 1 {
-		t.Errorf("CreatePending calls = %d, want 1", repo.createCalls)
+	if repo.reserveCalls != 1 {
+		t.Errorf("ReserveUploadRow calls = %d, want 1", repo.reserveCalls)
 	}
 	if s3.deleteCalls != 0 {
 		t.Errorf("DeleteObject called on happy path")

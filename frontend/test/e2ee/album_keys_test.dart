@@ -87,6 +87,40 @@ void main() {
     });
   });
 
+  group('AlbumKeyStore.deleteAlbumMKs', () {
+    test('drops every MK for the album and leaves other albums intact',
+        () async {
+      final shared = MockSecureKeyStore();
+      await shared.initialize();
+      final aks = AlbumKeyStore(shared);
+      await aks.initialize();
+      final a = _albumId(0xA1);
+      final b = _albumId(0xB2);
+      await aks.install(a, 0, _mk(0x01));
+      await aks.install(a, 1, _mk(0x02));
+      await aks.install(b, 0, _mk(0x03));
+
+      await aks.deleteAlbumMKs(a);
+
+      expect(await aks.presentEpochs(a), isEmpty);
+      expect(await aks.latestEpoch(a), -1);
+      expect(await aks.presentEpochs(b), [0]); // untouched
+
+      // Persisted, not just the in memory map: a fresh store over the same
+      // backing SecureKeyStore rebuilds with album a's labels gone
+      final aks2 = AlbumKeyStore(shared);
+      await aks2.initialize();
+      expect(await aks2.presentEpochs(a), isEmpty);
+      expect(await aks2.presentEpochs(b), [0]);
+    });
+
+    test('deleting an album with no MKs is a no-op', () async {
+      final aks = await _newStore();
+      await aks.deleteAlbumMKs(_albumId(0xC3)); // must not throw
+      expect(await aks.presentEpochs(_albumId(0xC3)), isEmpty);
+    });
+  });
+
   group('AlbumKeyStore.useMk', () {
     test('zeroes the buffer in finally (mirrors §2.1 contract)', () async {
       final aks = await _newStore();
