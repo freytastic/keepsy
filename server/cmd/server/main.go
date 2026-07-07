@@ -87,25 +87,30 @@ func main() {
 	hub := ws.NewHub()
 	ticketStore := ws.NewTicketStore(rdb)
 
-	prekeyEx := prekey.NewRepo(dbPool, prekeyRepo)
-	prekeyService := prekey.NewService(prekeyEx)
-	prekeyHandler := prekey.NewHandler(prekeyService, hub, userRepo)
-
 	epochRepo := epoch.NewRepo(dbPool, linker)
 	epochService := epoch.NewService(epochRepo)
 	epochHandler := epoch.NewHandler(epochService, epochRepo, hub)
+
+	prekeyEx := prekey.NewRepo(dbPool, prekeyRepo)
+	prekeyService := prekey.NewService(prekeyEx)
+	// epochRepo doubles as the album member_token -> user_id resolver for the
+	// by nickname bundle fetch (M bridge unseal, album scoped)
+	prekeyHandler := prekey.NewHandler(prekeyService, hub, userRepo, epochRepo)
 
 	inviteRepo := invite.NewRepo(dbPool, linker, userRepo)
 	inviteService := invite.NewService(inviteRepo)
 	memberInviteHandler := invite.NewHandler(inviteService, inviteRepo, hub)
 
 	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client}, hub, inviteRepo)
+	// album deletion purges the album's S3 objects (media rows cascade in the DB
+	// but the blobs don't) before dropping the row
+	albumService.SetObjectPurger(mediaService)
 
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
-	albumHandler := handler.NewAlbumHandler(albumService)
+	albumHandler := handler.NewAlbumHandler(albumService, hub, epochRepo)
 	mediaHandler := handler.NewMediaHandler(mediaService)
 	inviteHandler := handler.NewInviteHandler()
 	wsHandler := handler.NewWSHandler(hub, ticketStore)
@@ -171,6 +176,15 @@ func main() {
 	// "member without keys" state and bypassing the crypto envelope.
 	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
+	// by nickname prekey bundle: an admin rotating an album fetches remaining
+	// members' bundles by member_token (identity hidden). Same per pair 5/min
+	// limit as the by id route, keyed on (requester, album, token)
+	scoped.Handle(
+		"/members/{token}/prekey-bundle",
+		rateLimiter.Middleware(prekey.KeyByRequesterAndMemberToken, 5, 60*time.Second)(
+			http.HandlerFunc(prekeyHandler.GetPrekeyBundleByMemberToken),
+		),
+	).Methods(http.MethodGet)
 	scoped.HandleFunc("/invites/existing-user", memberInviteHandler.DeliverExistingUser).Methods(http.MethodPost)
 	scoped.HandleFunc("/joins", memberInviteHandler.JoinComplete).Methods(http.MethodPost)
 	scoped.HandleFunc("/invite", inviteHandler.CreateInvite).Methods(http.MethodPost)

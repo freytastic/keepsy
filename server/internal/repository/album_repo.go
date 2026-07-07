@@ -16,6 +16,8 @@ var (
 	ErrAlbumNotFound  = errors.New("album not found")
 	ErrMemberNotFound = errors.New("member not found in album")
 	ErrMemberRevoked  = errors.New("member is revoked from album")
+	ErrLastAdmin      = errors.New("cannot remove the last remaining admin")
+	ErrCallerRevoked  = errors.New("caller was revoked before the operation committed")
 )
 
 type AlbumRepository struct {
@@ -293,6 +295,102 @@ func (r *AlbumRepository) UpdateMemberNameCT(ctx context.Context, albumID uuid.U
 		nameCT, albumID, memberToken,
 	)
 	return err
+}
+
+// It atomically revokes a member. takes the same albums row
+// FOR UPDATE lock that epoch rotation (InsertEpoch) takes, so revoke, rotate,
+// and upload reserve all serialize on one album : this is what stops two
+// concurrent admin removals from both passing the last admin guard and leaving
+// the album adminless, and stops a revoke from interleaving with a rotation's
+// active set snapshot
+
+// The caller is re checked under the lock too: revoked_at is the only authz
+// input that can change between the service's auth check and this commit (a
+// concurrent removal could revoke the caller), so re reading it here closes
+// that TOCTOU. The caller's role is NOT re read because roles are immutable
+// (there is no promotion/demotion flow) : if that changes, re check role here
+
+// Returns the target's role, whether it was already revoked (idempotent no-op),
+// ErrCallerRevoked, ErrMemberNotFound, ErrAlbumNotFound, or ErrLastAdmin
+func (r *AlbumRepository) RevokeMemberTx(ctx context.Context, albumID uuid.UUID, callerToken, targetToken []byte) (string, bool, error) {
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var locked uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM albums WHERE id = $1 FOR UPDATE`, albumID).Scan(&locked)
+	if err == pgx.ErrNoRows {
+		return "", false, ErrAlbumNotFound
+	}
+	if err != nil {
+		return "", false, err
+	}
+
+	// Caller must still be an active member at commit time
+	var callerRevoked bool
+	err = tx.QueryRow(ctx,
+		`SELECT revoked_at IS NOT NULL FROM album_members
+		 WHERE album_id = $1 AND member_token = $2`,
+		albumID, callerToken,
+	).Scan(&callerRevoked)
+	if err == pgx.ErrNoRows {
+		return "", false, ErrCallerRevoked
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if callerRevoked {
+		return "", false, ErrCallerRevoked
+	}
+
+	var role string
+	var revoked bool
+	err = tx.QueryRow(ctx,
+		`SELECT role, revoked_at IS NOT NULL FROM album_members
+		 WHERE album_id = $1 AND member_token = $2`,
+		albumID, targetToken,
+	).Scan(&role, &revoked)
+	if err == pgx.ErrNoRows {
+		return "", false, ErrMemberNotFound
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if revoked {
+		// idempotent : nothing to do, but commit to release the lock cleanly
+		if err := tx.Commit(ctx); err != nil {
+			return "", false, err
+		}
+		return role, true, nil
+	}
+
+	if role == "admin" {
+		var n int
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM album_members
+			 WHERE album_id = $1 AND role = 'admin' AND revoked_at IS NULL`,
+			albumID,
+		).Scan(&n); err != nil {
+			return "", false, err
+		}
+		if n <= 1 {
+			return role, false, ErrLastAdmin
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE album_members SET revoked_at = NOW()
+		 WHERE album_id = $1 AND member_token = $2 AND revoked_at IS NULL`,
+		albumID, targetToken,
+	); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", false, err
+	}
+	return role, false, nil
 }
 
 func (r *AlbumRepository) UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error {
