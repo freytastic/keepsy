@@ -111,6 +111,21 @@ class AlbumKeyStore {
     await install(albumId, epoch, mk);
   }
 
+  // Removes every MK for one album (all keepsy.album.<hex>.mk.* labels) from
+  // the SecureKeyStore and the presence map. Used by the removed-device wipe:
+  // when this client learns it was revoked from an album it drops the album's
+  // keys so it can never derive anything under them again. No op when the album
+  // has no MKs
+  Future<void> deleteAlbumMKs(Uint8List albumId) async {
+    await initialize();
+    final hex = _hex(albumId);
+    final handles = _present.remove(hex);
+    if (handles == null) return;
+    for (final h in handles.values) {
+      await _store.delete(h);
+    }
+  }
+
   // Only public surface for MK bytes (D2). Mirrors SecureKeyStore.use<T> :
   // bytes zeroed in finally, callback style so nothing escapes
   Future<T> useMk<T>(

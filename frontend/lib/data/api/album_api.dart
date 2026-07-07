@@ -70,11 +70,15 @@ class AlbumService {
     }
   }
 
-  // removeMember stub , full implementation in p7.1
+  // DELETE /albums/{id}/members/{member_token}. memberToken is the caller held
+  // std base64 token, it must be re encoded url safe (no padding) for the path,
+  // since std base64's '/' and '+' break routing. 204 on success
   Future<bool> removeMember(String albumId, String memberToken) async {
     try {
+      final raw = base64.decode(base64.normalize(memberToken));
+      final tokenPath = base64Url.encode(raw).replaceAll('=', '');
       final response =
-          await _client.delete('/albums/$albumId/members/$memberToken');
+          await _client.delete('/albums/$albumId/members/$tokenPath');
       return response.statusCode == 204;
     } catch (_) {
       return false;

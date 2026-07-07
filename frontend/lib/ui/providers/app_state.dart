@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:keepsy/data/api/album_api.dart';
@@ -30,6 +29,12 @@ class AppState extends ChangeNotifier {
 
   void setAlbums(List<AlbumModel> newAlbums) {
     _albums = newAlbums;
+    // A re invited album reappearing clears the stale "was removed" signal so an
+    // AlbumDetailScreen opened for it doesnt trip the kicked-while-viewing exit
+    if (_lastRemovedAlbumId != null &&
+        newAlbums.any((x) => x.id == _lastRemovedAlbumId)) {
+      _lastRemovedAlbumId = null;
+    }
     notifyListeners();
   }
 
@@ -37,8 +42,24 @@ class AppState extends ChangeNotifier {
   // by id : a duplicate signal (live event + cold-start replay) wont double
   // the tile
   void prependAlbum(AlbumModel a) {
+    // Re invite to a previously kicked album: clear the stale removal signal so
+    // the reopened detail screen doesnt auto exit (see removeAlbum below)
+    if (_lastRemovedAlbumId == a.id) _lastRemovedAlbumId = null;
     if (_albums.any((x) => x.id == a.id)) return;
     _albums = [a, ..._albums];
+    notifyListeners();
+  }
+
+  // Drop an album from the home grid : used when this device is removed/leaves
+  // an album (removed device wipe). Also records the id as the last removed
+  // signal so an open AlbumDetailScreen for that album can exit itself instead
+  // of showing stale content
+  String? _lastRemovedAlbumId;
+  String? get lastRemovedAlbumId => _lastRemovedAlbumId;
+
+  void removeAlbum(String albumIdStr) {
+    _albums = _albums.where((x) => x.id != albumIdStr).toList();
+    _lastRemovedAlbumId = albumIdStr;
     notifyListeners();
   }
 
@@ -52,10 +73,7 @@ class AppState extends ChangeNotifier {
       }
       final all = await service.getMyAlbums();
       setAlbums(all);
-    } catch (e, s) {
-      developer.log('refreshAlbumOnJoin failed',
-          name: 'keepsy.albums', error: e, stackTrace: s);
-    }
+    } catch (_) {}
   }
 
   // last (albumId, mediaId) seen on e2ee.media_added
@@ -70,6 +88,20 @@ class AppState extends ChangeNotifier {
   void notifyMediaAdded(String albumId, String mediaId) {
     _lastMediaAddedAlbumId = albumId;
     _lastMediaAddedMediaId = mediaId;
+    notifyListeners();
+  }
+
+  // Roster change signal (member joined / revoked). An open AlbumDetailScreen
+  // watches this and re fetches its member list. The tick lets the screen react
+  // to repeated changes on the same album (album id alone wouldnt change)
+  String? _lastMemberChangedAlbumId;
+  int _memberChangeTick = 0;
+  String? get lastMemberChangedAlbumId => _lastMemberChangedAlbumId;
+  int get memberChangeTick => _memberChangeTick;
+
+  void notifyMemberChanged(String albumId) {
+    _lastMemberChangedAlbumId = albumId;
+    _memberChangeTick++;
     notifyListeners();
   }
 

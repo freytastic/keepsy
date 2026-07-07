@@ -43,9 +43,23 @@ class _CaptureEpochApi implements EpochApi {
 
 // _StubPrekeyApi : fetchPrekeyBundle returns the pre populated bundle. Other
 // methods unused by the rotator path ; left as throwing stubs for clarity
-class _StubPrekeyApi implements PrekeyApi {
+class _StubPrekeyApi implements PrekeyApi, MemberBundleFetcher {
   final PrekeyBundle Function(String userId) bundleFor;
   _StubPrekeyApi(this.bundleFor);
+
+  int byUserIdCalls = 0;
+  int byTokenCalls = 0;
+  String? lastTokenAlbumId;
+  Uint8List? lastToken;
+
+  @override
+  Future<PrekeyBundle> fetchPrekeyBundleByMemberToken(
+      String albumId, Uint8List memberToken) async {
+    byTokenCalls++;
+    lastTokenAlbumId = albumId;
+    lastToken = memberToken;
+    return bundleFor('by-token');
+  }
 
   @override
   Future<int> opkCount() async => 20;
@@ -74,8 +88,10 @@ class _StubPrekeyApi implements PrekeyApi {
       throw UnimplementedError();
 
   @override
-  Future<PrekeyBundle> fetchPrekeyBundle(String userId) async =>
-      bundleFor(userId);
+  Future<PrekeyBundle> fetchPrekeyBundle(String userId) async {
+    byUserIdCalls++;
+    return bundleFor(userId);
+  }
 }
 
 // Anchored : _spkTs and _now are within the ±90 day window the bundle verifier
@@ -263,8 +279,47 @@ void main() {
       msg.add(req.memberSetHash);
       msg.add(wrapsHash);
 
-      expect(await Sign.verify(c.ikPub, msg.toBytes(), req.envelopeSig),
-          isTrue);
+      expect(
+          await Sign.verify(c.ikPub, msg.toBytes(), req.envelopeSig), isTrue);
+    });
+  });
+
+  group('EpochRotator.rotate by-token recipients', () {
+    test('fetches the bundle by member_token when userId is null', () async {
+      // The kick/leave rotation knows remaining members only by token (identity
+      // hidden), so recipients carry userId=null and the rotator must go through
+      // the album scoped by token bundle fetch, never the by user_id one
+      final c = await _newCreatorStack();
+      final opkPub = await _opkPubFrom(c.svc, 0);
+      final bundle = await buildResponderBundle(
+        responder: c.svc,
+        spkTs: _spkTs,
+        opk: (idx: 0, keyPub: opkPub),
+      );
+      final stub = _StubPrekeyApi((_) => bundle);
+      final caps = _CaptureEpochApi();
+      final rotator = EpochRotator(
+        epochs: caps,
+        prekeys: stub,
+        identity: c.svc,
+        aks: c.aks,
+        memberBundles: stub,
+        now: () => _now,
+      );
+
+      await rotator.rotate(
+        albumIdBytes: _albumId(),
+        epoch: 1,
+        recipients: [RotateRecipient(memberToken: c.senderToken, userId: null)],
+      );
+
+      expect(stub.byTokenCalls, 1);
+      expect(stub.byUserIdCalls, 0);
+      expect(stub.lastToken, equals(c.senderToken));
+      // album uuid string for the all-0xA1 album id
+      expect(stub.lastTokenAlbumId, 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1');
+      expect(caps.calls, 1);
+      expect(await c.aks.latestEpoch(_albumId()), 1);
     });
   });
 }

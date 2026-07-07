@@ -11,7 +11,15 @@ import 'wrap_envelope.dart';
 class EpochCurrent {
   final int currentEpoch;
   final DateTime startedAt;
-  const EpochCurrent({required this.currentEpoch, required this.startedAt});
+  // pendingRotation : true when the album is in the revoke→rotate window (a
+  // removed member is still covered by the current epoch, or the active set
+  // shrank). An admin's client uses it to auto heal on album open
+  final bool pendingRotation;
+  const EpochCurrent({
+    required this.currentEpoch,
+    required this.startedAt,
+    this.pendingRotation = false,
+  });
 }
 
 // SetEpochWrap : one row in the POST /albums/{id}/epoch wraps[] array
@@ -87,6 +95,7 @@ class HttpEpochApi implements EpochApi {
     return EpochCurrent(
       currentEpoch: (body['current_epoch'] as num).toInt(),
       startedAt: DateTime.parse(body['started_at'] as String),
+      pendingRotation: body['pending_rotation'] as bool? ?? false,
     );
   }
 
