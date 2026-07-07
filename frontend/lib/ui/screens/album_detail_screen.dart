@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -13,6 +15,7 @@ import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/invite.dart';
+import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
@@ -47,6 +50,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
   // _appState is captured in didChangeDependencies for symmetric add/remove
   String? _lastSeenMediaAddedId;
+  int _lastSeenMemberTick = 0;
+  // set once this screen has begun exiting (kicked, or a voluntary leave) so
+  // the AppState listener never double pops
+  bool _accessLost = false;
   AppState? _appState;
 
   @override
@@ -71,12 +78,37 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   void _onAppStateChange() {
     final s = _appState;
     if (s == null) return;
-    if (s.lastMediaAddedAlbumId != widget.album.id) return;
-    final mid = s.lastMediaAddedMediaId;
-    if (mid == null) return;
-    if (mid == _lastSeenMediaAddedId) return;
-    _lastSeenMediaAddedId = mid;
-    _loadMedia();
+
+    // This album was removed for me (kicked while viewing, or a missed WS event
+    // recovered via the 403 fallback) : exit the screen instead of showing
+    // stale content. Guarded so a voluntary leave (which sets _accessLost
+    // first) doesnt get the "you were removed" treatment or a double pop
+    if (!_accessLost && s.lastRemovedAlbumId == widget.album.id) {
+      _accessLost = true;
+      final nav = Navigator.of(context);
+      final messenger = ScaffoldMessenger.of(context);
+      if (nav.canPop()) nav.pop();
+      messenger.showSnackBar(
+          const SnackBar(content: Text('You were removed from this album')));
+      return;
+    }
+
+    // a member joined or was revoked in this album : refresh the roster so a
+    // kicked user disappears (and a new one appears) without re entering
+    if (s.lastMemberChangedAlbumId == widget.album.id &&
+        s.memberChangeTick != _lastSeenMemberTick) {
+      _lastSeenMemberTick = s.memberChangeTick;
+      _loadMembers();
+    }
+
+    // new media in this album
+    if (s.lastMediaAddedAlbumId == widget.album.id) {
+      final mid = s.lastMediaAddedMediaId;
+      if (mid != null && mid != _lastSeenMediaAddedId) {
+        _lastSeenMediaAddedId = mid;
+        _loadMedia();
+      }
+    }
   }
 
   Future<void> _loadMembers() async {
@@ -86,6 +118,171 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _members = members;
         _loadingMembers = false;
       });
+      // As an admin, finish any rotation left pending by a crashed kick or a
+      // member who left while no admin was online
+      unawaited(_maybeRecoverPending());
+    }
+  }
+
+  // The viewer's own member row for this album, resolved by matching their held
+  // member_token. null until members load (or if not present)
+  AlbumMember? get _me {
+    final myToken = widget.album.memberToken;
+    if (myToken == null) return null;
+    for (final m in _members) {
+      if (m.memberToken == myToken) return m;
+    }
+    return null;
+  }
+
+  bool get _viewerIsAdmin {
+    final r = _me?.role;
+    return r == 'admin' || r == 'co-admin';
+  }
+
+  // Mirrors the server's last admin guard: only role=='admin' counts (a
+  // co admin can't rotate a keyless album), revoked rows dont
+  int get _activeAdminCount =>
+      _members.where((m) => !m.revoked && m.role == 'admin').length;
+
+  bool get _hasOtherActiveMembers => _members
+      .any((m) => !m.revoked && m.memberToken != widget.album.memberToken);
+
+  Future<void> _maybeRecoverPending() async {
+    if (!_viewerIsAdmin) return;
+    final albumIdBytes = _uuidStringToBytes(widget.album.id);
+    if (albumIdBytes == null) return;
+    try {
+      final did = await context
+          .read<MemberRemovalCoordinator>()
+          .recoverIfPending(albumIdBytes);
+      if (did && mounted) await _loadMembers();
+    } catch (_) {
+      // the upload freeze still protects content until it heals
+    }
+  }
+
+  Future<void> _kick(AlbumMember m) async {
+    final albumIdBytes = _uuidStringToBytes(widget.album.id);
+    if (albumIdBytes == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final coord = context.read<MemberRemovalCoordinator>();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove member'),
+        content: Text(
+            'Remove ${m.displayName}? They lose access to photos added after now.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final token = base64.decode(base64.normalize(m.memberToken));
+    try {
+      await coord.kick(albumIdBytes, token);
+      if (mounted) {
+        await _loadMembers();
+        messenger.showSnackBar(const SnackBar(content: Text('Member removed')));
+      }
+    } catch (_) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Could not remove member')));
+    }
+  }
+
+  Future<void> _leave() async {
+    final albumIdBytes = _uuidStringToBytes(widget.album.id);
+    final myToken = widget.album.memberToken;
+    if (albumIdBytes == null || myToken == null) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final coord = context.read<MemberRemovalCoordinator>();
+
+    // The sole admin cant just leave (an admin less album cant rotate)
+    // with other members present, block and explain, alone, offer
+    // to delete the album instead
+    final soleAdmin = _me?.role == 'admin' && _activeAdminCount <= 1;
+    if (soleAdmin && _hasOtherActiveMembers) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("You're the only admin"),
+          content: const Text(
+              'Remove the other members first, or keep the album : an album '
+              'needs at least one admin.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+    if (soleAdmin && !_hasOtherActiveMembers) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Delete album'),
+          content: const Text(
+              "You're the only member. Leaving deletes this album and its "
+              'photos for good.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Delete')),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      final ok = await widget.albumService.deleteAlbum(widget.album.id);
+      if (!ok) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('Could not delete album')));
+        return;
+      }
+      _accessLost = true; // suppress the removal listener : we pop ourselves
+      await coord.onSelfRemoved(albumIdBytes); // wipe local keys + cache + tile
+      if (mounted) navigator.pop();
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave album'),
+        content: const Text(
+            'Leave this album? You lose access to it on this device.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Leave')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final token = base64.decode(base64.normalize(myToken));
+    _accessLost = true; // suppress the removal listener : we pop ourselves
+    try {
+      await coord.leave(albumIdBytes, token);
+      if (mounted) navigator.pop(); // album already dropped from the home grid
+    } catch (_) {
+      _accessLost =
+          false; // leave failed : stay, and let a real removal exit us
+      messenger
+          .showSnackBar(const SnackBar(content: Text('Could not leave album')));
     }
   }
 
@@ -202,9 +399,17 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             icon: Icon(Icons.person_add_outlined, color: K.t2(dark)),
             onPressed: _openAddMember,
           ),
-          IconButton(
-            icon: Icon(Icons.settings_outlined, color: K.t2(dark)),
-            onPressed: () {},
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: K.t2(dark)),
+            onSelected: (v) {
+              if (v == 'leave') _leave();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem<String>(
+                value: 'leave',
+                child: Text('Leave album'),
+              ),
+            ],
           ),
         ],
       ),
@@ -226,7 +431,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               members: _members,
               loading: _loadingMembers,
               dark: dark,
-              accent: accent),
+              accent: accent,
+              // admins can long press another (non-revoked) member to remove
+              onRemove: _viewerIsAdmin ? _kick : null,
+              myToken: widget.album.memberToken),
           const Divider(height: 1, thickness: 0.5),
           Expanded(
             child: syncing
@@ -341,12 +549,18 @@ class _MemberChipsRow extends StatelessWidget {
   final bool loading;
   final bool dark;
   final Color accent;
+  // Non null only for an admin viewer : long pressing a removable chip calls it
+  final void Function(AlbumMember)? onRemove;
+  // The viewer's own token, so their chip never shows a remove button
+  final String? myToken;
 
   const _MemberChipsRow({
     required this.members,
     required this.loading,
     required this.dark,
     required this.accent,
+    this.onRemove,
+    this.myToken,
   });
 
   @override
@@ -366,14 +580,25 @@ class _MemberChipsRow extends StatelessWidget {
         ),
       );
     }
+    // Revoked members are no longer part of the album : hide them so a kicked
+    // user disappears from everyone's roster
+    final visible = members.where((m) => !m.revoked).toList();
     return SizedBox(
       height: 56,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        itemCount: members.length,
+        itemCount: visible.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) => _MemberChip(member: members[i], dark: dark),
+        itemBuilder: (_, i) {
+          final m = visible[i];
+          final removable = onRemove != null && m.memberToken != myToken;
+          return _MemberChip(
+            member: m,
+            dark: dark,
+            onRemove: removable ? () => onRemove!(m) : null,
+          );
+        },
       ),
     );
   }
@@ -382,13 +607,15 @@ class _MemberChipsRow extends StatelessWidget {
 class _MemberChip extends StatelessWidget {
   final AlbumMember member;
   final bool dark;
+  final VoidCallback? onRemove;
 
-  const _MemberChip({required this.member, required this.dark});
+  const _MemberChip({required this.member, required this.dark, this.onRemove});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: EdgeInsets.only(
+          left: 10, right: onRemove != null ? 2 : 10, top: 4, bottom: 4),
       decoration: BoxDecoration(
         color: K.cardCol(dark),
         borderRadius: BorderRadius.circular(20),
@@ -410,8 +637,8 @@ class _MemberChip extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            // M7 : displayName falls back to a token slice until name_ct
-            // decryption wires up in Phase 5
+            // displayName falls back to a token slice until name_ct
+            // decryption wires up later
             member.displayName,
             style: TextStyle(
                 color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
@@ -421,6 +648,19 @@ class _MemberChip extends StatelessWidget {
             member.role,
             style: TextStyle(color: K.t3(dark), fontSize: 10),
           ),
+          // Visible remove affordance for admins : a tappable × on each
+          // removable member (replaces the old undiscoverable long-press).
+          if (onRemove != null) ...[
+            const SizedBox(width: 2),
+            InkResponse(
+              onTap: onRemove,
+              radius: 16,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 14, color: K.t3(dark)),
+              ),
+            ),
+          ],
         ],
       ),
     );

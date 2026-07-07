@@ -89,6 +89,84 @@ void main() {
     expect(find.text('member'), findsOneWidget);
   });
 
+  testWidgets(
+      'AlbumDetailScreen exits itself when the album is removed '
+      '(kicked while viewing)', (tester) async {
+    final aks = await _emptyAks();
+    final appState = AppState();
+    appState.setAlbums([_fakeAlbum()]);
+
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: appState),
+        Provider<AlbumKeyStore>.value(value: aks),
+      ],
+      child: MaterialApp(
+        home: Builder(
+          builder: (ctx) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(ctx).push(MaterialPageRoute(
+                  builder: (_) => AlbumDetailScreen(
+                    album: _fakeAlbum(),
+                    albumService: _MockAlbumService(
+                        [_fakeMember('mytoken12345', 'member')]),
+                    mediaApi: _StubMediaApi(const []),
+                  ),
+                )),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlbumDetailScreen), findsOneWidget);
+
+    // the admin kicks this user -> onSelfRemoved drops the album from state
+    appState.removeAlbum('album-1');
+    await tester.pumpAndSettle();
+
+    // the detail screen closed itself; we're back on the launcher
+    expect(find.byType(AlbumDetailScreen), findsNothing);
+    expect(find.text('open'), findsOneWidget);
+  });
+
+  testWidgets(
+      'AlbumDetailScreen does NOT auto-exit after re-invite '
+      '(stale removal signal cleared on rejoin)', (tester) async {
+    final aks = await _emptyAks();
+    final appState = AppState();
+    appState.setAlbums([_fakeAlbum()]);
+    // kicked earlier: removal signal is set for album-1
+    appState.removeAlbum('album-1');
+    // re invited + rejoined: album-1 comes back, which must clear the signal
+    appState.prependAlbum(_fakeAlbum());
+    expect(appState.lastRemovedAlbumId, isNull);
+
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: appState),
+        Provider<AlbumKeyStore>.value(value: aks),
+      ],
+      child: MaterialApp(
+        home: AlbumDetailScreen(
+          album: _fakeAlbum(),
+          albumService:
+              _MockAlbumService([_fakeMember('mytoken12345', 'member')]),
+          mediaApi: _StubMediaApi(const []),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // the screen stayed open (was not bounced by the stale kicked while viewing
+    // guard)
+    expect(find.byType(AlbumDetailScreen), findsOneWidget);
+  });
+
   testWidgets('AlbumDetailScreen shows no media placeholder', (tester) async {
     final aks = await _emptyAks();
     await tester.pumpWidget(_wrap(
