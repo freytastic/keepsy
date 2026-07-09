@@ -320,6 +320,8 @@ class _AlbumCardState extends State<_AlbumCard> {
   Widget build(BuildContext context) {
     // Default dark gradient fallback
     final colors = [const Color(0xFF2F3336), const Color(0xFF1E2022)];
+    final albumName =
+        context.watch<AppState>().albumDisplayName(widget.album.id) ?? 'Album';
 
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
@@ -373,7 +375,7 @@ class _AlbumCardState extends State<_AlbumCard> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      widget.album.name,
+                      albumName,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15,

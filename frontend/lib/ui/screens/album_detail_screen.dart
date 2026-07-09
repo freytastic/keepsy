@@ -9,13 +9,16 @@ import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
+import 'package:keepsy/crypto/uuid_bytes.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
+import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
@@ -111,6 +114,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
+  // memberToken -> (decrypted name, the name_ct it came from). The name_ct is
+  // kept so a rename (new name_ct) invalidates the stale cached name instead of
+  // showing it : a member whose ct no longer matches falls back to "Member"
+  // until the new name decrypts
+  final Map<String, ({String name, String ct})> _memberNames = {};
+
+  // Never surface the raw token slice : and never a stale name after a rename
+  String _memberName(AlbumMember m) {
+    final e = _memberNames[m.memberToken];
+    if (e != null && e.ct == m.profile.nameCt) return e.name;
+    return 'Member';
+  }
+
   Future<void> _loadMembers() async {
     final members = await widget.albumService.listMembers(widget.album.id);
     if (mounted) {
@@ -118,9 +134,67 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _members = members;
         _loadingMembers = false;
       });
+      unawaited(_resolveMemberNames(members));
       // As an admin, finish any rotation left pending by a crashed kick or a
       // member who left while no admin was online
       unawaited(_maybeRecoverPending());
+    }
+  }
+
+  Future<void> _resolveMemberNames(List<AlbumMember> members) async {
+    if (!mounted) return;
+    final withCt =
+        members.where((m) => (m.profile.nameCt ?? '').isNotEmpty).toList();
+    // Nothing published yet : skip (also avoids needing providers in tests
+    // whose members carry no name_ct)
+    if (withCt.isEmpty) return;
+    final nameCache = context.read<NameCache>();
+    final albumId = widget.album.id;
+
+    // Serve cache hits instantly (CPU) : batch the misses into one MK
+    // unwrap per epoch instead of a keystore round trip per member
+    final fromCache = <String, ({String name, String ct})>{};
+    final misses = <({String token, Uint8List tokenBytes, String nameCt})>[];
+    for (final m in withCt) {
+      final ct = m.profile.nameCt!;
+      final cached =
+          nameCache.get(NameCache.memberKey(albumId, m.memberToken), ct);
+      if (cached != null) {
+        fromCache[m.memberToken] = (name: cached, ct: ct);
+        continue;
+      }
+      final Uint8List tokenBytes;
+      try {
+        tokenBytes = base64.decode(base64.normalize(m.memberToken));
+      } catch (_) {
+        continue;
+      }
+      misses.add((token: m.memberToken, tokenBytes: tokenBytes, nameCt: ct));
+    }
+    if (fromCache.isNotEmpty && mounted) {
+      setState(() => _memberNames.addAll(fromCache));
+    }
+    if (misses.isEmpty) return;
+
+    final albumIdBytes = uuidToBytes(albumId);
+    if (albumIdBytes == null) return;
+    final ks = context.read<AlbumKeyStore>();
+    final resolved = await SealedName.openMemberNames(ks, albumIdBytes, misses);
+    // If we were removed from the album while this decrypt was in flight, the
+    // wipe (clearAlbum) already ran : don't repopulate NameCache with names for
+    // an album we no longer belong to
+    if (!mounted || _accessLost) return;
+    if (resolved.isEmpty) return;
+    final ctByToken = {for (final m in misses) m.token: m.nameCt};
+    final applied = <String, ({String name, String ct})>{};
+    resolved.forEach((token, name) {
+      final ct = ctByToken[token];
+      if (ct == null) return;
+      nameCache.put(NameCache.memberKey(albumId, token), name, ct);
+      applied[token] = (name: name, ct: ct);
+    });
+    if (mounted && applied.isNotEmpty) {
+      setState(() => _memberNames.addAll(applied));
     }
   }
 
@@ -172,7 +246,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Remove member'),
         content: Text(
-            'Remove ${m.displayName}? They lose access to photos added after now.'),
+            'Remove ${_memberName(m)}? They lose access to photos added after now.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -379,16 +453,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final accent = state.accent;
     final syncing = state.isSyncing(widget.album.id);
 
+    // Only surface a resolved name whose fingerprint still matches the member's
+    // current name_ct : a renamed member falls back to "Member" until re resolved
+    final memberDisplayNames = <String, String>{};
+    for (final m in _members) {
+      final e = _memberNames[m.memberToken];
+      if (e != null && e.ct == m.profile.nameCt) {
+        memberDisplayNames[m.memberToken] = e.name;
+      }
+    }
+
     return Scaffold(
       backgroundColor: K.bg(dark),
       appBar: AppBar(
         backgroundColor: K.bg(dark),
         elevation: 0,
-        // decode name_ct using AlbumKeyStore.useMk to
-        // render the real album name. Rn the placeholder is the base64
-        // ciphertext (set in AlbumModel.fromJson)
         title: Text(
-          widget.album.name,
+          state.albumDisplayName(widget.album.id) ?? 'Album',
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
               color: K.t1(dark), fontSize: 18, fontWeight: FontWeight.w700),
@@ -432,6 +513,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               loading: _loadingMembers,
               dark: dark,
               accent: accent,
+              resolvedNames: memberDisplayNames,
               // admins can long press another (non-revoked) member to remove
               onRemove: _viewerIsAdmin ? _kick : null,
               myToken: widget.album.memberToken),
@@ -553,12 +635,15 @@ class _MemberChipsRow extends StatelessWidget {
   final void Function(AlbumMember)? onRemove;
   // The viewer's own token, so their chip never shows a remove button
   final String? myToken;
+  // memberToken -> decrypted display name (missing entries fall back to a slice)
+  final Map<String, String> resolvedNames;
 
   const _MemberChipsRow({
     required this.members,
     required this.loading,
     required this.dark,
     required this.accent,
+    required this.resolvedNames,
     this.onRemove,
     this.myToken,
   });
@@ -596,6 +681,7 @@ class _MemberChipsRow extends StatelessWidget {
           return _MemberChip(
             member: m,
             dark: dark,
+            displayName: resolvedNames[m.memberToken] ?? 'Member',
             onRemove: removable ? () => onRemove!(m) : null,
           );
         },
@@ -607,9 +693,14 @@ class _MemberChipsRow extends StatelessWidget {
 class _MemberChip extends StatelessWidget {
   final AlbumMember member;
   final bool dark;
+  final String displayName;
   final VoidCallback? onRemove;
 
-  const _MemberChip({required this.member, required this.dark, this.onRemove});
+  const _MemberChip(
+      {required this.member,
+      required this.dark,
+      required this.displayName,
+      this.onRemove});
 
   @override
   Widget build(BuildContext context) {
@@ -628,7 +719,7 @@ class _MemberChip extends StatelessWidget {
             radius: 10,
             backgroundColor: K.defaultAccent.withValues(alpha: 0.3),
             child: Text(
-              member.displayInitial,
+              displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
               style: const TextStyle(
                   fontSize: 9,
                   fontWeight: FontWeight.w700,
@@ -637,9 +728,9 @@ class _MemberChip extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            // displayName falls back to a token slice until name_ct
-            // decryption wires up later
-            member.displayName,
+            // resolved global name : "Member" for anyone who hasn't published
+            // a name_ct yet (never the raw token)
+            displayName,
             style: TextStyle(
                 color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
           ),

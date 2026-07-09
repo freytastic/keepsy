@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
@@ -9,6 +13,7 @@ import 'package:keepsy/data/api/auth_api.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/data/session_teardown.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/ui/widgets/shared_widgets.dart';
 import 'package:keepsy/ui/screens/login_screen.dart';
 
@@ -44,6 +49,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context.read<AppState>().setProfileAvatar(img.path);
       // TODO: Implement S3 network upload flow and updateMe({'avatar_key': ...})
     }
+  }
+
+  // Re seal the global name under every album's MK and PUT it. Best effort and
+  // fire and forget : the local name is already updated regardless
+  void _publishNameToAlbums(String name) {
+    if (name.isEmpty) return;
+    final publisher = context.read<DisplayNamePublisher>();
+    final albums = context.read<AppState>().albums;
+    final targets = <NameTarget>[];
+    for (final a in albums) {
+      final tok = a.memberToken;
+      if (tok == null) continue;
+      try {
+        targets.add((
+          albumId: a.id,
+          memberToken: base64.decode(base64.normalize(tok)),
+        ));
+      } catch (_) {}
+    }
+    unawaited(publisher.publishToAll(targets, name));
   }
 
   @override
@@ -130,13 +155,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         contentPadding: EdgeInsets.zero,
                                         hintStyle: TextStyle(color: K.t3(dark)),
                                       ),
-                                      onSubmitted: (v) async {
-                                        // M7 : name is not stored on the server
-                                        // anymore. setProfileName persists locally ;
-                                        // per album name_ct publishing wires in
-                                        // Phase 5 alongside encrypted media display
-                                        state.setProfileName(v);
+                                      onSubmitted: (v) {
+                                        // Name is never stored on the server :
+                                        // setProfileName persists it locally, then
+                                        // we re publish it (sealed under each album
+                                        // MK) into every album so members see the
+                                        // new name. Fires only on an explicit edit
+                                        final name = v.trim();
+                                        state.setProfileName(name);
                                         setState(() => _editingName = false);
+                                        _publishNameToAlbums(name);
                                       },
                                       autofocus: true,
                                     )
@@ -318,10 +346,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       // key material (cache_root_key, album/identity MKs) is
                       // kept so re login stays warm
                       final mediaCache = context.read<MediaCacheManager>();
+                      final nameCache = context.read<NameCache>();
+                      final appState = context.read<AppState>();
                       await performLogout(
                         auth: AuthService(),
                         mediaCache: mediaCache,
+                        nameCache: nameCache,
                       );
+                      // Also drop the in RAM plaintext title cache (the disk
+                      // NameCache is wiped inside performLogout)
+                      appState.clearDisplayNameCaches();
                       if (!context.mounted) return;
                       Navigator.of(context).pushAndRemoveUntil(
                         PageRouteBuilder(
