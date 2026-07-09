@@ -44,7 +44,7 @@ Future<AlbumKeyStore> _emptyAks() async {
 
 AlbumModel _fakeAlbum() => AlbumModel(
       id: 'album-1',
-      name: 'Untitled Album',
+      nameCt: null,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
@@ -68,8 +68,8 @@ Widget _wrap(Widget child, AlbumKeyStore aks) => MultiProvider(
 void main() {
   testWidgets('AlbumDetailScreen shows member chips', (tester) async {
     final aks = await _emptyAks();
-    // M7 : member display name is the first 8 chars of the pseudonymous token
-    // until name_ct decryption wires up in Phase 5
+    // Members with no published name_ct render the neutral "Member" label
+    // (never the raw pseudonymous token slice)
     await tester.pumpWidget(_wrap(
       AlbumDetailScreen(
         album: _fakeAlbum(),
@@ -83,8 +83,12 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('alicetok'), findsOneWidget);
-    expect(find.text('bobtoken'), findsOneWidget);
+    // No token slices are shown
+    expect(find.text('alicetok'), findsNothing);
+    expect(find.text('bobtoken'), findsNothing);
+    // Both unnamed members fall back to the neutral label
+    expect(find.text('Member'), findsNWidgets(2));
+    // Roles still render (lowercase, distinct from the "Member" name label)
     expect(find.text('admin'), findsOneWidget);
     expect(find.text('member'), findsOneWidget);
   });
