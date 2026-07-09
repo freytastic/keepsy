@@ -31,13 +31,18 @@ class AlbumService {
     }
   }
 
-  Future<AlbumModel?> createAlbum(String name) async {
+  // The real title is sealed under the album MK and PATCHed in only after
+  // epoch 0 bootstrap installs that MK (see create_album_screen). This POST
+  // just needs a non empty placeholder name_ct : bytes that decrypt to nothing
+  // and arent legacy plaintext, so resolveAlbumName shows "Untitled Album" in
+  // the unlikely case the follow up PATCH never lands
+  static const _placeholderNameCt = '////'; // base64 of 0xFF 0xFF 0xFF
+
+  Future<AlbumModel?> createAlbum() async {
     try {
-      // todo (p1): replace with real AES-GCM encrypted name_ct
-      final nameCt = base64.encode(utf8.encode(name));
       final response = await _client.post(
         '/albums',
-        body: {'name_ct': nameCt},
+        body: {'name_ct': _placeholderNameCt},
       );
       if (response.statusCode == 201) {
         return AlbumModel.fromJson(jsonDecode(response.body));
@@ -45,6 +50,33 @@ class AlbumService {
       return null;
     } catch (_) {
       return null;
+    }
+  }
+
+  // PATCH the album's encrypted title (admin/co admin only, server enforced)
+  Future<bool> updateAlbumNameCt(String albumId, String nameCtB64) async {
+    try {
+      final response = await _client.patch(
+        '/albums/$albumId',
+        body: {'name_ct': nameCtB64},
+      );
+      return response.statusCode == 200 || response.statusCode == 204;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // PUT the caller's own encrypted display name for one album. The server reads
+  // the caller's member_token from middleware
+  Future<bool> putProfileCt(String albumId, String nameCtB64) async {
+    try {
+      final response = await _client.put(
+        '/albums/$albumId/members/me/profile-ct',
+        body: {'name_ct': nameCtB64},
+      );
+      return response.statusCode == 200 || response.statusCode == 204;
+    } catch (_) {
+      return false;
     }
   }
 

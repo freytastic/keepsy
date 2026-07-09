@@ -43,18 +43,4 @@ class AlbumMember {
         profile: MemberProfile.fromJson(
             json['profile'] as Map<String, dynamic>? ?? {}),
       );
-
-  // First character for member chips. M7 placeholder : until the client wires
-  // up name_ct decryption (Phase 5) we fall back to the first char of the
-  // pseudonymous token. Returns '?' for the degenerate empty token case
-  String get displayInitial {
-    return memberToken.isNotEmpty ? memberToken[0].toUpperCase() : '?';
-  }
-
-  // Short pseudonymous label used while name_ct decryption isn't wired yet
-  // First 8 chars of the (base64) token : enough to disambiguate : full
-  // token is too long for a chip
-  String get displayName {
-    return memberToken.length > 8 ? memberToken.substring(0, 8) : memberToken;
-  }
 }

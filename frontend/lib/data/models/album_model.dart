@@ -1,6 +1,9 @@
 class AlbumModel {
   final String id;
-  final String name;
+  // Raw base64 name_ct as stored server side (sealed under the album MK, or a
+  // legacy placeholder). Decrypted for display via resolveAlbumName : the UI
+  // reads the resolved string from AppState.albumDisplayName, never this field
+  final String? nameCt;
   final DateTime createdAt;
   final DateTime updatedAt;
   // memberToken : the caller's own member_token for this album, base64. Set
@@ -11,18 +14,24 @@ class AlbumModel {
 
   AlbumModel({
     required this.id,
-    required this.name,
+    required this.nameCt,
     required this.createdAt,
     required this.updatedAt,
     this.memberToken,
   });
 
+  AlbumModel copyWith({String? nameCt}) => AlbumModel(
+        id: id,
+        nameCt: nameCt ?? this.nameCt,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        memberToken: memberToken,
+      );
+
   factory AlbumModel.fromJson(Map<String, dynamic> json) {
     return AlbumModel(
       id: json['id'] ?? '',
-      // Server sends 'name_ct' base64. Phase 5 wires actual MK based decrypt :
-      // until then the client renders the base64 ciphertext as a placeholder
-      name: json['name_ct'] ?? 'Untitled Album',
+      nameCt: json['name_ct'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : DateTime.now(),
