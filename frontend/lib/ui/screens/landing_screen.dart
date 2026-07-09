@@ -216,6 +216,9 @@ Future<void> syncAlbumKeys({
   appState.markSyncing(ids);
   try {
     await catchUp(albumIds);
+    // MKs are installed now : titles that setAlbums couldnt decrypt yet
+    // (cold start before catch up) become resolvable
+    appState.refreshAlbumNames();
   } catch (_) {
   } finally {
     for (final id in ids) {

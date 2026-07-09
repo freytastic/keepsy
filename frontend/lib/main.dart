@@ -19,7 +19,10 @@ import 'package:keepsy/data/storage/cache_root_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
+import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/display_name.dart';
+import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
@@ -100,6 +103,12 @@ void main() async {
   await secureKeyStore.initialize();
   unawaited(_prewarmAlbumKeyStore(albumKeyStore));
   final albumService = AlbumService();
+  final displayNamePublisher = DisplayNamePublisher(
+    ks: albumKeyStore,
+    putProfileCt: (albumId, ct) => albumService.putProfileCt(albumId, ct),
+  );
+  // The album title resolver is attached after cache_root_key/NameCache load
+  // (below), since it reads through the persistent name cache
   final memberDirectory = MemberDirectory((albumId) async {
     final members =
         await albumService.listMembers(_uuidStringFromBytes(albumId));
@@ -153,6 +162,30 @@ void main() async {
   // renders since the cache manager awaits readBlob on the first widget build
   final mediaApi = MediaApi(apiClient);
   final cacheRootKey = await loadOrCreateCacheRootKey(secureKeyStore);
+  // Persistent display name cache (sealed under cache_root_key). Reads are solely
+  // CPU after this load, so titles/names paint without an album MK keystore hit
+  final nameCache = await NameCache.open(cacheRootKey: cacheRootKey);
+  // Attach the album title resolver now that the cache exists : cache hit ->
+  // instant : miss -> one MK decrypt, then cached. Falls back to the
+  // placeholder path (never caching a not yet decryptable sealed title)
+  appState.attachAlbumNameResolver((albumId, nameCt) async {
+    if (nameCt == null || nameCt.isEmpty) return 'Untitled Album';
+    final key = NameCache.albumKey(albumId);
+    final cached = nameCache.get(key, nameCt);
+    if (cached != null) return cached;
+    final b = _uuidStringToBytes(albumId);
+    if (b == null) return 'Untitled Album';
+    final opened = await SealedName.openAlbumName(albumKeyStore, b, nameCt);
+    if (opened != null) {
+      // Dont cache a title for an album we've since left/removed (an in flight
+      // resolve can finish after the wipe)
+      if (appState.albums.any((a) => a.id == albumId)) {
+        nameCache.put(key, opened, nameCt);
+      }
+      return opened;
+    }
+    return resolveAlbumName(albumKeyStore, b, nameCt);
+  });
   final mediaSealedCache =
       await MediaSealedCache.open(cacheRootKey: cacheRootKey);
   final mediaPlaintextCache = MediaPlaintextCache();
@@ -187,7 +220,11 @@ void main() async {
       final albumStr = _uuidStringFromBytes(albumId);
       await mediaCacheManager.clearAlbum(albumStr);
       await albumKeyStore.deleteAlbumMKs(albumId);
+      // Mark the album gone FIRST : this pops the open screen (setting
+      // _accessLost) and makes in flight resolvers skip re caching, so the
+      // durable name wipe below is the last write and stays wiped
       appState.removeAlbum(albumStr);
+      await nameCache.clearAlbum(albumStr);
     },
     isPendingRotation: (albumId) async {
       final cur = await epochApi.getCurrentEpoch(_uuidStringFromBytes(albumId));
@@ -275,9 +312,27 @@ void main() async {
   // Fires post install so a fast tap never lands on a "syncing keys"
   // placeholder. Composes with both live joined:true events and the cold
   // start catchUpAll path (both go through _backfillJoin)
-  epochProcessor.joinedAlbums.listen((albumIdBytes) {
+  epochProcessor.joinedAlbums.listen((albumIdBytes) async {
     final albumIdStr = _uuidStringFromBytes(albumIdBytes);
-    appState.refreshAlbumOnJoin(albumIdStr, albumService).catchError((_) {});
+    await appState
+        .refreshAlbumOnJoin(albumIdStr, albumService)
+        .catchError((_) {});
+    // Publish my global display name into the album me just joined (snapshot)
+    final name = appState.profileName;
+    if (name.isEmpty) return;
+    String? tok;
+    for (final a in appState.albums) {
+      if (a.id == albumIdStr) {
+        tok = a.memberToken;
+        break;
+      }
+    }
+    if (tok == null) return;
+    try {
+      final tokenBytes = base64Decode(tok);
+      await displayNamePublisher.publishToAlbum(
+          albumId: albumIdStr, memberToken: tokenBytes, name: name);
+    } catch (_) {}
   });
 
   // WS reconnect catch up : every successful WS open replays the cold start
@@ -291,7 +346,10 @@ void main() async {
       if (b != null) ids.add(b);
     }
     if (ids.isEmpty) return;
-    epochProcessor.catchUpAll(ids).catchError((_) {});
+    epochProcessor.catchUpAll(ids).then((_) {
+      // Newly installed MKs may make album titles decryptable now
+      appState.refreshAlbumNames();
+    }).catchError((_) {});
   });
 
   runApp(
@@ -306,6 +364,8 @@ void main() async {
         Provider<EpochProcessor>.value(value: epochProcessor),
         Provider<EpochRotator>.value(value: epochRotator),
         Provider<MemberRemovalCoordinator>.value(value: memberRemoval),
+        Provider<DisplayNamePublisher>.value(value: displayNamePublisher),
+        Provider<NameCache>.value(value: nameCache),
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<SodiumSumo>.value(value: sodium),
