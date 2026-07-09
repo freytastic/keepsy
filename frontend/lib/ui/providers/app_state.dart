@@ -7,6 +7,11 @@ import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
+// Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
+// so AppState itself stays free of crypto/keystore deps
+typedef AlbumNameResolver = Future<String> Function(
+    String albumId, String? nameCt);
+
 class AppState extends ChangeNotifier {
   StreamSubscription<RealtimeEvent>? _realtimeSub;
 
@@ -27,8 +32,92 @@ class AppState extends ChangeNotifier {
   List<AlbumModel> _albums = [];
   List<AlbumModel> get albums => _albums;
 
+  // Decrypted album titles keyed by album id. Populated asynchronously by the
+  // injected resolver : the UI reads this (with a placeholder fallback) rather
+  // than the raw name_ct
+  final Map<String, String> _albumNames = {};
+  String? albumDisplayName(String id) => _albumNames[id];
+
+  // nameCt we authored locally (create/rename PATCH) that the server may not
+  // have echoed back yet. setAlbums/prependAlbum overlay it so a stale GET that
+  // still carries the create time placeholder can't regress the title. Dropped
+  // once the server returns the same nameCt
+  final Map<String, String> _localNameCt = {};
+
+  AlbumModel _overlayLocalNameCt(AlbumModel a) {
+    final local = _localNameCt[a.id];
+    if (local == null) return a;
+    if (a.nameCt == local) {
+      _localNameCt.remove(a.id); // server caught up
+      return a;
+    }
+    return a.copyWith(nameCt: local); // incoming is an older placeholder
+  }
+
+  // Wipe the in RAM plaintext title cache (logout : the persistent NameCache is
+  // cleared separately)
+  void clearDisplayNameCaches() {
+    _albumNames.clear();
+    _localNameCt.clear();
+    notifyListeners();
+  }
+
+  AlbumNameResolver? _nameResolver;
+  void attachAlbumNameResolver(AlbumNameResolver r) {
+    _nameResolver = r;
+    refreshAlbumNames();
+  }
+
+  // Directly set a title we already hold in plaintext (eg  right after
+  // creating an album) : skips a needless decrypt round trip
+  void setAlbumDisplayName(String id, String name) {
+    _albumNames[id] = name;
+    notifyListeners();
+  }
+
+  // After sealing + PATCHing a new title, update BOTH the cached display name
+  // and the stored album's raw nameCt. Without the nameCt update, _albums still
+  // holds the create time placeholder, so a later refreshAlbumNames() would
+  // re resolve that placeholder and clobber the correct title
+  void applyAlbumNameCt(String id, String nameCt, String displayName) {
+    _localNameCt[id] = nameCt;
+    final i = _albums.indexWhere((a) => a.id == id);
+    if (i != -1) {
+      _albums[i] = _albums[i].copyWith(nameCt: nameCt);
+    }
+    _albumNames[id] = displayName;
+    notifyListeners();
+  }
+
+  // Re resolve every album's title. Called after the resolver attaches and
+  // again after key catch up installs the MKs (names sealed under a not yet
+  // installed epoch resolve to a placeholder until then)
+  void refreshAlbumNames() {
+    for (final a in _albums) {
+      unawaited(_resolveName(a));
+    }
+  }
+
+  Future<void> _resolveName(AlbumModel a) async {
+    final r = _nameResolver;
+    if (r == null) return;
+    final name = await r(a.id, a.nameCt);
+    // Stale guard: if the album's nameCt changed while we were resolving (eg
+    // applyAlbumNameCt landed the real title after a create PATCH, or setAlbums
+    // replaced the row), discard this now stale result so it can't clobber the
+    // newer name
+    final idx = _albums.indexWhere((x) => x.id == a.id);
+    if (idx == -1 || _albums[idx].nameCt != a.nameCt) return;
+    if (_albumNames[a.id] != name) {
+      _albumNames[a.id] = name;
+      notifyListeners();
+    }
+  }
+
   void setAlbums(List<AlbumModel> newAlbums) {
-    _albums = newAlbums;
+    // Overlay any locally authored nameCt so a stale GET placeholder can't
+    // regress a title we just PATCHed (create/rename)
+    _albums = newAlbums.map(_overlayLocalNameCt).toList();
     // A re invited album reappearing clears the stale "was removed" signal so an
     // AlbumDetailScreen opened for it doesnt trip the kicked-while-viewing exit
     if (_lastRemovedAlbumId != null &&
@@ -36,6 +125,7 @@ class AppState extends ChangeNotifier {
       _lastRemovedAlbumId = null;
     }
     notifyListeners();
+    refreshAlbumNames();
   }
 
   // Insert a freshly joined album at the front of the home grid. Idempotent
@@ -46,8 +136,10 @@ class AppState extends ChangeNotifier {
     // the reopened detail screen doesnt auto exit (see removeAlbum below)
     if (_lastRemovedAlbumId == a.id) _lastRemovedAlbumId = null;
     if (_albums.any((x) => x.id == a.id)) return;
-    _albums = [a, ..._albums];
+    final overlaid = _overlayLocalNameCt(a);
+    _albums = [overlaid, ..._albums];
     notifyListeners();
+    unawaited(_resolveName(overlaid));
   }
 
   // Drop an album from the home grid : used when this device is removed/leaves
@@ -59,6 +151,8 @@ class AppState extends ChangeNotifier {
 
   void removeAlbum(String albumIdStr) {
     _albums = _albums.where((x) => x.id != albumIdStr).toList();
+    _albumNames.remove(albumIdStr);
+    _localNameCt.remove(albumIdStr);
     _lastRemovedAlbumId = albumIdStr;
     notifyListeners();
   }

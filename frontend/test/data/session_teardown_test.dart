@@ -13,6 +13,7 @@ import 'package:keepsy/data/storage/media_cache_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
+import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
@@ -68,7 +69,17 @@ void main() {
     l1.put(k, pt);
     await l2.writeBlob(k, pt);
 
-    await performLogout(auth: AuthService(), mediaCache: mgr);
+    final nameCache = await NameCache.open(
+        file: File('${tmp.path}/names.kec'), cacheRootKey: cacheKey);
+    nameCache.put(NameCache.albumKey('A'), 'Secret Album', 'ct');
+    await nameCache.flush();
+
+    await performLogout(
+        auth: AuthService(), mediaCache: mgr, nameCache: nameCache);
+
+    // name cache is album content : wiped on logout like the media cache
+    expect(nameCache.get(NameCache.albumKey('A'), 'ct'), isNull);
+    expect(File('${tmp.path}/names.kec').existsSync(), isFalse);
 
     // cache_root_key is device bound (like album MKs) : it MUST survive logout
     // Deleting it stranded blobs sealed under the in RAM key after a same process

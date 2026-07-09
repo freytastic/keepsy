@@ -5,8 +5,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
+import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
@@ -48,6 +51,8 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
     final rotator = context.read<EpochRotator>();
     final identity = context.read<IdentityService>();
     final appState = context.read<AppState>();
+    final albumKeys = context.read<AlbumKeyStore>();
+    final namePublisher = context.read<DisplayNamePublisher>();
     final userId = appState.userId;
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -64,7 +69,7 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
     await WidgetsBinding.instance.endOfFrame;
 
     try {
-      final album = await AlbumService().createAlbum(name);
+      final album = await AlbumService().createAlbum();
       if (album == null) throw Exception('Album creation failed');
       final tokenB64 = album.memberToken;
       if (tokenB64 == null) {
@@ -86,11 +91,15 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
         rotator: rotator,
         identity: identity,
         appState: appState,
+        albumKeys: albumKeys,
+        namePublisher: namePublisher,
         messenger: messenger,
         albumId: album.id,
         albumIdBytes: albumIdBytes,
         creatorMemberToken: base64Decode(tokenB64),
         creatorUserId: userId,
+        albumName: name,
+        creatorDisplayName: appState.profileName,
       ));
       navigator.pop(album);
     } catch (e) {
@@ -109,11 +118,15 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
     required EpochRotator rotator,
     required IdentityService identity,
     required AppState appState,
+    required AlbumKeyStore albumKeys,
+    required DisplayNamePublisher namePublisher,
     required ScaffoldMessengerState messenger,
     required String albumId,
     required Uint8List albumIdBytes,
     required Uint8List creatorMemberToken,
     required String creatorUserId,
+    required String albumName,
+    required String creatorDisplayName,
   }) async {
     try {
       await identity.cryptoReady;
@@ -121,6 +134,22 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
         albumIdBytes: albumIdBytes,
         creatorMemberToken: creatorMemberToken,
         creatorUserId: creatorUserId,
+      );
+      // epoch 0 MK now exists : seal the real title and PATCH it in, then
+      // show it immediately (we hold the plaintext, no decrypt needed)
+      final nameCt =
+          await SealedName.sealAlbumName(albumKeys, albumIdBytes, 0, albumName);
+      if (await AlbumService().updateAlbumNameCt(albumId, nameCt)) {
+        // Update the stored nameCt too : if MainShell's post create album
+        // refresh raced ahead with the placeholder, a later refreshAlbumNames
+        // would otherwise clobber this title back to "Untitled Album"
+        appState.applyAlbumNameCt(albumId, nameCt, albumName);
+      }
+      // Publish the creator's global display name into this album
+      await namePublisher.publishToAlbum(
+        albumId: albumId,
+        memberToken: creatorMemberToken,
+        name: creatorDisplayName,
       );
     } catch (_) {
       messenger.showSnackBar(const SnackBar(
