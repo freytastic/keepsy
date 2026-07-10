@@ -1,6 +1,10 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// handles read write delete of JWT credentials via SharedPreferences.
+// JWT credentials (token/refresh/expiry) is in platform secure storage
+// (Android Keystore backed EncryptedSharedPreferences / iOS Keychain), never
+// plaintext SharedPreferences. Email/name are non credential display caches
+// and stay in SharedPreferences
 class StorageService {
   static const _keyToken = 'auth_token';
   static const _keyRefreshToken = 'auth_refresh_token';
@@ -18,6 +22,10 @@ class StorageService {
   factory StorageService() => _instance;
   StorageService._();
 
+  // const : each call resolves the current platform (mockable in tests via
+  // FlutterSecureStorage.setMockInitialValues)
+  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+
   SharedPreferences? _prefs;
 
   Future<SharedPreferences> get _sp async {
@@ -28,10 +36,15 @@ class StorageService {
   // write
   Future<void> saveAuth(
       String token, String refreshToken, String expiresAt) async {
+    await _secure.write(key: _keyToken, value: token);
+    await _secure.write(key: _keyRefreshToken, value: refreshToken);
+    await _secure.write(key: _keyExpiry, value: expiresAt);
+    // scrub any plaintext credential left behind by an install upgraded from
+    // the old prefs based build : the first fresh login must not leave it at rest
     final sp = await _sp;
-    await sp.setString(_keyToken, token);
-    await sp.setString(_keyRefreshToken, refreshToken);
-    await sp.setString(_keyExpiry, expiresAt);
+    await sp.remove(_keyToken);
+    await sp.remove(_keyRefreshToken);
+    await sp.remove(_keyExpiry);
   }
 
   Future<void> saveEmail(String email) async {
@@ -55,19 +68,12 @@ class StorageService {
   }
 
   // read
-  Future<String?> getToken() async {
-    final sp = await _sp;
-    return sp.getString(_keyToken);
-  }
+  Future<String?> getToken() => _secure.read(key: _keyToken);
 
-  Future<String?> getRefreshToken() async {
-    final sp = await _sp;
-    return sp.getString(_keyRefreshToken);
-  }
+  Future<String?> getRefreshToken() => _secure.read(key: _keyRefreshToken);
 
   Future<DateTime?> getExpiry() async {
-    final sp = await _sp;
-    final raw = sp.getString(_keyExpiry);
+    final raw = await _secure.read(key: _keyExpiry);
     if (raw == null) return null;
     return DateTime.tryParse(raw);
   }
@@ -85,7 +91,11 @@ class StorageService {
 
   // delete (logout)
   Future<void> deleteAuth() async {
+    await _secure.delete(key: _keyToken);
+    await _secure.delete(key: _keyRefreshToken);
+    await _secure.delete(key: _keyExpiry);
     final sp = await _sp;
+    // legacy cleanup : older builds kept the tokens in SharedPreferences
     await sp.remove(_keyToken);
     await sp.remove(_keyRefreshToken);
     await sp.remove(_keyExpiry);
