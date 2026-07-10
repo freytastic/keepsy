@@ -62,6 +62,30 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Full session reset on logout : doesnt touch device bound E2EE key material
+  void reset() {
+    _realtimeSub?.cancel();
+    _realtimeSub = null;
+    _albums = [];
+    _albumNames.clear();
+    _localNameCt.clear();
+    _syncing.clear();
+    _lastRemovedAlbumId = null;
+    _hasUnreadNotifications = false;
+    // realtime one-shot signals
+    _lastMediaAddedAlbumId = null;
+    _lastMediaAddedMediaId = null;
+    _lastMemberChangedAlbumId = null;
+    _memberChangeTick = 0;
+    // identity + profile : must not bleed into the next account's session
+    _userId = null;
+    _email = null;
+    _keepsyId = null;
+    _avatarKey = null;
+    _profileName = 'User';
+    notifyListeners();
+  }
+
   AlbumNameResolver? _nameResolver;
   void attachAlbumNameResolver(AlbumNameResolver r) {
     _nameResolver = r;
