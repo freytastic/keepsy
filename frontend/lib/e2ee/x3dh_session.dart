@@ -73,6 +73,7 @@ abstract class X3dhSession {
     required Uint8List peerLkPub,
     required int? opkIdx,
     required Uint8List albumId,
+    bool useSpkPrevious = false,
   }) async {
     if (ekPub.length != 32) {
       throw ArgumentError('ekPub must be 32 bytes, got ${ekPub.length}');
@@ -89,6 +90,7 @@ abstract class X3dhSession {
         lkPkA: peerLkPub,
         ekPkA: ekPub,
         albumId: albumId,
+        useSpkPrevious: useSpkPrevious,
       );
     }
 
@@ -100,6 +102,7 @@ abstract class X3dhSession {
         lkPkA: peerLkPub,
         ekPkA: ekPub,
         albumId: albumId,
+        useSpkPrevious: useSpkPrevious,
       );
     });
     if (opkAttempt == null) {
@@ -119,6 +122,7 @@ Future<Uint8List> _runResponder({
   required Uint8List lkPkA,
   required Uint8List ekPkA,
   required Uint8List albumId,
+  bool useSpkPrevious = false,
 }) {
   return identity.useLk<Uint8List>((lkPriv) async {
     final lkKp = await KeyHandleAdapter.toX25519(lkPriv);
@@ -132,6 +136,6 @@ Future<Uint8List> _runResponder({
         ekPkA: ekPkA,
         albumId: albumId,
       );
-    });
+    }, previous: useSpkPrevious);
   });
 }

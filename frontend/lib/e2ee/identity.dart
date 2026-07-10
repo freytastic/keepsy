@@ -450,14 +450,23 @@ class IdentityService {
     return _store.use<T>(KeyHandle(id: id, label: kLabelLK), fn);
   }
 
-  Future<T> useSpk<T>(Future<T> Function(Uint8List priv) fn) {
-    final id = _labels.handleId(kLabelSpkCurrent);
+  // true once a rotation has demoted a prior SPK into the previous slot. The
+  // responder tries the previous SPK when a wrap was built against it just
+  // before we rotated (delayed wrap race)
+  bool get hasPreviousSpk => _labels.handleId(kLabelSpkPrevious) != null;
+
+  Future<T> useSpk<T>(Future<T> Function(Uint8List priv) fn,
+      {bool previous = false}) {
+    final label = previous ? kLabelSpkPrevious : kLabelSpkCurrent;
+    final id = _labels.handleId(label);
     if (id == null) {
       throw StateError(
-        'SPK.current not bootstrapped : IdentityService.bootstrap() first',
+        previous
+            ? 'SPK.previous not present : no rotation has happened yet'
+            : 'SPK.current not bootstrapped : IdentityService.bootstrap() first',
       );
     }
-    return _store.use<T>(KeyHandle(id: id, label: kLabelSpkCurrent), fn);
+    return _store.use<T>(KeyHandle(id: id, label: label), fn);
   }
 
   // Responder side OPK access. Returns null (not StateError) when the label

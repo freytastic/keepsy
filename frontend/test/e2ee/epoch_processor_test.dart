@@ -40,9 +40,10 @@ class _Stack {
 Future<_Stack> _bootStack({
   Uint8List? albumId,
   Duration? backoff,
+  DateTime Function()? nowFn,
 }) async {
   final id = albumId ?? _albumId();
-  final responder = await newResponderIdentity();
+  final responder = await newResponderIdentity(nowFn: nowFn);
   final admin = await SyntheticAdmin.create();
   final directory = MemberDirectory(singletonAdminFetcher(admin));
   final api = FakeEpochApi();
@@ -283,6 +284,64 @@ void main() {
           reason: "A's wrap was missing : nothing to install");
       expect(await aks.presentEpochs(idB), [0],
           reason: 'B must install even though A failed first');
+    });
+
+    test(
+        'previous SPK fallback: a wrap built against a rotated-away SPK still '
+        'installs', () async {
+      // sender captured the responder's SPK, then the responder rotated before
+      // processing the wrap. The current SPK cant derive the SK : the processor
+      // must fall back to the just previous SPK
+      var clock = DateTime.utc(2026, 5, 4, 12);
+      final s = await _bootStack(nowFn: () => clock);
+      final mk = _mk(0x5A);
+      // bundle captures SPK1 (current at bootstrap)
+      final bundle =
+          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+      final env = await s.admin.buildWrap(
+        albumId: s.albumId,
+        epoch: 0,
+        mk: mk,
+        responderBundle: bundle,
+      );
+      s.api.putWrap(s.albumIdStr, 0, env);
+      // rotate : SPK1 -> previous slot, fresh SPK2 -> current
+      clock = clock.add(const Duration(days: 31));
+      await s.responder.ensureSpkRotated();
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+      final got = await s.aks
+          .useMk<List<int>>(s.albumId, 0, (b) async => List<int>.from(b));
+      expect(got, equals(mk));
+    });
+
+    test('previous SPK fallback is bounded to one generation back', () async {
+      // a wrap built against SPK1, then TWO rotations : SPK1 is now neither
+      // current nor previous. The fallback must NOT reach it : still fails
+      var clock = DateTime.utc(2026, 5, 4, 12);
+      final s = await _bootStack(nowFn: () => clock);
+      final bundle =
+          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+      final env = await s.admin.buildWrap(
+        albumId: s.albumId,
+        epoch: 0,
+        mk: _mk(0x5B),
+        responderBundle: bundle,
+      );
+      s.api.putWrap(s.albumIdStr, 0, env);
+      clock = clock.add(const Duration(days: 31));
+      await s.responder.ensureSpkRotated(); // SPK1 -> previous
+      clock = clock.add(const Duration(days: 31));
+      await s.responder.ensureSpkRotated(); // SPK1 evicted, SPK2 -> previous
+
+      await expectLater(
+        s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+        throwsA(isA<WrapVerificationException>()
+            .having((e) => e.reason, 'reason', 'aead_auth_failed')),
+      );
+      expect(await s.aks.presentEpochs(s.albumId), isEmpty);
     });
 
     test('sender_sig invalid -> WrapVerificationException(sig_invalid)',
