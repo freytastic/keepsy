@@ -184,26 +184,21 @@ class EpochProcessor {
     final ok = await Sign.verify(pubs.ikPub, msg, envelope.senderSig);
     if (!ok) throw const WrapVerificationException('sig_invalid');
 
-    Uint8List? sk;
-    Uint8List? mk;
+    // Try the current SPK, then the previous one. A wrap a sender built against
+    // our SPK moments before we rotated only fails at the wrap AEAD tag (derive
+    // itself always yields some SK) : the previous SPK is retained one
+    // generation back for exactly this delayed-wrap race
+    final aad = _aad(albumId, epoch);
+    Uint8List? mk = await _unwrapWithSpk(albumId, epoch, envelope, pubs, aad,
+        useSpkPrevious: false);
+    if (mk == null && _identity.hasPreviousSpk) {
+      mk = await _unwrapWithSpk(albumId, epoch, envelope, pubs, aad,
+          useSpkPrevious: true);
+    }
+    if (mk == null) {
+      throw const WrapVerificationException('aead_auth_failed');
+    }
     try {
-      sk = await X3dhSession.derive(
-        identity: _identity,
-        ekPub: envelope.ekPub,
-        peerLkPub: pubs.lkPub,
-        opkIdx: envelope.opkIdxUsed,
-        albumId: albumId,
-      );
-      final aad = _aad(albumId, epoch);
-      try {
-        mk = await Aead.decrypt(
-          wire: envelope.wrap,
-          key: sk,
-          aad: aad,
-        );
-      } on AeadAuthFailed {
-        throw const WrapVerificationException('aead_auth_failed');
-      }
       await _store.installVerified(
         albumId: albumId,
         epoch: epoch,
@@ -211,10 +206,40 @@ class EpochProcessor {
         backfill: backfill,
       );
     } finally {
-      if (sk != null) sk.fillRange(0, sk.length, 0);
-      if (mk != null) mk.fillRange(0, mk.length, 0);
+      mk.fillRange(0, mk.length, 0);
     }
     return envelope.ekPub;
+  }
+
+  // Derives the SK under the selected SPK (current or previous) and unwraps the
+  // MK. Returns null when the wrap AEAD tag fails (wrong SPK : the caller then
+  // retries with the previous SPK). Zeroes the SK on every path
+  Future<Uint8List?> _unwrapWithSpk(
+    Uint8List albumId,
+    int epoch,
+    WrapEnvelope envelope,
+    MemberPubs pubs,
+    Uint8List aad, {
+    required bool useSpkPrevious,
+  }) async {
+    Uint8List? sk;
+    try {
+      sk = await X3dhSession.derive(
+        identity: _identity,
+        ekPub: envelope.ekPub,
+        peerLkPub: pubs.lkPub,
+        opkIdx: envelope.opkIdxUsed,
+        albumId: albumId,
+        useSpkPrevious: useSpkPrevious,
+      );
+      try {
+        return await Aead.decrypt(wire: envelope.wrap, key: sk, aad: aad);
+      } on AeadAuthFailed {
+        return null;
+      }
+    } finally {
+      if (sk != null) sk.fillRange(0, sk.length, 0);
+    }
   }
 
   Future<WrapEnvelope> _fetchWithRetry(String albumId, int epoch) async {

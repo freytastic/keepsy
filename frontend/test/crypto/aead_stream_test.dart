@@ -161,6 +161,21 @@ void main() {
         throwsA(isA<FormatException>()),
       );
     });
+
+    test('header-only blob (no segments) -> FormatException', () async {
+      // A legit empty file is header + ONE authenticated zero length segment
+      // (a 16 byte tag). A blob with a valid header but NO segment tag
+      // authenticates nothing : it must be rejected, not silently decrypted to
+      // empty plaintext (server could forge this to fake an "empty" media item)
+      final full = await AeadStream.encryptBytes(
+          dek: _dek(), plaintext: Uint8List(0), mediaId: _mediaId());
+      final headerOnly = Uint8List.sublistView(full, 0, AeadStream.headerLen);
+      await expectLater(
+        AeadStream.decryptBytes(
+            dek: _dek(), wire: headerOnly, mediaId: _mediaId()),
+        throwsA(isA<FormatException>()),
+      );
+    });
   });
 
   group('AeadStream nonce determinism', () {

@@ -117,13 +117,18 @@ class EpochRotator {
           albumId: albumIdBytes,
           identity: _identity,
         );
-        final wrap = await _wrapMK(
-          sk: init.sharedSecret,
-          mk: mk,
-          albumIdBytes: albumIdBytes,
-          epoch: epoch,
-        );
-        init.sharedSecret.fillRange(0, init.sharedSecret.length, 0);
+        final Uint8List wrap;
+        try {
+          wrap = await _wrapMK(
+            sk: init.sharedSecret,
+            mk: mk,
+            albumIdBytes: albumIdBytes,
+            epoch: epoch,
+          );
+        } finally {
+          // zero the X3DH shared secret even if the wrap throws
+          init.sharedSecret.fillRange(0, init.sharedSecret.length, 0);
+        }
         final senderMsg = await _buildSenderMsg(albumIdBytes, epoch, wrap);
 
         partials.add((

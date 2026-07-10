@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -36,10 +37,15 @@ class _DeadApi implements MediaApiInterface {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   setUpAll(() {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   });
+
+  // credentials now live in secure storage : logout deletes them there
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
   test(
       'performLogout clears auth + wipes media cache but KEEPS the '
@@ -91,6 +97,40 @@ void main() {
     expect(await aks.presentEpochs(_albumIdBytes()), contains(0));
     final sp = await SharedPreferences.getInstance();
     expect(sp.getString('auth_token'), isNull);
+
+    await l2.close();
+    tmp.deleteSync(recursive: true);
+  });
+
+  test('performLogout disconnects realtime', () async {
+    SharedPreferences.setMockInitialValues({'auth_token': 'tok'});
+    final tmp = Directory.systemTemp.createTempSync('logout_rt_');
+    final store = MockSecureKeyStore();
+    await store.initialize();
+    final aks = AlbumKeyStore(store);
+    await aks.initialize();
+    final cacheKey = await loadOrCreateCacheRootKey(store);
+    final l2 = await MediaSealedCache.open(
+        rootDir: tmp, cacheRootKey: cacheKey, budgetBytes: 1 << 20);
+    final mgr = MediaCacheManager(
+        plaintext: MediaPlaintextCache(),
+        ciphertext: l2,
+        api: _DeadApi(),
+        aks: aks);
+    final nameCache = await NameCache.open(
+        file: File('${tmp.path}/names.kec'), cacheRootKey: cacheKey);
+
+    var disconnected = false;
+    await performLogout(
+      auth: AuthService(),
+      mediaCache: mgr,
+      nameCache: nameCache,
+      disconnectRealtime: () async {
+        disconnected = true;
+      },
+    );
+
+    expect(disconnected, isTrue);
 
     await l2.close();
     tmp.deleteSync(recursive: true);

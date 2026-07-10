@@ -736,6 +736,40 @@ func TestConfirmUpload_ThumbSHA256MismatchDropsRow(t *testing.T) {
 	}
 }
 
+func TestConfirmUpload_ThumbMismatchDeletesBothObjects(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	in := validThumbInput()
+	albumID := uuid.New()
+	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+
+	fileKey := s3.presignKeys[0]
+	thumbKey := s3.presignKeys[1]
+	// blob matches, thumb size is wrong : confirm drops the row and must
+	// delete BOTH S3 objects. Deleting only the blob orphans the thumb
+	s3.headByKey = map[string]headResult{
+		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
+		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
+	}
+
+	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	if !apierr.IsCode(err, "E_VALIDATION") {
+		t.Fatalf("err = %v, want E_VALIDATION", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; ok {
+		t.Errorf("pending row not dropped")
+	}
+	deleted := map[string]bool{}
+	for _, k := range s3.deleteKeys {
+		deleted[k] = true
+	}
+	if !deleted[fileKey] {
+		t.Errorf("blob object %q not deleted (deleted: %v)", fileKey, s3.deleteKeys)
+	}
+	if !deleted[thumbKey] {
+		t.Errorf("thumb object %q orphaned : not deleted (deleted: %v)", thumbKey, s3.deleteKeys)
+	}
+}
+
 func TestRequestDownloadURL_ThumbAssetUsesThumbKey(t *testing.T) {
 	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
 	in := validThumbInput()

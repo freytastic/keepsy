@@ -149,55 +149,68 @@ abstract class FilePipeline {
 
       final blobSha256 = await _sha256(cipher);
 
-      //  MK loaded once + reused for both wraps so we hit the keystore
-      // MethodChannel a single time per upload (platform thread thrash matters
-      // more than ms here : see project_post_libsodium_bottleneck memory)
       final wrapAad = _wrapAad(albumIdBytes, currentEpoch);
-      final mkBytes = await _useMkBytes(aks, albumIdBytes, currentEpoch);
-      final wrapWire = await Aead.encrypt(
-        version: kVerAesGcm,
-        key: mkBytes,
-        plaintext: dek,
-        aad: wrapAad,
-      );
-      if (wrapWire.length != _wrapWireLen) {
-        throw StateError(
-            'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
-      }
-      final wrapNonce =
-          Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
-      final wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
 
-      // thumb has its OWN DEK so MK compromise doesnt leak thumb +
-      // file together. Thumb cipher AAD = media_id ‖ "thumb" so a swapped
-      // thumb object from the same media_id fails the AEAD tag
+      // thumb has its OWN DEK so MK compromise doesnt leak thumb + file
+      // together. Thumb cipher AAD = media_id ‖ "thumb" so a swapped thumb
+      // object from the same media_id fails the AEAD tag. The thumb cipher
+      // needs no MK, so encrypt it before we touch the keystore
+      final Uint8List? dekThumb =
+          thumbPlaintext == null ? null : Csprng.bytes(_dekLen);
       Uint8List? thumbCipher;
       Uint8List? thumbWrapNonce;
       Uint8List? thumbWrapTagCT;
       Uint8List? thumbSha256;
-      if (thumbPlaintext != null) {
-        final dekThumb = Csprng.bytes(_dekLen);
-        try {
+
+      // dekThumb + the MK wraps all are under one try/finally so the thumb DEK
+      // is zeroed even if the thumb encrypt/hash or a wrap throws. Both DEK
+      // wraps run INSIDE one useMk callback : the MK bytes never escape it
+      // (SecureKeyStore.use zeroes them in finally : see the album_keys "zeroes
+      // the buffer in finally" test) and we still hit the keystore MethodChannel
+      // a single time per upload (platform thread thrash matters more than ms
+      // here : see project_post_libsodium_bottleneck)
+      late final Uint8List wrapNonce;
+      late final Uint8List wrapTagCT;
+      try {
+        if (dekThumb != null) {
           thumbCipher = await Aead.encrypt(
             version: kVerAesGcm,
             key: dekThumb,
-            plaintext: thumbPlaintext,
+            plaintext: thumbPlaintext!,
             aad: _thumbAad(mediaId),
           );
           thumbSha256 = await _sha256(thumbCipher);
-          final thumbWrapWire = await Aead.encrypt(
+        }
+        await aks.useMk<void>(albumIdBytes, currentEpoch, (mk) async {
+          final wrapWire = await Aead.encrypt(
             version: kVerAesGcm,
-            key: mkBytes,
-            plaintext: dekThumb,
+            key: mk,
+            plaintext: dek,
             aad: wrapAad,
           );
-          thumbWrapNonce =
-              Uint8List.fromList(thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
-          thumbWrapTagCT =
-              Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
-        } finally {
-          dekThumb.fillRange(0, dekThumb.length, 0);
-        }
+          if (wrapWire.length != _wrapWireLen) {
+            throw StateError(
+                'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
+          }
+          wrapNonce =
+              Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
+          wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
+
+          if (dekThumb != null) {
+            final thumbWrapWire = await Aead.encrypt(
+              version: kVerAesGcm,
+              key: mk,
+              plaintext: dekThumb,
+              aad: wrapAad,
+            );
+            thumbWrapNonce =
+                Uint8List.fromList(thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
+            thumbWrapTagCT =
+                Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
+          }
+        });
+      } finally {
+        dekThumb?.fillRange(0, dekThumb.length, 0);
       }
 
       return UploadEnvelope(
@@ -220,17 +233,6 @@ abstract class FilePipeline {
     } finally {
       dek.fillRange(0, dek.length, 0);
     }
-  }
-
-  // _useMkBytes : helper that pulls the MK bytes out via AlbumKeyStore.useMk
-  // and returns a copy. Caller is responsible for zeroing : in prepareUpload
-  // we hand the bytes straight to Aead.encrypt which doesnt retain them
-  // beyond the call. Aead.encrypt copies into the underlying SecretKey
-  static Future<Uint8List> _useMkBytes(
-      AlbumKeyStore aks, Uint8List albumIdBytes, int epoch) async {
-    return aks.useMk<Uint8List>(albumIdBytes, epoch, (mk) async {
-      return Uint8List.fromList(mk);
-    });
   }
 }
 

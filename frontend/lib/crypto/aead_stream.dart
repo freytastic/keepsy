@@ -112,6 +112,14 @@ abstract class AeadStream {
     }
 
     final body = Uint8List.sublistView(wire, headerLen);
+    // encryptBytes always emits >= 1 segment (a 0 byte file still produces one
+    // authenticated zero length last segment : 16 byte tag). A header only body
+    // authenticates nothing : rejecting it stops a forged "empty" blob from
+    // decrypting to empty plaintext without any tag being verified
+    if (body.isEmpty) {
+      throw FormatException(
+          'VER=0x03 blob has no segments: body is empty after header');
+    }
     final aes = cg.AesGcm.with256bits();
     final out = BytesBuilder(copy: false);
 

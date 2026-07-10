@@ -13,7 +13,15 @@ Future<void> performLogout({
   required AuthService auth,
   required MediaCacheManager mediaCache,
   required NameCache nameCache,
+  Future<void> Function()? disconnectRealtime,
 }) async {
+  // Drop the websocket first so no live events land against a session we are
+  // tearing down : a failed disconnect mustnt block the wipe
+  if (disconnectRealtime != null) {
+    try {
+      await disconnectRealtime();
+    } catch (_) {}
+  }
   await auth.logout();
   await mediaCache.clearAll();
   await nameCache.clear();

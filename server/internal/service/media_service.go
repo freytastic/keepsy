@@ -487,6 +487,11 @@ func (s *MediaService) PurgeAlbumObjects(ctx context.Context, albumID uuid.UUID)
 
 func (s *MediaService) dropOrphan(ctx context.Context, row *model.Media) error {
 	_ = s.s3.DeleteObject(ctx, row.StorageKey)
+	// drop the thumb object too, else a failed confirm on a thumb carrying row
+	// orphans the thumb in storage (DeleteObject is idempotent)
+	if row.ThumbKey != nil && *row.ThumbKey != "" {
+		_ = s.s3.DeleteObject(ctx, *row.ThumbKey)
+	}
 	return s.repo.DeletePending(ctx, row.ID, row.AlbumID)
 }
 

@@ -176,8 +176,8 @@ Future<PrekeyBundle> buildResponderBundle({
 // AlbumKeyStore on the same SecureKeyStore (so installVerified -> store.put
 // and AlbumKeyStore.initialize round trips through .list)
 Future<({IdentityService svc, MockSecureKeyStore store})> newResponderIdentity(
-    {DateTime? now}) async {
-  final fixed = now ?? DateTime.utc(2026, 5, 4, 12);
+    {DateTime? now, DateTime Function()? nowFn}) async {
+  final clock = nowFn ?? () => (now ?? DateTime.utc(2026, 5, 4, 12));
   final store = MockSecureKeyStore();
   await store.initialize();
   final labels = makeInMemoryLabelMap();
@@ -186,7 +186,7 @@ Future<({IdentityService svc, MockSecureKeyStore store})> newResponderIdentity(
     store: store,
     labels: labels,
     api: _SilentApi(),
-    now: () => fixed,
+    now: clock,
   );
   await svc.bootstrap();
   return (svc: svc, store: store);

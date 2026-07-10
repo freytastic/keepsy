@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/handle.dart';
+import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/data/api/auth_api.dart';
@@ -348,14 +349,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       final mediaCache = context.read<MediaCacheManager>();
                       final nameCache = context.read<NameCache>();
                       final appState = context.read<AppState>();
+                      final realtime = context.read<RealtimeService>();
                       await performLogout(
                         auth: AuthService(),
                         mediaCache: mediaCache,
                         nameCache: nameCache,
+                        disconnectRealtime: realtime.disconnect,
                       );
-                      // Also drop the in RAM plaintext title cache (the disk
-                      // NameCache is wiped inside performLogout)
-                      appState.clearDisplayNameCaches();
+                      // Drop all in RAM session state (albums, plaintext titles,
+                      // syncing, realtime sub). The disk NameCache + media cache
+                      // are wiped inside performLogout
+                      appState.reset();
                       if (!context.mounted) return;
                       Navigator.of(context).pushAndRemoveUntil(
                         PageRouteBuilder(
