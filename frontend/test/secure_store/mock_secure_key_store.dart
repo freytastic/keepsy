@@ -8,6 +8,9 @@ import 'package:keepsy/secure_store/secure_key_store.dart';
 class MockSecureKeyStore extends SecureKeyStore {
   final Map<String, _Entry> _store = {};
   bool _initialized = false;
+  // Counts real key reads so a test can assert a caller caches instead of
+  // hitting the keystore (an IPC round trip on device) on every call
+  int getOnceCalls = 0;
 
   @override
   Future<void> initialize() async => _initialized = true;
@@ -33,6 +36,7 @@ class MockSecureKeyStore extends SecureKeyStore {
   @override
   Future<Uint8List> getOnce(KeyHandle h) async {
     _requireInit();
+    getOnceCalls++;
     final e = _store[h.id];
     if (e == null) throw KeyNotFoundException(h.id);
     return Uint8List.fromList(e.value);

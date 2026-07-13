@@ -440,6 +440,21 @@ class IdentityService {
     return _store.use<T>(KeyHandle(id: id, label: kLabelIK), fn);
   }
 
+  // Our own Ed25519 IK public key, derived from the seed we hold. safety
+  // numbers MUST use this and never the server's copy of our ik_pub : a server
+  // that supplied both sides of the comparison could make any number match
+  // Public + immutable, so it is cached : the keystore read is an IPC round trip
+  Uint8List? _ikPubCache;
+  Future<Uint8List> currentIkPub() async {
+    final cached = _ikPubCache;
+    if (cached != null) return cached;
+    final pub = await useIk<Uint8List>((seed) async {
+      final kp = await KeyHandleAdapter.toEd25519(seed);
+      return kp.publicKey;
+    });
+    return _ikPubCache = pub;
+  }
+
   Future<T> useLk<T>(Future<T> Function(Uint8List priv) fn) {
     final id = _labels.handleId(kLabelLK);
     if (id == null) {
