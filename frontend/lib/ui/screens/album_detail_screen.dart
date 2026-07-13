@@ -16,6 +16,7 @@ import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/crypto/uuid_bytes.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/e2ee/sealed_name.dart';
@@ -24,6 +25,7 @@ import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
+import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
 
 class AlbumDetailScreen extends StatefulWidget {
   final AlbumModel album;
@@ -135,10 +137,97 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _loadingMembers = false;
       });
       unawaited(_resolveMemberNames(members));
+      unawaited(_reconcileTrust(members));
       // As an admin, finish any rotation left pending by a crashed kick or a
       // member who left while no admin was online
       unawaited(_maybeRecoverPending());
     }
+  }
+
+  // memberToken -> TOFU state . Advisory only : a changed key is shown
+  // loudly but never blocks uploads, fetches or the X3DH path
+  Map<String, TrustState> _trust = {};
+
+  IdentityTrust? _trustSvc() {
+    try {
+      return context.read<IdentityTrust>();
+    } catch (_) {
+      return null; // widget tests that dont install the provider
+    }
+  }
+
+  Uint8List? _peerIk(AlbumMember m) {
+    final b64 = m.profile.ikPub;
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      final ik = base64.decode(base64.normalize(b64));
+      return ik.length == 32 ? ik : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _reconcileTrust(List<AlbumMember> members) async {
+    final trust = _trustSvc();
+    final albumIdBytes = uuidToBytes(widget.album.id);
+    if (trust == null || albumIdBytes == null) return;
+
+    final peers = <PeerIdentity>[];
+    for (final m in members) {
+      if (m.revoked) continue;
+      final ik = _peerIk(m);
+      if (ik == null) continue;
+      peers.add(PeerIdentity(memberToken: m.memberToken, ikPub: ik));
+    }
+    if (peers.isEmpty) return;
+
+    try {
+      final states = await trust.reconcile(albumIdBytes, peers,
+          myMemberToken: widget.album.memberToken);
+      if (mounted && !_accessLost) setState(() => _trust = states);
+    } catch (_) {
+      // trust display : never break the album on it
+    }
+  }
+
+  Future<void> _openSafetyNumber(AlbumMember m) async {
+    final trust = _trustSvc();
+    final albumIdBytes = uuidToBytes(widget.album.id);
+    final ik = _peerIk(m);
+    if (trust == null || albumIdBytes == null || ik == null) return;
+
+    final state = _trust[m.memberToken] ?? TrustState.unverified;
+    final digits =
+        await trust.safetyNumber(albumId: albumIdBytes, peerIkPub: ik);
+    if (!mounted) return;
+
+    final app = context.read<AppState>();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: K.bg(app.isDark),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafetyNumberSheet(
+        displayName: _memberName(m),
+        digits: digits,
+        state: state,
+        dark: app.isDark,
+        accent: app.accent,
+        // both actions verify/accept the key the user was ACTUALLY SHOWN, not
+        // whatever the roster happens to say by the time they tap
+        onVerify: () async {
+          await trust.markVerified(
+              albumId: albumIdBytes, memberToken: m.memberToken, peerIkPub: ik);
+          await _reconcileTrust(_members);
+        },
+        onAccept: () async {
+          await trust.acceptChange(
+              albumId: albumIdBytes, memberToken: m.memberToken, peerIkPub: ik);
+          await _reconcileTrust(_members);
+        },
+      ),
+    );
   }
 
   Future<void> _resolveMemberNames(List<AlbumMember> members) async {
@@ -197,6 +286,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       setState(() => _memberNames.addAll(applied));
     }
   }
+
+  // Surfaced as a banner so a substituted key is noticed without tapping a chip
+  List<AlbumMember> get _changedKeyMembers => _members
+      .where((m) => !m.revoked && _trust[m.memberToken] == TrustState.changed)
+      .toList();
 
   // The viewer's own member row for this album, resolved by matching their held
   // member_token. null until members load (or if not present)
@@ -514,9 +608,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               dark: dark,
               accent: accent,
               resolvedNames: memberDisplayNames,
+              trust: _trust,
+              onTapMember: _openSafetyNumber,
               // admins can long press another (non-revoked) member to remove
               onRemove: _viewerIsAdmin ? _kick : null,
               myToken: widget.album.memberToken),
+          if (_changedKeyMembers.isNotEmpty)
+            _KeyChangeBanner(
+              dark: dark,
+              members: _changedKeyMembers,
+              nameOf: _memberName,
+              onTap: _openSafetyNumber,
+            ),
           const Divider(height: 1, thickness: 0.5),
           Expanded(
             child: syncing
@@ -637,6 +740,9 @@ class _MemberChipsRow extends StatelessWidget {
   final String? myToken;
   // memberToken -> decrypted display name (missing entries fall back to a slice)
   final Map<String, String> resolvedNames;
+  // memberToken -> TOFU state. Absent = not computed yet (no badge)
+  final Map<String, TrustState> trust;
+  final void Function(AlbumMember) onTapMember;
 
   const _MemberChipsRow({
     required this.members,
@@ -644,6 +750,8 @@ class _MemberChipsRow extends StatelessWidget {
     required this.dark,
     required this.accent,
     required this.resolvedNames,
+    required this.trust,
+    required this.onTapMember,
     this.onRemove,
     this.myToken,
   });
@@ -678,10 +786,15 @@ class _MemberChipsRow extends StatelessWidget {
         itemBuilder: (_, i) {
           final m = visible[i];
           final removable = onRemove != null && m.memberToken != myToken;
+          final isMe = m.memberToken == myToken;
           return _MemberChip(
             member: m,
             dark: dark,
+            accent: accent,
             displayName: resolvedNames[m.memberToken] ?? 'Member',
+            // no safety number with yourself
+            trust: isMe ? null : trust[m.memberToken],
+            onTap: isMe ? null : () => onTapMember(m),
             onRemove: removable ? () => onRemove!(m) : null,
           );
         },
@@ -693,66 +806,140 @@ class _MemberChipsRow extends StatelessWidget {
 class _MemberChip extends StatelessWidget {
   final AlbumMember member;
   final bool dark;
+  final Color accent;
   final String displayName;
+  // null for our own chip, or before the roster has been reconciled
+  final TrustState? trust;
+  final VoidCallback? onTap;
   final VoidCallback? onRemove;
 
   const _MemberChip(
       {required this.member,
       required this.dark,
+      required this.accent,
       required this.displayName,
+      this.trust,
+      this.onTap,
       this.onRemove});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.only(
-          left: 10, right: onRemove != null ? 2 : 10, top: 4, bottom: 4),
-      decoration: BoxDecoration(
-        color: K.cardCol(dark),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: K.borderCol(dark)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CircleAvatar(
-            radius: 10,
-            backgroundColor: K.defaultAccent.withValues(alpha: 0.3),
-            child: Text(
-              displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-              style: const TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            // resolved global name : "Member" for anyone who hasn't published
-            // a name_ct yet (never the raw token)
-            displayName,
-            style: TextStyle(
-                color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            member.role,
-            style: TextStyle(color: K.t3(dark), fontSize: 10),
-          ),
-          // Visible remove affordance for admins : a tappable × on each
-          // removable member (replaces the old undiscoverable long-press).
-          if (onRemove != null) ...[
-            const SizedBox(width: 2),
-            InkResponse(
-              onTap: onRemove,
-              radius: 16,
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(Icons.close, size: 14, color: K.t3(dark)),
+    final changed = trust == TrustState.changed;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: EdgeInsets.only(
+            left: 10, right: onRemove != null ? 2 : 10, top: 4, bottom: 4),
+        decoration: BoxDecoration(
+          color: K.cardCol(dark),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: changed ? const Color(0xFFF87171) : K.borderCol(dark)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 10,
+              backgroundColor: K.defaultAccent.withValues(alpha: 0.3),
+              child: Text(
+                displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                style: const TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white),
               ),
             ),
+            const SizedBox(width: 6),
+            Text(
+              // resolved global name : "Member" for anyone who hasnt published
+              // a name_ct yet (never the raw token)
+              displayName,
+              style: TextStyle(
+                  color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
+            ),
+            // verified gets a mark, a changed key gets a loud one. An
+            // unverified peer gets NOTHING : an icon there would read as a
+            // safety claim we cannot make about a key nobody has compared
+            if (trust == TrustState.verified) ...[
+              const SizedBox(width: 3),
+              Icon(Icons.verified_user, size: 11, color: accent),
+            ] else if (changed) ...[
+              const SizedBox(width: 3),
+              const Icon(Icons.error, size: 11, color: Color(0xFFF87171)),
+            ],
+            const SizedBox(width: 4),
+            Text(
+              member.role,
+              style: TextStyle(color: K.t3(dark), fontSize: 10),
+            ),
+            // Visible remove affordance for admins : a tappable × on each
+            // removable member (replaces the old undiscoverable long-press)
+            if (onRemove != null) ...[
+              const SizedBox(width: 2),
+              InkResponse(
+                onTap: onRemove,
+                radius: 16,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.close, size: 14, color: K.t3(dark)),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+// Album level "someone's key changed" strip. A chip badge alone is too easy to
+// miss, and this is the one state that warrants interrupting the user
+class _KeyChangeBanner extends StatelessWidget {
+  final bool dark;
+  final List<AlbumMember> members;
+  final String Function(AlbumMember) nameOf;
+  final void Function(AlbumMember) onTap;
+
+  const _KeyChangeBanner({
+    required this.dark,
+    required this.members,
+    required this.nameOf,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const red = Color(0xFFF87171);
+    final names = members.map(nameOf).toList();
+    final who = names.length == 1
+        ? "${names.first}'s security key changed"
+        : '${names.length} members’ security keys changed';
+    return InkWell(
+      onTap: () => onTap(members.first),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: red.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: red.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline, size: 16, color: red),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$who. Verify with them directly if that was unexpected.',
+                style: TextStyle(color: K.t1(dark), fontSize: 12, height: 1.35),
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 16, color: K.t3(dark)),
+          ],
+        ),
       ),
     );
   }

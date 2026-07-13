@@ -19,6 +19,7 @@ import 'package:keepsy/data/storage/cache_root_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
+import 'package:keepsy/data/storage/identity_pin_store.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/display_name.dart';
@@ -27,6 +28,7 @@ import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
+import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/invite_api.dart';
@@ -186,6 +188,13 @@ void main() async {
     }
     return resolveAlbumName(albumKeyStore, b, nameCt);
   });
+  // TOFU pins + verifications (sealed under cache_root_key). NOT wiped on
+  // logout : a store that reset on logout would let a hostile server wait for
+  // one, then present a substituted ik_pub as an innocent first sight
+  final identityPinStore =
+      await IdentityPinStore.open(cacheRootKey: cacheRootKey);
+  final identityTrust =
+      IdentityTrust(identity: identityService, pins: identityPinStore);
   final mediaSealedCache =
       await MediaSealedCache.open(cacheRootKey: cacheRootKey);
   final mediaPlaintextCache = MediaPlaintextCache();
@@ -225,6 +234,8 @@ void main() async {
       // durable name wipe below is the last write and stays wiped
       appState.removeAlbum(albumStr);
       await nameCache.clearAlbum(albumStr);
+      // the roster is gone, so these pins can never be refreshed again
+      await identityTrust.forgetAlbum(albumId);
     },
     isPendingRotation: (albumId) async {
       final cur = await epochApi.getCurrentEpoch(_uuidStringFromBytes(albumId));
@@ -366,6 +377,7 @@ void main() async {
         Provider<MemberRemovalCoordinator>.value(value: memberRemoval),
         Provider<DisplayNamePublisher>.value(value: displayNamePublisher),
         Provider<NameCache>.value(value: nameCache),
+        Provider<IdentityTrust>.value(value: identityTrust),
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<SodiumSumo>.value(value: sodium),
