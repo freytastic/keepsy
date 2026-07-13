@@ -316,6 +316,39 @@ void main() {
       await r.svc.bootstrap();
       expect(await r.svc.isBootstrapped(), isTrue);
     });
+
+    // the safety number needs OUR ik_pub. It must be derived from the
+    // seed we hold, never read back from the server (a lying server would
+    // otherwise pick both sides of the comparison)
+    test('currentIkPub derives the same ik_pub that bootstrap published',
+        () async {
+      final r = await _newService(now: DateTime.utc(2026, 5, 4, 12));
+      await r.svc.bootstrap();
+
+      final ik = await r.svc.currentIkPub();
+
+      expect(ik.length, 32);
+      expect(ik, r.api.lastUpsert!['ik_pub'] as Uint8List);
+    });
+
+    test('currentIkPub caches : repeat calls dont re read the keystore',
+        () async {
+      final r = await _newService(now: DateTime.utc(2026, 5, 4, 12));
+      await r.svc.bootstrap();
+
+      await r.svc.currentIkPub();
+      final after = r.store.getOnceCalls;
+      await r.svc.currentIkPub();
+      await r.svc.currentIkPub();
+
+      expect(r.store.getOnceCalls, after,
+          reason: 'ik_pub is public and immutable : derive it once');
+    });
+
+    test('currentIkPub throws before bootstrap', () async {
+      final r = await _newService();
+      expect(r.svc.currentIkPub, throwsStateError);
+    });
   });
 }
 
