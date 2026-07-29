@@ -310,7 +310,10 @@ void main() {
       await rotator.rotate(
         albumIdBytes: _albumId(),
         epoch: 1,
-        recipients: [RotateRecipient(memberToken: c.senderToken, userId: null)],
+        recipients: [
+          RotateRecipient(
+              memberToken: c.senderToken, userId: null, expectedIk: c.ikPub)
+        ],
       );
 
       expect(stub.byTokenCalls, 1);
@@ -318,6 +321,82 @@ void main() {
       expect(stub.lastToken, equals(c.senderToken));
       // album uuid string for the all-0xA1 album id
       expect(stub.lastTokenAlbumId, 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1');
+      expect(caps.calls, 1);
+      expect(await c.aks.latestEpoch(_albumId()), 1);
+    });
+  });
+
+  group('EpochRotator IK binding (finding #1)', () {
+    test('refuses to wrap when the bundle IK != the expected IK', () async {
+      // The server serves an honest roster but a SUBSTITUTED bundle : the
+      // fetched bundle is internally valid (verify() passes) yet carries an
+      // ik_pub we never authenticated for this member. Wrapping the MK to it
+      // hands the album key to the impostor, so the rotator must fail closed
+      // BEFORE any X3DH / wrap / set_epoch
+      final c = await _newCreatorStack();
+      final opkPub = await _opkPubFrom(c.svc, 0);
+      final bundle = await buildResponderBundle(
+        responder: c.svc,
+        spkTs: _spkTs,
+        opk: (idx: 0, keyPub: opkPub),
+      );
+      final caps = _CaptureEpochApi();
+      final rotator = EpochRotator(
+        epochs: caps,
+        prekeys: _StubPrekeyApi((_) => bundle),
+        identity: c.svc,
+        aks: c.aks,
+        now: () => _now,
+      );
+
+      final wrongIk = Uint8List.fromList(List<int>.filled(32, 0x07));
+      await expectLater(
+        rotator.rotate(
+          albumIdBytes: _albumId(),
+          epoch: 1,
+          recipients: [
+            RotateRecipient(
+                memberToken: c.senderToken,
+                userId: 'creator-user-id',
+                expectedIk: wrongIk),
+          ],
+        ),
+        throwsA(isA<IdentityMismatchException>()),
+      );
+
+      // nothing left the device and no MK was installed locally
+      expect(caps.calls, 0);
+      expect(await c.aks.presentEpochs(_albumId()), isEmpty);
+    });
+
+    test('wraps when the bundle IK matches the expected IK', () async {
+      final c = await _newCreatorStack();
+      final opkPub = await _opkPubFrom(c.svc, 0);
+      final bundle = await buildResponderBundle(
+        responder: c.svc,
+        spkTs: _spkTs,
+        opk: (idx: 0, keyPub: opkPub),
+      );
+      final caps = _CaptureEpochApi();
+      final rotator = EpochRotator(
+        epochs: caps,
+        prekeys: _StubPrekeyApi((_) => bundle),
+        identity: c.svc,
+        aks: c.aks,
+        now: () => _now,
+      );
+
+      await rotator.rotate(
+        albumIdBytes: _albumId(),
+        epoch: 1,
+        recipients: [
+          RotateRecipient(
+              memberToken: c.senderToken,
+              userId: 'creator-user-id',
+              expectedIk: c.ikPub),
+        ],
+      );
+
       expect(caps.calls, 1);
       expect(await c.aks.latestEpoch(_albumId()), 1);
     });
