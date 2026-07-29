@@ -17,6 +17,11 @@ typedef ActiveTokensFn = Future<List<Uint8List>> Function(Uint8List albumId);
 typedef CurrentEpochFn = Future<int> Function(Uint8List albumId);
 typedef RotateFn = Future<void> Function(
     Uint8List albumId, int epoch, List<RotateRecipient> recipients);
+// resolves the IK an MK wrap must be bound to for each remaining member. A
+// throw (eg: a missing pin) MUST propagate : the rotation fails closed rather
+// than wrap the next MK to an unauthenticated, possibly substituted, key
+typedef ExpectedIkFn = Future<Uint8List> Function(
+    Uint8List albumId, Uint8List memberToken);
 typedef DropDirectoryFn = void Function(
     Uint8List albumId, Uint8List memberToken);
 typedef WipeLocalAlbumFn = Future<void> Function(Uint8List albumId);
@@ -34,6 +39,7 @@ class MemberRemovalCoordinator {
   final ActiveTokensFn _activeTokens;
   final CurrentEpochFn _currentEpoch;
   final RotateFn _rotate;
+  final ExpectedIkFn _expectedIk;
   final DropDirectoryFn _dropDirectory;
   final WipeLocalAlbumFn _wipeLocalAlbum;
   final IsPendingRotationFn _isPendingRotation;
@@ -43,6 +49,7 @@ class MemberRemovalCoordinator {
     required ActiveTokensFn activeTokens,
     required CurrentEpochFn currentEpoch,
     required RotateFn rotate,
+    required ExpectedIkFn expectedIk,
     required DropDirectoryFn dropDirectory,
     required WipeLocalAlbumFn wipeLocalAlbum,
     required IsPendingRotationFn isPendingRotation,
@@ -50,6 +57,7 @@ class MemberRemovalCoordinator {
         _activeTokens = activeTokens,
         _currentEpoch = currentEpoch,
         _rotate = rotate,
+        _expectedIk = expectedIk,
         _dropDirectory = dropDirectory,
         _wipeLocalAlbum = wipeLocalAlbum,
         _isPendingRotation = isPendingRotation;
@@ -99,8 +107,14 @@ class MemberRemovalCoordinator {
   Future<void> _rotateForActiveSet(Uint8List albumId) async {
     final active = await _activeTokens(albumId);
     final next = (await _currentEpoch(albumId)) + 1;
-    await _rotate(albumId, next, [
-      for (final t in active) RotateRecipient(memberToken: t),
-    ]);
+    // Resolve every recipient's expected IK BEFORE minting/shipping anything : a
+    // missing pin throws here and the rotation fails closed, so the server can
+    // never harvest the new MK by substituting an unauthenticated bundle
+    final recipients = <RotateRecipient>[];
+    for (final t in active) {
+      recipients.add(RotateRecipient(
+          memberToken: t, expectedIk: await _expectedIk(albumId, t)));
+    }
+    await _rotate(albumId, next, recipients);
   }
 }

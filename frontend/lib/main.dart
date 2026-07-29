@@ -28,6 +28,7 @@ import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
+import 'package:keepsy/e2ee/expected_ik_resolver.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/identity_label_map.dart';
 import 'package:keepsy/e2ee/invite.dart';
@@ -210,6 +211,26 @@ void main() async {
   // real API / rotator / cache closures are wired here. Album ids cross the port
   // boundary as raw 16-byte ids and are rendered to UUID strings for the data
   // layer inside each closure
+  // Resolves the IK each remaining member's MK wrap must be bound to during a
+  // removal rotation : my own token -> currentIkPub (we never pin "me"), every
+  // other token -> its TOFU pin. A missing pin throws MissingIdentityPinException
+  // and the rotation fails closed rather than wrap the new MK to a server
+  // substituted bundle (finding #1, in the most sensitive flow)
+  final expectedIkResolver = ExpectedIkResolver(
+    selfToken: (albumId) {
+      final albumStr = _uuidStringFromBytes(albumId);
+      for (final a in appState.albums) {
+        if (a.id == albumStr) {
+          final t = a.memberToken;
+          return t == null ? null : base64.decode(base64.normalize(t));
+        }
+      }
+      return null;
+    },
+    pinned: (albumId, token) =>
+        identityPinStore.pinnedIk(hexAlbumId(albumId), base64.encode(token)),
+    currentIk: identityService.currentIkPub,
+  );
   final memberRemoval = MemberRemovalCoordinator(
     revoke: (albumId, token) => albumService.removeMember(
         _uuidStringFromBytes(albumId), base64.encode(token)),
@@ -224,6 +245,7 @@ void main() async {
     currentEpoch: (albumId) => albumKeyStore.latestEpoch(albumId),
     rotate: (albumId, epoch, recipients) => epochRotator.rotate(
         albumIdBytes: albumId, epoch: epoch, recipients: recipients),
+    expectedIk: expectedIkResolver.call,
     dropDirectory: (albumId, token) => memberDirectory.drop(albumId, token),
     wipeLocalAlbum: (albumId) async {
       final albumStr = _uuidStringFromBytes(albumId);

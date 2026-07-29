@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
+import 'package:keepsy/e2ee/expected_ik_resolver.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
 
 Uint8List _album([int s = 0xA1]) => Uint8List.fromList(List<int>.filled(16, s));
@@ -21,6 +22,13 @@ class _Ports {
   bool wiped = false;
   bool pending = false;
 
+  // expected IK resolver knobs : by default maps token seed s -> ik seed s|0x80
+  // so each recipient's expectedIk is distinguishable. Flip expectedIkThrows to
+  // exercise the fail closed (missing pin) path
+  bool expectedIkThrows = false;
+  Uint8List _ikFor(Uint8List token) =>
+      Uint8List.fromList(List<int>.filled(32, token[0] | 0x80));
+
   MemberRemovalCoordinator build() => MemberRemovalCoordinator(
         revoke: (album, token) async {
           calls.add('revoke');
@@ -36,6 +44,11 @@ class _Ports {
           calls.add('rotate');
           rotatedEpoch = epoch;
           rotatedRecipients = recipients;
+        },
+        expectedIk: (album, token) async {
+          calls.add('expectedIk');
+          if (expectedIkThrows) throw MissingIdentityPinException(token);
+          return _ikFor(token);
         },
         dropDirectory: (album, token) {
           calls.add('dropDirectory');
@@ -66,7 +79,14 @@ void main() {
 
       // revoke MUST precede rotate (the server drift-check needs the removed
       // member out of the active set before the rotation is accepted)
-      expect(p.calls, ['revoke', 'activeTokens', 'rotate', 'dropDirectory']);
+      expect(p.calls, [
+        'revoke',
+        'activeTokens',
+        'expectedIk',
+        'expectedIk',
+        'rotate',
+        'dropDirectory'
+      ]);
       expect(p.revokedToken, equals(target));
       expect(p.rotatedEpoch, 5); // current + 1
       expect(p.droppedToken, equals(target));
@@ -85,6 +105,36 @@ void main() {
         throwsA(isA<MemberRemovalException>()),
       );
       expect(p.calls, ['revoke']);
+    });
+
+    test('binds each recipient to the resolved expected IK', () async {
+      final p = _Ports()
+        ..active = [_tok(1), _tok(2)]
+        ..current = 4;
+
+      await p.build().kick(_album(), _tok(9));
+
+      final recips = p.rotatedRecipients!;
+      expect(recips.map((r) => r.memberToken).toList(), [_tok(1), _tok(2)]);
+      // the exact key the resolver returned for that token, not a placeholder
+      expect(recips[0].expectedIk, equals(p._ikFor(_tok(1))));
+      expect(recips[1].expectedIk, equals(p._ikFor(_tok(2))));
+    });
+
+    test('fails closed (never rotates) when the expected IK cannot be resolved',
+        () async {
+      final p = _Ports()
+        ..active = [_tok(1)]
+        ..current = 4
+        ..expectedIkThrows = true;
+
+      await expectLater(
+        p.build().kick(_album(), _tok(9)),
+        throwsA(isA<MissingIdentityPinException>()),
+      );
+      // resolver was reached, but no MK was ever minted or shipped
+      expect(p.calls, ['revoke', 'activeTokens', 'expectedIk']);
+      expect(p.rotatedRecipients, isNull);
     });
   });
 
@@ -133,7 +183,13 @@ void main() {
         ..current = 6;
       final did = await p.build().recoverIfPending(_album());
       expect(did, isTrue);
-      expect(p.calls, ['isPendingRotation', 'activeTokens', 'rotate']);
+      expect(p.calls, [
+        'isPendingRotation',
+        'activeTokens',
+        'expectedIk',
+        'expectedIk',
+        'rotate'
+      ]);
       expect(p.rotatedEpoch, 7);
       expect(p.rotatedRecipients!.map((r) => r.memberToken).toList(),
           [_tok(1), _tok(2)]);

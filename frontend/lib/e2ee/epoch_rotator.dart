@@ -31,7 +31,27 @@ class RotateRecipient {
   // hidden) the rotator fetches by member_token via MemberBundleFetcher instead
   final Uint8List memberToken;
   final String? userId;
-  const RotateRecipient({required this.memberToken, this.userId});
+  // expectedIk : 32B Ed25519 IK_pub the caller has locally authenticated for
+  // this member (self = currentIkPub, others = the TOFU pinned key). The
+  // rotator wraps the MK ONLY if the fetched bundle carries this exact IK : a
+  // server that substitutes a bundle to harvest the MK is refused here, since
+  // bundle.verify() alone only proves the SPK was signed by the bundle's OWN IK
+  final Uint8List expectedIk;
+  const RotateRecipient({
+    required this.memberToken,
+    required this.expectedIk,
+    this.userId,
+  });
+}
+
+// Thrown when a fetched prekey bundle's IK_pub does not match the IK the caller
+// expected for that member : an active server substituting keys to intercept
+// the album MK. Fail closed : no X3DH, no wrap, no set_epoch
+class IdentityMismatchException implements Exception {
+  final Uint8List memberToken;
+  const IdentityMismatchException(this.memberToken);
+  @override
+  String toString() => 'IdentityMismatchException(bundle IK != expected IK)';
 }
 
 class EpochRotator {
@@ -69,7 +89,11 @@ class EpochRotator {
       albumIdBytes: albumIdBytes,
       epoch: 0,
       recipients: [
-        RotateRecipient(memberToken: creatorMemberToken, userId: creatorUserId),
+        RotateRecipient(
+          memberToken: creatorMemberToken,
+          userId: creatorUserId,
+          expectedIk: await _identity.currentIkPub(),
+        ),
       ],
     );
   }
@@ -112,6 +136,12 @@ class EpochRotator {
       for (final r in recipients) {
         final bundle = await _fetchBundle(albumIdBytes, r);
         await bundle.verify(now: _now);
+        // verify() only proves the SPK was signed by the bundle's OWN IK. Bind
+        // that IK to the one we locally authenticated for this member : a
+        // substituted bundle is refused here, before it can receive the MK
+        if (!_ctEq(bundle.ikPub, r.expectedIk)) {
+          throw IdentityMismatchException(r.memberToken);
+        }
         final init = await X3dhSession.initiate(
           bundle: bundle,
           albumId: albumIdBytes,
@@ -319,6 +349,17 @@ Future<Uint8List> _wrapsHash(List<SetEpochWrap> wraps) async {
   }
   final h = await cg.Sha256().hash(builder.toBytes());
   return Uint8List.fromList(h.bytes);
+}
+
+// constant time 32B equality : the compare sits on the MK wrap decision, so it
+// must not leak how many leading bytes of a substituted IK matched
+bool _ctEq(Uint8List a, Uint8List b) {
+  if (a.length != b.length) return false;
+  var d = 0;
+  for (var i = 0; i < a.length; i++) {
+    d |= a[i] ^ b[i];
+  }
+  return d == 0;
 }
 
 int _byteCompare(Uint8List a, Uint8List b) {
