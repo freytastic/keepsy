@@ -150,14 +150,6 @@ void main() async {
     // hidden) : HttpPrekeyApi doubles as the by token bundle fetcher
     memberBundles: prekeyApi,
   );
-  // look up an invitee by keepsy_id + ship all historical MKs
-  final inviteInitiator = InviteInitiator(
-    prekeys: prekeyApi,
-    invites: inviteApi,
-    identity: identityService,
-    aks: albumKeyStore,
-  );
-
   // Media cache : L1 RAM plaintext + L2 disk plaintext sealed under
   // cache_root_key. The cache key is pulled out of the keystore exactly once
   // here (the only per session AndroidKeyStore IPC for media) and held in RAM
@@ -196,6 +188,22 @@ void main() async {
       await IdentityPinStore.open(cacheRootKey: cacheRootKey);
   final identityTrust =
       IdentityTrust(identity: identityService, pins: identityPinStore);
+  // look up an invitee by keepsy_id + ship all historical MKs. The pinner
+  // anchors first contact TOFU on the IK we wrap to (finding #1, invite path)
+  final inviteInitiator = InviteInitiator(
+    prekeys: prekeyApi,
+    invites: inviteApi,
+    identity: identityService,
+    aks: albumKeyStore,
+    pinner: InviteIdentityPinner(
+      pinnedIk: (albumId, token) =>
+          identityPinStore.pinnedIk(hexAlbumId(albumId), base64.encode(token)),
+      pin: (albumId, token, ik) async {
+        identityPinStore.pin(hexAlbumId(albumId), base64.encode(token), ik);
+        await identityPinStore.flush();
+      },
+    ),
+  );
   final mediaSealedCache =
       await MediaSealedCache.open(cacheRootKey: cacheRootKey);
   final mediaPlaintextCache = MediaPlaintextCache();

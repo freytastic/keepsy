@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
@@ -74,6 +75,9 @@ class _CaptureInviteApi implements InviteApi {
       required Uint8List ekPubAdmin,
       required Uint8List sig}) async {}
 }
+
+String _pinKey(Uint8List albumId, Uint8List token) =>
+    '${base64Encode(albumId)}:${base64Encode(token)}';
 
 Uint8List _aad(Uint8List albumId, int epoch) {
   final out = Uint8List(20);
@@ -174,6 +178,69 @@ void main() {
     }
 
     expect(aliceSvcRaw, isNotNull);
+  });
+
+  test('pins the invite bundle IK under the returned member_token', () async {
+    final alice = await newResponderIdentity(now: fixed);
+    final bob = await newResponderIdentity(now: fixed);
+    final aliceAks = AlbumKeyStore(alice.store);
+    await aliceAks.install(
+        albumId, 0, Uint8List.fromList(List.filled(32, 0x55)));
+
+    final bobBundle =
+        await buildResponderBundle(responder: bob.svc, spkTs: spkTs);
+
+    final pins = <String, Uint8List>{};
+    final pinner = InviteIdentityPinner(
+      pinnedIk: (a, t) => pins[_pinKey(a, t)],
+      pin: (a, t, ik) async => pins[_pinKey(a, t)] = ik,
+    );
+
+    final token = await InviteInitiator(
+      prekeys: _ByHandlePrekeyApi(bobBundle),
+      invites: _CaptureInviteApi(),
+      identity: alice.svc,
+      aks: aliceAks,
+      pinner: pinner,
+      now: () => fixed,
+    ).inviteExistingUser(keepsyId: 'K7F29QXM', albumId: albumId);
+
+    // pinned under the SAME token the roster will later show, to the exact IK
+    // the MK wraps went to
+    expect(pins[_pinKey(albumId, token)], equals(bobBundle.ikPub));
+  });
+
+  test('does not clobber an existing pin on re-invite', () async {
+    final alice = await newResponderIdentity(now: fixed);
+    final bob = await newResponderIdentity(now: fixed);
+    final aliceAks = AlbumKeyStore(alice.store);
+    await aliceAks.install(
+        albumId, 0, Uint8List.fromList(List.filled(32, 0x55)));
+
+    final bobBundle =
+        await buildResponderBundle(responder: bob.svc, spkTs: spkTs);
+
+    // the server reuses the same token when re-inviting a previously kicked
+    // member (0xAB..): pre-seed a prior baseline for it
+    final reusedToken = Uint8List.fromList(List.filled(32, 0xAB));
+    final priorIk = Uint8List.fromList(List.filled(32, 0x77));
+    final pins = <String, Uint8List>{_pinKey(albumId, reusedToken): priorIk};
+    final pinner = InviteIdentityPinner(
+      pinnedIk: (a, t) => pins[_pinKey(a, t)],
+      pin: (a, t, ik) async => pins[_pinKey(a, t)] = ik,
+    );
+
+    await InviteInitiator(
+      prekeys: _ByHandlePrekeyApi(bobBundle),
+      invites: _CaptureInviteApi(),
+      identity: alice.svc,
+      aks: aliceAks,
+      pinner: pinner,
+      now: () => fixed,
+    ).inviteExistingUser(keepsyId: 'K7F29QXM', albumId: albumId);
+
+    // the prior baseline stands : a substituting server still trips 'changed'
+    expect(pins[_pinKey(albumId, reusedToken)], equals(priorIk));
   });
 
   test('tampered AAD (wrong epoch) fails authentication', () async {
