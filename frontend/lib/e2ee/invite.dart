@@ -11,6 +11,39 @@ import 'invite_api.dart';
 import 'prekey_api.dart';
 import 'x3dh_session.dart';
 
+typedef PinnedIkLookupFn = Uint8List? Function(
+    Uint8List albumId, Uint8List memberToken);
+typedef PinIkFn = Future<void> Function(
+    Uint8List albumId, Uint8List memberToken, Uint8List ikPub);
+
+// Anchors first contact TOFU on the IK we ACTUALLY wrapped the album MKs to
+// bundle.verify() only proves the bundle signed itself : at first contact there
+// is no prior identity to compare against, so a server could hand us an
+// impostor's valid bundle. Pinning the invite IK does NOT defeat that (only an
+// out ofband safety number can) but it makes a LATER roster showing a
+// different IK for this member fire 'changed' instead of masquerading as an
+// innocent first sight, and keeps the safety number honest about the encrypted
+// to key. Advisory, like IdentityTrust : if unwired, invite still delivers
+class InviteIdentityPinner {
+  final PinnedIkLookupFn _pinnedIk;
+  final PinIkFn _pin;
+  InviteIdentityPinner({
+    required PinnedIkLookupFn pinnedIk,
+    required PinIkFn pin,
+  })  : _pinnedIk = pinnedIk,
+        _pin = pin;
+
+  // Pin the invite IK, but NEVER clobber an existing baseline : a reinvited
+  // member (token reused after a kick) keeps the pin from before, so a server
+  // substituting at re invite still trips the change alarm instead of silently
+  // moving the pin onto the impostor
+  Future<void> anchor(
+      Uint8List albumId, Uint8List memberToken, Uint8List ikPub) async {
+    if (_pinnedIk(albumId, memberToken) != null) return;
+    await _pin(albumId, memberToken, ikPub);
+  }
+}
+
 // Looks up the invitee's bundle by keepsy_id, runs ONE X3DH,
 // wraps every locally held MK (0..current) under the single shared secret, signs
 // each per §4.2 D3, and ships them. Async for recipient : the invitee redeems
@@ -20,6 +53,7 @@ class InviteInitiator {
   final InviteApi _invites;
   final IdentityService _identity;
   final AlbumKeyStore _aks;
+  final InviteIdentityPinner? _pinner;
   final Now _now;
 
   InviteInitiator({
@@ -27,11 +61,13 @@ class InviteInitiator {
     required InviteApi invites,
     required IdentityService identity,
     required AlbumKeyStore aks,
+    InviteIdentityPinner? pinner,
     Now? now,
   })  : _prekeys = prekeys,
         _invites = invites,
         _identity = identity,
         _aks = aks,
+        _pinner = pinner,
         _now = now ?? DateTime.now;
 
   // Returns the new member_token minted by the server
@@ -94,13 +130,17 @@ class InviteInitiator {
           ),
       ];
 
-      return _invites.deliverExistingUser(
+      final token = await _invites.deliverExistingUser(
         albumId: _uuidString(albumId),
         targetKeepsyId: keepsyId,
         ekPub: init.ekPub,
         opkIdx: init.opkIdx,
         envelopes: envelopes,
       );
+      // anchor TOFU on the key we just wrapped to, under the token the roster
+      // will report for this member
+      await _pinner?.anchor(albumId, token, bundle.ikPub);
+      return token;
     } finally {
       init.sharedSecret.fillRange(0, init.sharedSecret.length, 0);
     }
