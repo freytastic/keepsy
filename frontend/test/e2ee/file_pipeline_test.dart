@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:keepsy/crypto/aead_stream.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
@@ -24,6 +25,17 @@ Uint8List _bytes(int n, [int seed = 0]) {
     out[i] = x & 0xFF;
   }
   return out;
+}
+
+// A real JPEG that carries EXIF. package:image does not round trip a
+// self authored GPS sub IFD, so we tag Make/Model : the strip asserts the WHOLE
+// exif container is empty afterward, which subsumes GPS (itself a gps sub-IFD)
+Uint8List _jpegWithExif() {
+  final src = img.Image(width: 16, height: 16);
+  img.fill(src, color: img.ColorRgb8(120, 200, 40));
+  src.exif.imageIfd['Make'] = 'EvilCam';
+  src.exif.imageIfd['Model'] = 'GPS-9000';
+  return Uint8List.fromList(img.encodeJpg(src, quality: 95));
 }
 
 Future<AlbumKeyStore> _newAks(
@@ -67,7 +79,11 @@ Future<Uint8List> _decryptEnvelope({
 }
 
 void main() {
-  group('FilePipeline.prepareUpload', () {
+  // The size/wrap/round-trip machinery is media-type-agnostic : it is exercised
+  // with mediaType 'video' since videos encrypt arbitrary bytes raw (no decode)
+  // Photos now REQUIRE a decodable image (they are stripped + fail closed), so
+  // random bytes cannot stand in for a photo any more
+  group('FilePipeline.prepareUpload (encryption machinery)', () {
     test('round trip small file uses VER=0x01', () async {
       final aks = await _newAks(_albumId(), 3, _mk());
       final pt = _bytes(100 * 1024); // 100 KB : well under 1 MiB
@@ -76,13 +92,13 @@ void main() {
         albumIdBytes: _albumId(),
         currentEpoch: 3,
         plaintext: pt,
-        mediaType: 'photo',
-        mimeType: 'image/jpeg',
+        mediaType: 'video',
+        mimeType: 'video/mp4',
       );
       expect(env.cipherBytes[0], kVerAesGcm);
       expect(env.epoch, 3);
-      expect(env.mediaType, 'photo');
-      expect(env.mimeType, 'image/jpeg');
+      expect(env.mediaType, 'video');
+      expect(env.mimeType, 'video/mp4');
       expect(env.wrapNonce.length, 12);
       expect(env.wrapTagCT.length, 48);
       expect(env.blobSize, env.cipherBytes.length);
@@ -102,7 +118,7 @@ void main() {
         albumIdBytes: _albumId(),
         currentEpoch: 3,
         plaintext: pt,
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       expect(env.cipherBytes[0], kVerStreamGcm);
       final got =
@@ -118,14 +134,14 @@ void main() {
         albumIdBytes: _albumId(),
         currentEpoch: 0,
         plaintext: _bytes(kSegmentSize - 1),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final atThreshold = await FilePipeline.prepareUpload(
         aks: aks,
         albumIdBytes: _albumId(),
         currentEpoch: 0,
         plaintext: _bytes(kSegmentSize),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       expect(justUnder.cipherBytes[0], kVerAesGcm);
       expect(atThreshold.cipherBytes[0], kVerStreamGcm);
@@ -138,7 +154,7 @@ void main() {
         albumIdBytes: _albumId(),
         currentEpoch: 0,
         plaintext: _bytes(50 * 1024),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final h = await cg.Sha256().hash(env.cipherBytes);
       expect(env.blobSha256, equals(Uint8List.fromList(h.bytes)));
@@ -154,14 +170,14 @@ void main() {
         albumIdBytes: _albumId(0xA1),
         currentEpoch: 0,
         plaintext: pt,
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final envB = await FilePipeline.prepareUpload(
         aks: aksB,
         albumIdBytes: _albumId(0xB2),
         currentEpoch: 0,
         plaintext: pt,
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       expect(envA.wrapTagCT, isNot(equals(envB.wrapTagCT)),
           reason: 'wrap is keyed on MK + AAD ; different albums must diverge');
@@ -175,7 +191,7 @@ void main() {
           albumIdBytes: Uint8List(15), // bad
           currentEpoch: 0,
           plaintext: _bytes(100),
-          mediaType: 'photo',
+          mediaType: 'video',
         ),
         throwsArgumentError,
       );
@@ -192,6 +208,95 @@ void main() {
           mediaType: 'audio',
         ),
         throwsArgumentError,
+      );
+    });
+  });
+
+  group('FilePipeline.prepareUpload photo metadata stripping', () {
+    test('uploaded photo bytes carry no EXIF/GPS, thumb included', () async {
+      final withExif = _jpegWithExif();
+      // precondition : the fixture really does carry EXIF
+      expect(img.decodeImage(withExif)!.exif.isEmpty, isFalse,
+          reason:
+              'fixture must start WITH metadata for the test to mean anything');
+
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: withExif,
+        mediaType: 'photo',
+        mimeType: 'image/jpeg',
+      );
+
+      // decrypt what would actually be uploaded and confirm it is metadata free
+      final clean =
+          await _decryptEnvelope(aks: aks, albumId: _albumId(), env: env);
+      expect(img.decodeImage(clean)!.exif.isEmpty, isTrue,
+          reason: 'uploaded photo must carry no EXIF');
+      // the thumbnail is derived from the same decode : it must be clean too
+      expect(env.thumbPlaintext, isNotNull);
+      expect(img.decodeImage(env.thumbPlaintext!)!.exif.isEmpty, isTrue,
+          reason: 'thumbnail must carry no EXIF');
+    });
+
+    test('output photo keeps correct orientation (portrait stays upright)',
+        () async {
+      // 16x8 landscape pixels tagged orientation=6 (rotate 90 CW) : a real
+      // portrait camera photo. img.decodeImage auto applies the orientation
+      // (rotates pixels to 8x16, clears the tag) BEFORE we clear the rest of
+      // the EXIF, so stripping can never leave the photo sideways. This test
+      // guards that end to end : if a future package:image stops auto-orienting
+      // it goes red, and an explicit bakeOrientation would be needed
+      final src = img.Image(width: 16, height: 8);
+      img.fill(src, color: img.ColorRgb8(10, 20, 30));
+      src.exif.imageIfd.orientation = 6;
+      final oriented = Uint8List.fromList(img.encodeJpg(src, quality: 95));
+
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: oriented,
+        mediaType: 'photo',
+      );
+      final clean =
+          await _decryptEnvelope(aks: aks, albumId: _albumId(), env: env);
+      final out = img.decodeImage(clean)!;
+      expect(out.width, 8, reason: 'orientation must be baked into the pixels');
+      expect(out.height, 16);
+      expect(out.exif.isEmpty, isTrue);
+    });
+
+    test('an accepted photo is always reported as image/jpeg', () async {
+      // we re encode every photo to JPEG, so a decoded PNG/WebP must not keep
+      // its old mime : the stored bytes are JPEG
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: _jpegWithExif(),
+        mediaType: 'photo',
+        mimeType: 'image/png',
+      );
+      expect(env.mimeType, 'image/jpeg');
+    });
+
+    test('fails closed on a photo that cannot be decoded (never uploads raw)',
+        () async {
+      final aks = await _newAks(_albumId(), 0, _mk());
+      await expectLater(
+        FilePipeline.prepareUpload(
+          aks: aks,
+          albumIdBytes: _albumId(),
+          currentEpoch: 0,
+          plaintext: _bytes(4096), // not a decodable image
+          mediaType: 'photo',
+        ),
+        throwsA(isA<UnprocessableImageException>()),
       );
     });
   });

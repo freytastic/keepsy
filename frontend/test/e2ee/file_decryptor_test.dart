@@ -79,7 +79,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 3,
         plaintext: pt,
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = _recordFromEnvelope(env: env, albumIdBytes: _albumIdBytes());
 
@@ -100,7 +100,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 0,
         plaintext: pt,
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = _recordFromEnvelope(env: env, albumIdBytes: _albumIdBytes());
 
@@ -126,7 +126,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 3,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       // Forge a record claiming epoch 4 (server tampered)
       final tampered = MediaRecord(
@@ -163,7 +163,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 0,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = _recordFromEnvelope(env: env, albumIdBytes: _albumIdBytes());
       final tampered = Uint8List.fromList(env.cipherBytes);
@@ -190,7 +190,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 0,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final tampered = Uint8List.fromList(env.cipherBytes);
       tampered[tampered.length ~/ 2] ^= 0x01;
@@ -229,7 +229,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 0,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = _recordFromEnvelope(env: env, albumIdBytes: _albumIdBytes());
       final truncated =
@@ -256,7 +256,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 3,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = MediaRecord(
         id: _mediaIdString(env.mediaId),
@@ -297,7 +297,7 @@ void main() {
         albumIdBytes: _albumIdBytes(),
         currentEpoch: 0,
         plaintext: _bytes(2048),
-        mediaType: 'photo',
+        mediaType: 'video',
       );
       final rec = _recordFromEnvelope(env: env, albumIdBytes: _albumIdBytes());
 

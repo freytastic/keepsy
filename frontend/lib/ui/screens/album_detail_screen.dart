@@ -526,6 +526,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       // swaps _items will hit L1 instead of going to S3
       await cache.seedFromUpload(albumId: widget.album.id, env: env);
       await _loadMedia();
+    } on UnprocessableImageException {
+      messenger.showSnackBar(const SnackBar(
+          content:
+              Text("This photo's format isn't supported yet , try a JPEG.")));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
     } finally {
