@@ -120,13 +120,15 @@ void main() {
     api = _FakeMediaApi();
     aks = await _newAks();
     mgr = MediaCacheManager(plaintext: l1, ciphertext: l2, api: api, aks: aks);
-    // Mint a real AEAD envelope so FileDecryptor's verify path is exercised
+    // Mint a real AEAD envelope so FileDecryptor's verify path is exercised.
+    // 'video' : _plain() is raw bytes, not a decodable image (photo would now
+    // fail closed). The cache round trip under test is media-type-agnostic
     env = await FilePipeline.prepareUpload(
       aks: aks,
       albumIdBytes: _albumIdBytes(),
       currentEpoch: 0,
       plaintext: _plain(),
-      mediaType: 'photo',
+      mediaType: 'video',
     );
     record = _recordFromEnvelope(env);
     fileKey = MediaCacheKey(

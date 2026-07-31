@@ -11,13 +11,11 @@ import 'package:keepsy/e2ee/media_record.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
-// thumbnail + EXIF strip coverage. EXIF leakage assertion is
-// constrained by package:image dropping EXIF on decode → re-encode (so a
-// synthetic JPEG built from img.Image has no EXIF to begin with) : the
-// "no leakage" guarantee is therefore property of the library, not a runtime
-// check. Tests below cover the byte-level surface we do own : thumb cipher
-// shape, dual-wrap with shared wrap_aad, thumb-AAD distinct from file-AAD,
-// video falls through with no thumb, undecodable input falls through cleanly
+// thumbnail coverage. The EXIF strip itself is asserted in file_pipeline_test
+// (an EXIF bearing JPEG comes out metadata free). Tests below cover the
+// byte level surface we own : thumb cipher shape, dual wrap with shared
+// wrap_aad, thumb-AAD distinct from file-AAD, video yields no thumb, and an
+// undecodable photo fails closed
 
 Uint8List _albumId([int seed = 0xA1]) =>
     Uint8List.fromList(List<int>.filled(16, seed));
@@ -124,24 +122,23 @@ void main() {
       expect(env.thumbSha256, isNull);
     });
 
-    test('undecodable bytes yield NO thumb (graceful fallback, not throw)',
+    test('undecodable photo fails closed (never uploads unstripped bytes)',
         () async {
       final aks = await _newAks(_albumId(), 0, _mk());
-      // Random bytes : not a decodable image. prepareUpload still encrypts
-      // them as a "photo" but the strip + thumb step is a no-op
+      // Random bytes : not a decodable image. A photo we cant decode cant have
+      // its metadata stripped, so prepareUpload refuses rather than upload it
       final junk =
           Uint8List.fromList(List<int>.generate(2048, (i) => i & 0xFF));
-      final env = await FilePipeline.prepareUpload(
-        aks: aks,
-        albumIdBytes: _albumId(),
-        currentEpoch: 0,
-        plaintext: junk,
-        mediaType: 'photo',
+      await expectLater(
+        FilePipeline.prepareUpload(
+          aks: aks,
+          albumIdBytes: _albumId(),
+          currentEpoch: 0,
+          plaintext: junk,
+          mediaType: 'photo',
+        ),
+        throwsA(isA<UnprocessableImageException>()),
       );
-      expect(env.hasThumb, isFalse,
-          reason: 'image.decode returns null → no thumb minted');
-      expect(env.cipherBytes, isNotEmpty,
-          reason: 'file still uploads even when thumb gen fails');
     });
 
     test('two photos with same plaintext + same MK yield distinct thumb DEKs',

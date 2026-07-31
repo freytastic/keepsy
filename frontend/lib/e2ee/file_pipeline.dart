@@ -36,6 +36,15 @@ const int _thumbJpegQuality = 70;
 // file blob from the same media_id
 final Uint8List _kThumbAadSuffix = Uint8List.fromList('thumb'.codeUnits);
 
+// A photo we could not decode, so we cannot guarantee its metadata was
+// stripped. Fail closed rather than upload the original bytes (EXIF/GPS intact)
+class UnprocessableImageException implements Exception {
+  final String message;
+  const UnprocessableImageException(this.message);
+  @override
+  String toString() => 'UnprocessableImageException($message)';
+}
+
 class UploadEnvelope {
   final Uint8List mediaId; // 16B raw UUID
   final Uint8List
@@ -47,8 +56,9 @@ class UploadEnvelope {
   final Uint8List blobSha256; // 32B
   final String mediaType; // 'photo' or 'video'
   final String? mimeType;
-  // thumb is its own DEK + cipher + wrap. Null for videos (no thumb
-  // codec yet) and for photos that failed image.decode (raw upload fallback)
+  // thumb is its own DEK + cipher + wrap. Null for videos (no thumb codec
+  // yet) : an undecodable photo fails closed upstream, so any accepted photo
+  // has a thumb
   final Uint8List? thumbCipherBytes;
   final Uint8List? thumbWrapNonce;
   final Uint8List? thumbWrapTagCT;
@@ -113,19 +123,24 @@ abstract class FilePipeline {
     final dek = Csprng.bytes(_dekLen);
 
     try {
-      // for photos, decode + re-encode as a fresh JPEG. The image
-      // package's decoder drops EXIF (GPS, camera, capture time) by not
-      // copying it into the Image object, so the re encoded JPEG is clean
-      // Also pulls a 400px thumbnail off the same decoded Image so we dont
-      // decode twice. Videos + decode failures fall through with no thumb i guess so
+      // for photos, decode + re encode as a fresh JPEG with EXIF explicitly
+      // cleared (see _stripExifAndThumb : decoding alone does NOT drop it), and
+      // pull a 400px thumbnail off the same decoded image so we dont decode
+      // twice. A photo we cant decode fails closed below (we wont upload raw
+      // bytes with metadata intact). Videos keep the raw path : no image codec
       Uint8List bytesToEncrypt = plaintext;
       Uint8List? thumbPlaintext;
       if (mediaType == 'photo') {
         final stripped = _stripExifAndThumb(plaintext);
-        if (stripped != null) {
-          bytesToEncrypt = stripped.cleanJpeg;
-          thumbPlaintext = stripped.thumb;
+        // Fail closed : if we couldnt decode the photo we cant guarantee its
+        // metadata was stripped, so we refuse rather than upload the original
+        // bytes with EXIF/GPS intact (video keeps the raw path : no image codec)
+        if (stripped == null) {
+          throw const UnprocessableImageException(
+              'photo could not be decoded to strip metadata');
         }
+        bytesToEncrypt = stripped.cleanJpeg;
+        thumbPlaintext = stripped.thumb;
       }
 
       // Algorithm select by plaintext size only (D5) : <1 MiB → VER=0x01
@@ -222,7 +237,9 @@ abstract class FilePipeline {
         blobSize: cipher.length,
         blobSha256: blobSha256,
         mediaType: mediaType,
-        mimeType: mimeType,
+        // photos are always re encoded to JPEG, so the stored mime must say so
+        // regardless of the picker's input mime (a decoded PNG becomes JPEG)
+        mimeType: mediaType == 'photo' ? 'image/jpeg' : mimeType,
         filePlaintext: bytesToEncrypt,
         thumbCipherBytes: thumbCipher,
         thumbWrapNonce: thumbWrapNonce,
@@ -261,14 +278,20 @@ class _StrippedAndThumb {
   const _StrippedAndThumb(this.cleanJpeg, this.thumb);
 }
 
-// _stripExifAndThumb : decode the picked photo, re encode as a clean JPEG
-// (drops EXIF since img.Image doesnt carry EXIF into encodeJpg), and pull
-// a 400px long-edge thumbnail off the same decoded Image. Returns null if
-// the bytes arent a decodable image : caller treats the original as opaque
-// and skips thumb generation
+// _stripExifAndThumb : decode the picked photo (img.decodeImage auto applies
+// EXIF orientation, so pixels come back upright), CLEAR the remaining EXIF, then
+// re encode as a clean JPEG + pull a 400px long-edge thumbnail off the same
+// Image. Returns null if the bytes arent a decodable image : the caller fails
+// closed rather than upload unstripped bytes
 _StrippedAndThumb? _stripExifAndThumb(Uint8List bytes) {
   final decoded = img.decodeImage(bytes);
   if (decoded == null) return null;
+  // Drop EXIF (GPS, camera, capture time) + any XMP/IPTC BEFORE re encoding :
+  // package:image parses EXIF into decoded.exif and encodeJpg writes it back
+  // out, so decoding alone does NOT strip it. Clearing here means both the
+  // clean JPEG and the thumbnail (derived below from the same Image) are
+  // metadata free. ICC colour profile is left alone (not privacy sensitive)
+  decoded.exif = img.ExifData();
   final cleanJpeg = img.encodeJpg(decoded, quality: 90);
   // Resize the LONG edge to _thumbMaxDim. copyResize preserves aspect ratio
   // when only one of width/height is given
