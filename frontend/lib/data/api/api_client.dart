@@ -38,7 +38,7 @@ class ApiClient {
     if (refreshToken == null) return false;
 
     try {
-      final url = Uri.parse('${AppConstants.baseURL}/auth/refresh');
+      final url = Uri.parse('${AppConstants.baseURL}/auth/otp/refresh');
       final res = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
