@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
@@ -11,27 +12,22 @@ import 'package:keepsy/secure_store/secure_key_store.dart';
 import 'identity_label_map.dart';
 import 'prekey_api.dart';
 
-// IdentityService is the first real consumer of SecureKeyStore. It generates
-// the long lived identity keys (IK/LK), the signed prekey (SPK), and an
-// initial OPK pool of 20, persists them under fixed labels (D6), and uploads
-// the public side via PrekeyApi. Steady state : ensureSpkRotated() (D5) and a
-// mutexed replenishOpks() (D9) keep the bundle healthy.
-
-// Bootstrap is two phase + resumable: keys generated locally before publish :
-// publish state tracked by IdentityLabelMap sidecars so a network blip
-// between /keys and /opks doesnt strand the user on a regenerated, server
-// rejected IK on the next launch
+// Manages device identity keys, signed prekeys, and one time prekeys. Bootstrap
+// publishes five OPKs; steadystate replenishment raises the pool to 20
+// Local keys are persisted before publication so bootstrap can resume safely
 
 typedef Now = DateTime Function();
 
-// Bootstrap publishes a small batch synchronously so signup stays fast
-// Background replenish lifts the pool to the target after the user has
-// navigated into the app. Trigger fires whenever the server count drops
-// below this : replenish brings it back up to kTargetOpkPool
+// Selects the current, unsettled, previous, or most recently archived SPK
+enum SpkSlot { current, pending, previous, archived }
+
+// Bootstrap stays small for signup latency; background work fills the target
 const int kBootstrapOpkPool = 5;
 const int kTargetOpkPool = 20;
 const int kReplenishTrigger = 5;
 const int kSpkRotationSeconds = 30 * 24 * 3600;
+// Leaves a margin inside the server's 5 minute spk_ts skew window
+const int kSpkRecoverySkewLimitSeconds = 4 * 60;
 
 // Domain prefix for replenish_sig (§6.5): "opk-batch-v1" || u32_be(N) || SHA256(concat pubs)
 final Uint8List _kSaltOpkBatch = Uint8List.fromList('opk-batch-v1'.codeUnits);
@@ -48,6 +44,32 @@ class BootstrapAccountConflictException implements Exception {
   ]);
   @override
   String toString() => 'BootstrapAccountConflictException: $message';
+}
+
+// The server advertises an SPK matching neither current nor pending
+class SpkReconciliationConflict implements Exception {
+  const SpkReconciliationConflict();
+  @override
+  String toString() =>
+      'SpkReconciliationConflict: server spk_pub matches neither the pending '
+      'nor the current SPK; pending archived, recovery rotation pending';
+}
+
+// The server identity differs from the immutable keys held by this device
+class IdentityDivergenceException implements Exception {
+  const IdentityDivergenceException();
+  @override
+  String toString() =>
+      'IdentityDivergenceException: server ik_pub/lk_pub do not match this '
+      'device';
+}
+
+bool _bytesEqual(Uint8List a, Uint8List b) {
+  if (a.length != b.length || a.isEmpty) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 class IdentityService {
@@ -87,13 +109,8 @@ class IdentityService {
     return true;
   }
 
-  // Two phase resumable bootstrap
-  //   onu . Ensure keys exist locally (generate if missing, derive pubs from
-  //      privs in the secure store if labels already cover them)
-  //   dos. Publish identity if not yet marked published : on E_IDENTITY_ALREADY_SET
-  //      surface BootstrapAccountConflictException , server has someone else's
-  //      ik_pub for this account, no recovery from this device
-  //   tres. Publish the initial 20-OPK batch if not yet marked published
+  // Resumable bootstrap: persist keys, publish identity, then publish five OPKs
+  // E_IDENTITY_ALREADY_SET is reserved for genuine key divergence
   Future<void> bootstrap() async {
     if (await isBootstrapped()) {
       if (!_bootstrapDone.isCompleted) _bootstrapDone.complete();
@@ -129,18 +146,21 @@ class IdentityService {
     final ikId = _labels.handleId(kLabelIK);
     final lkId = _labels.handleId(kLabelLK);
     final spkId = _labels.handleId(kLabelSpkCurrent);
-    final opkLabels = _labels.labelsWithPrefix(kLabelOpkPrefix);
+    // Resume from the fixed bootstrap range, ignoring replenished indices
+    final bootstrapOpkLabels = [
+      for (var i = 0; i < kBootstrapOpkPool; i++) '$kLabelOpkPrefix$i',
+    ];
     final allPresent = ikId != null &&
         lkId != null &&
         spkId != null &&
-        opkLabels.length == kBootstrapOpkPool;
+        bootstrapOpkLabels.every((l) => _labels.handleId(l) != null);
 
     if (allPresent) {
       return _readKeysFromStore(
         ikId: ikId,
         lkId: lkId,
         spkId: spkId,
-        opkLabels: opkLabels,
+        opkLabels: bootstrapOpkLabels,
       );
     }
 
@@ -318,25 +338,94 @@ class IdentityService {
     await _labels.markInitialOpksPublished();
   }
 
-  // D5 : rotate SPK if ≥ 30 days since the persisted spk_ts. Idempotent : a
-  // fresh ts is a no-op
-  Future<void> ensureSpkRotated() async {
+  // Serialize reconciliation and rotation across every entry point. Callers
+  // queue so each transition re reads the state produced by its predecessor
+  Completer<void>? _spkLock;
+
+  Future<void> _withSpkLock(Future<void> Function() fn) async {
+    while (_spkLock != null) {
+      try {
+        await _spkLock!.future;
+      } catch (_) {}
+    }
+    final held = Completer<void>();
+    _spkLock = held;
+    try {
+      await fn();
+    } finally {
+      _spkLock = null;
+      held.complete();
+    }
+  }
+
+  Future<void> settleSpkState() => _withSpkLock(_settleSpkState);
+
+  Future<void> _settleSpkState() async {
+    try {
+      await _reconcilePendingSpk();
+    } on IdentityDivergenceException {
+      developer.log('spk: identity divergence, rotation blocked',
+          name: 'keepsy.identity');
+      return;
+    } on SpkReconciliationConflict {
+      developer.log('spk: conflict, recovering with a fresh rotation',
+          name: 'keepsy.identity');
+    } catch (_) {
+      // The responder can use pending while reconciliation is offline
+    }
+
+    try {
+      await _ensureSpkRotated();
+    } catch (_) {
+      // Settle an ambiguous result immediately, with at most one recovery retry
+      try {
+        await _reconcilePendingSpk();
+      } on IdentityDivergenceException {
+        developer.log('spk: identity divergence, rotation blocked',
+            name: 'keepsy.identity');
+      } on SpkReconciliationConflict {
+        developer.log('spk: conflict after rotation, retrying once',
+            name: 'keepsy.identity');
+        try {
+          await _ensureSpkRotated();
+        } catch (_) {}
+      } catch (_) {}
+    }
+  }
+
+  // Rotate after 30 days; all public callers share the SPK transition lock
+  Future<void> ensureSpkRotated() => _withSpkLock(_ensureSpkRotated);
+
+  Future<void> _ensureSpkRotated() async {
     final ts = await _labels.getSpkTs();
     if (ts == null) return;
     final nowSec = _now().toUtc().millisecondsSinceEpoch ~/ 1000;
     if (nowSec - ts < kSpkRotationSeconds) return;
 
+    // Never replace a pending key that the server may already advertise
+    if (_labels.handleId(kLabelSpkPending) != null) return;
+
     final ikHandleId = _labels.handleId(kLabelIK);
     if (ikHandleId == null) return;
     final ikHandle = KeyHandle(id: ikHandleId, label: kLabelIK);
 
+    // A recovery timestamp must beat the server's unknown rotation
+    final conflictTs = await _labels.getSpkConflictTs();
+    var newTs = nowSec;
+    if (conflictTs != null && conflictTs + 1 > newTs) {
+      newTs = conflictTs + 1;
+    }
+    // Defer until a monotonic timestamp also fits the server's skew window
+    if (newTs - nowSec > kSpkRecoverySkewLimitSeconds) return;
+
     final newPriv = Csprng.bytes(32);
     final newKp = await KeyHandleAdapter.toX25519(newPriv);
     final newPub = newKp.publicKey;
-    final newHandle = await _store.put(kLabelSpkCurrent, newPriv);
+    // Persist pending before publication; promote only after confirmation
+    final newHandle = await _store.put(kLabelSpkPending, newPriv);
     newPriv.fillRange(0, newPriv.length, 0);
+    await _labels.set(kLabelSpkPending, newHandle.id);
 
-    final newTs = nowSec;
     final spkSig = await _signWithIk(_spkSigMsg(newPub, newTs), ikHandle);
     final rotationSig = await _signWithIk(
       _rotationSigMsg(newPub, newTs),
@@ -350,21 +439,109 @@ class IdentityService {
       rotationSig: rotationSig,
     );
 
-    // Demote previous → previous slot, install new → current. The 30d TTL
-    // sweep on .previous is owned by §2.3 (locked: spk-prev-ttl-30d)
-    final oldId = _labels.handleId(kLabelSpkCurrent);
-    if (oldId != null) {
-      await _labels.set(kLabelSpkPrevious, oldId);
-    }
-    await _labels.set(kLabelSpkCurrent, newHandle.id);
-    await _labels.setSpkTs(newTs);
+    await _promotePendingSpk(newHandle.id, newTs);
   }
 
-  // D9 : cold start belt-and-suspenders + WS event handler. Mutexed
+  // Promotion is idempotent when an interrupted attempt already moved current
+  Future<void> _promotePendingSpk(String pendingId, int ts) async {
+    final curId = _labels.handleId(kLabelSpkCurrent);
+    if (curId != pendingId) {
+      // Demote only : the 30d TTL sweep on .previous is owned by §2.3, not
+      // here (locked: spk-prev-ttl-30d)
+      if (curId != null) {
+        await _labels.set(kLabelSpkPrevious, curId);
+      }
+      await _labels.set(kLabelSpkCurrent, pendingId);
+    }
+    await _labels.setSpkTs(ts);
+    await _labels.remove(kLabelSpkPending);
+    // Clear conflict state only after confirmed promotion.
+    await _labels.clearSpkConflict();
+  }
+
+  // Resolve a pending rotation from server state: promote on a pending match,
+  // discard on a current match, or archive on an unknown SPK. No network call
+  // is made when no pending label exists
+  Future<void> reconcilePendingSpk() => _withSpkLock(_reconcilePendingSpk);
+
+  Future<void> _reconcilePendingSpk() async {
+    final pendingId = _labels.handleId(kLabelSpkPending);
+    if (pendingId == null) return;
+
+    final own = await _api.fetchOwnKeys();
+
+    // Verify immutable identity keys before mutating SPK state
+    final myIk = await currentIkPub();
+    final myLk = await useLk<Uint8List>(
+        (priv) async => (await KeyHandleAdapter.toX25519(priv)).publicKey);
+    if (!_bytesEqual(own.ikPub, myIk) || !_bytesEqual(own.lkPub, myLk)) {
+      await _labels.setSpkConflictTs(own.spkTs ?? _nowSec());
+      throw const IdentityDivergenceException();
+    }
+
+    final pendingPub = await _store.use<Uint8List>(
+      KeyHandle(id: pendingId, label: kLabelSpkPending),
+      (priv) async => (await KeyHandleAdapter.toX25519(priv)).publicKey,
+    );
+
+    if (_bytesEqual(own.spkPub, pendingPub)) {
+      await _promotePendingSpk(pendingId, own.spkTs ?? _nowSec());
+      return;
+    }
+
+    final curId = _labels.handleId(kLabelSpkCurrent);
+    if (curId != null) {
+      final curPub = await _store.use<Uint8List>(
+        KeyHandle(id: curId, label: kLabelSpkCurrent),
+        (priv) async => (await KeyHandleAdapter.toX25519(priv)).publicKey,
+      );
+      if (_bytesEqual(own.spkPub, curPub)) {
+        // Remove the durable reference before deleting the key
+        await _labels.remove(kLabelSpkPending);
+        try {
+          await _store
+              .delete(KeyHandle(id: pendingId, label: kLabelSpkPending));
+        } catch (_) {}
+        return;
+      }
+    }
+
+    // Keep the latest unacknowledged key for delayed wraps. The unknown server
+    // key remains unrecoverable; the replacement restores future delivery
+    final oldArchiveId = _labels.handleId(kLabelSpkArchived);
+    // Persist the recovery timestamp and label transition before deleting the
+    // previous archive. The equality guard prevents deleting an aliased key
+    await _labels.setSpkConflictTs(own.spkTs ?? _nowSec());
+    await _labels.mutate((m) {
+      m[kLabelSpkArchived] = pendingId;
+      m.remove(kLabelSpkPending);
+    });
+    if (oldArchiveId != null && oldArchiveId != pendingId) {
+      // Cleanup after the durable transition
+      try {
+        await _store
+            .delete(KeyHandle(id: oldArchiveId, label: kLabelSpkArchived));
+      } catch (_) {}
+    }
+    throw const SpkReconciliationConflict();
+  }
+
+  // Diagnostics only marker for an unresolved SPK conflict
+  Future<int?> spkConflictTs() => _labels.getSpkConflictTs();
+
+  int _nowSec() => _now().toUtc().millisecondsSinceEpoch ~/ 1000;
+
+  // Shared by cold start and realtime OPK replenishment
   Future<void> replenishOpks({
     int target = kTargetOpkPool,
     int trigger = kReplenishTrigger,
-  }) {
+  }) async {
+    // Do not add steady state indices until bootstrap is acknowledged
+    if (!await isBootstrapped()) return;
+    return _replenishMutexed(target, trigger);
+  }
+
+  Future<void> _replenishMutexed(int target, int trigger) {
     final inflight = _inflightReplenish;
     if (inflight != null) return inflight.future;
     final c = Completer<void>();
@@ -398,23 +575,20 @@ class IdentityService {
 
     final needed = target - count;
     final opks = <PrekeyOpk>[];
-    final newHandles = <int, KeyHandle>{};
     for (var k = 0; k < needed; k++) {
       final idx = maxIdx + 1 + k;
       final priv = Csprng.bytes(32);
       final kp = await KeyHandleAdapter.toX25519(priv);
       final h = await _store.put('$kLabelOpkPrefix$idx', priv);
       priv.fillRange(0, priv.length, 0);
+      // Label before publication so accepted keys remain addressable. A retry
+      // then advances to fresh indices instead of reminting possible conflicts
+      await _labels.set('$kLabelOpkPrefix$idx', h.id);
       opks.add(PrekeyOpk(idx: idx, keyPub: kp.publicKey));
-      newHandles[idx] = h;
     }
 
     final replenishSig = await _signWithIk(await _replenishMsg(opks), ikHandle);
     await _api.replenishOpks(opks: opks, replenishSig: replenishSig);
-
-    for (final entry in newHandles.entries) {
-      await _labels.set('$kLabelOpkPrefix${entry.key}', entry.value.id);
-    }
   }
 
   // Signs 'msg' under the IK seed inside a use<T> callback so the seed never
@@ -465,21 +639,31 @@ class IdentityService {
     return _store.use<T>(KeyHandle(id: id, label: kLabelLK), fn);
   }
 
-  // true once a rotation has demoted a prior SPK into the previous slot. The
-  // responder tries the previous SPK when a wrap was built against it just
-  // before we rotated (delayed wrap race)
+  // Optional responder fallbacks, checked in order by EpochProcessor
   bool get hasPreviousSpk => _labels.handleId(kLabelSpkPrevious) != null;
 
+  bool get hasPendingSpk => _labels.handleId(kLabelSpkPending) != null;
+
+  bool get hasArchivedSpk => _labels.handleId(kLabelSpkArchived) != null;
+
   Future<T> useSpk<T>(Future<T> Function(Uint8List priv) fn,
-      {bool previous = false}) {
-    final label = previous ? kLabelSpkPrevious : kLabelSpkCurrent;
+      {SpkSlot slot = SpkSlot.current}) {
+    final label = switch (slot) {
+      SpkSlot.current => kLabelSpkCurrent,
+      SpkSlot.pending => kLabelSpkPending,
+      SpkSlot.previous => kLabelSpkPrevious,
+      SpkSlot.archived => kLabelSpkArchived,
+    };
     final id = _labels.handleId(label);
     if (id == null) {
-      throw StateError(
-        previous
-            ? 'SPK.previous not present : no rotation has happened yet'
-            : 'SPK.current not bootstrapped : IdentityService.bootstrap() first',
-      );
+      throw StateError(switch (slot) {
+        SpkSlot.current =>
+          'SPK.current not bootstrapped : IdentityService.bootstrap() first',
+        SpkSlot.pending => 'SPK.pending not present : no rotation is in flight',
+        SpkSlot.previous =>
+          'SPK.previous not present : no rotation has happened yet',
+        SpkSlot.archived => 'SPK.archived not present : no conflict recorded',
+      });
     }
     return _store.use<T>(KeyHandle(id: id, label: label), fn);
   }

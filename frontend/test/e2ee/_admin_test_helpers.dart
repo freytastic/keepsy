@@ -22,10 +22,25 @@ import 'identity_label_map_test_helpers.dart';
 // SHA256(album_id ‖ u32_be(epoch) ‖ wrap_blob) message under its IK (§4.2 D3)
 // Filename starts with `_` so it is not exported as part of the test catalog
 
-// Silent stub : the admin's IdentityService doesnt actually upload anything
-class _SilentApi implements PrekeyApi {
+// Silent API with an injectable lost-response rotation failure
+class SilentPrekeyApi implements PrekeyApi {
+  PrekeyApiException? rotateError;
+  int fetchOwnKeysCalls = 0;
+  OwnKeys own = OwnKeys(
+      ikPub: Uint8List(0),
+      lkPub: Uint8List(0),
+      spkPub: Uint8List(0),
+      spkTs: null);
+
   @override
   Future<int> opkCount() async => 20;
+
+  @override
+  Future<OwnKeys> fetchOwnKeys() async {
+    fetchOwnKeysCalls++;
+    return own;
+  }
+
   @override
   Future<void> replenishOpks(
       {required List<PrekeyOpk> opks, required Uint8List replenishSig}) async {}
@@ -34,7 +49,14 @@ class _SilentApi implements PrekeyApi {
       {required Uint8List spkPub,
       required Uint8List spkSig,
       required int spkTs,
-      required Uint8List rotationSig}) async {}
+      required Uint8List rotationSig}) async {
+    if (rotateError != null) {
+      final e = rotateError!;
+      rotateError = null;
+      throw e;
+    }
+  }
+
   @override
   Future<void> upsertIdentity(
       {required Uint8List ikPub,
@@ -69,7 +91,7 @@ class SyntheticAdmin {
     final svc = IdentityService(
       store: store,
       labels: labels,
-      api: _SilentApi(),
+      api: SilentPrekeyApi(),
       now: () => fixed,
     );
     await svc.bootstrap();
@@ -137,6 +159,7 @@ Future<PrekeyBundle> buildResponderBundle({
   required IdentityService responder,
   required int spkTs,
   ({int idx, Uint8List keyPub})? opk,
+  SpkSlot slot = SpkSlot.current,
 }) async {
   final ikPub = await responder.useIk<Uint8List>((seed) async {
     final kp = await KeyHandleAdapter.toEd25519(seed);
@@ -149,7 +172,7 @@ Future<PrekeyBundle> buildResponderBundle({
   final spkPub = await responder.useSpk<Uint8List>((priv) async {
     final kp = await KeyHandleAdapter.toX25519(priv);
     return kp.publicKey;
-  });
+  }, slot: slot);
   final msg = Uint8List(40);
   msg.setRange(0, 32, spkPub);
   ByteData.sublistView(msg, 32).setUint64(0, spkTs, Endian.big);
@@ -175,21 +198,22 @@ Future<PrekeyBundle> buildResponderBundle({
 // store + label map. Returned alongside the store so tests can layer
 // AlbumKeyStore on the same SecureKeyStore (so installVerified -> store.put
 // and AlbumKeyStore.initialize round trips through .list)
-Future<({IdentityService svc, MockSecureKeyStore store})> newResponderIdentity(
-    {DateTime? now, DateTime Function()? nowFn}) async {
+Future<({IdentityService svc, MockSecureKeyStore store, SilentPrekeyApi api})>
+    newResponderIdentity({DateTime? now, DateTime Function()? nowFn}) async {
   final clock = nowFn ?? () => (now ?? DateTime.utc(2026, 5, 4, 12));
   final store = MockSecureKeyStore();
   await store.initialize();
   final labels = makeInMemoryLabelMap();
   await labels.load();
+  final api = SilentPrekeyApi();
   final svc = IdentityService(
     store: store,
     labels: labels,
-    api: _SilentApi(),
+    api: api,
     now: clock,
   );
   await svc.bootstrap();
-  return (svc: svc, store: store);
+  return (svc: svc, store: store, api: api);
 }
 
 // In memory MemberFetcher snapshot. Tests register the synthetic admin against

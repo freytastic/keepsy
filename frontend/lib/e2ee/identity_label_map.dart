@@ -2,9 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-// Persisted {label -> handleId} map plus an spk_ts sidecar, backed by
-// flutter_secure_storage. First real consumer of FSS in the app : the
-// existing StorageService still uses SharedPreferences for the auth token
+// Persists key handle labels and publication sidecars in secure storage
 // Kept off the SecureKeyStore on purpose : metadata, not key material
 
 const String kIdentityLabelMapKey = 'keepsy.identity.label_map';
@@ -15,12 +13,18 @@ const String kIdentitySpkTsKey = 'keepsy.identity.spk_ts';
 const String kIdentityPublishedKey = 'keepsy.identity.identity_published';
 const String kInitialOpksPublishedKey =
     'keepsy.identity.initial_opks_published';
+// Server timestamp that a recovery rotation must exceed
+const String kIdentitySpkConflictKey = 'keepsy.identity.spk_conflict_ts';
 
 // Static identity labels (D6)
 const String kLabelIK = 'keepsy.ik';
 const String kLabelLK = 'keepsy.lk';
 const String kLabelSpkCurrent = 'keepsy.spk.current';
 const String kLabelSpkPrevious = 'keepsy.spk.previous';
+// Addressable key for a rotation whose server outcome is not yet known
+const String kLabelSpkPending = 'keepsy.spk.pending';
+// Most recent unacknowledged key, retained for delayed wraps
+const String kLabelSpkArchived = 'keepsy.spk.archived';
 const String kLabelOpkPrefix = 'keepsy.opk.';
 
 // Tiny KV abstraction so tests can swap in an in-memory fake without dragging
@@ -86,6 +90,15 @@ class IdentityLabelMap {
     await _persist();
   }
 
+  // Persist a multi label transition as one map write
+  Future<void> mutate(void Function(Map<String, String> labels) fn) async {
+    _requireLoaded();
+    final next = Map<String, String>.from(_map);
+    fn(next);
+    _map = next;
+    await _persist();
+  }
+
   List<String> labelsWithPrefix(String prefix) {
     _requireLoaded();
     return _map.keys.where((k) => k.startsWith(prefix)).toList();
@@ -113,6 +126,17 @@ class IdentityLabelMap {
   Future<void> markInitialOpksPublished() =>
       _kv.write(kInitialOpksPublishedKey, 'true');
 
+  Future<int?> getSpkConflictTs() async {
+    final raw = await _kv.read(kIdentitySpkConflictKey);
+    if (raw == null) return null;
+    return int.tryParse(raw);
+  }
+
+  Future<void> setSpkConflictTs(int serverTs) =>
+      _kv.write(kIdentitySpkConflictKey, serverTs.toString());
+
+  Future<void> clearSpkConflict() => _kv.delete(kIdentitySpkConflictKey);
+
   // Drop every label + sidecar. Used by bootstrap recovery flows where the
   // local key state must not leak into a fresh attempt
   Future<void> clearAll() async {
@@ -122,6 +146,7 @@ class IdentityLabelMap {
     await _kv.delete(kIdentitySpkTsKey);
     await _kv.delete(kIdentityPublishedKey);
     await _kv.delete(kInitialOpksPublishedKey);
+    await _kv.delete(kIdentitySpkConflictKey);
   }
 
   Future<void> _persist() => _kv.write(kIdentityLabelMapKey, jsonEncode(_map));

@@ -4,8 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
+import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
+import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/e2ee/wrap_envelope.dart';
+import 'package:keepsy/secure_store/key_handle_adapter.dart';
 
 import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';
@@ -61,7 +64,7 @@ Future<_Stack> _bootStack({
     aks: aks,
     processor: processor,
     admin: admin,
-    responder: responder.svc,
+    responder: responder,
     albumId: id,
     albumIdStr: uuidStringFromBytes(id),
   );
@@ -78,7 +81,7 @@ void main() {
       final s = await _bootStack();
       final mk = _mk(0xCC);
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
         albumId: s.albumId,
         epoch: 0,
@@ -161,7 +164,7 @@ void main() {
       final s = await _bootStack();
       final mk = _mk(0xDD);
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       // Encrypt with AAD epoch=4 but advertise epoch=5 over the wire (D5 :
       // AEAD AAD binding catches this before installVerified ever runs)
       final env = await s.admin.buildWrap(
@@ -188,7 +191,7 @@ void main() {
       final s = await _bootStack(backoff: Duration.zero);
       final mk = _mk(0xEE);
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
         albumId: s.albumId,
         epoch: 2,
@@ -219,7 +222,7 @@ void main() {
         startedAt: DateTime.utc(2026, 5, 7, 12),
       );
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       for (var i = 4; i <= 7; i++) {
         final env = await s.admin.buildWrap(
           albumId: s.albumId,
@@ -289,15 +292,13 @@ void main() {
     test(
         'previous SPK fallback: a wrap built against a rotated-away SPK still '
         'installs', () async {
-      // sender captured the responder's SPK, then the responder rotated before
-      // processing the wrap. The current SPK cant derive the SK : the processor
-      // must fall back to the just previous SPK
+      // The wrap targets the SPK retained in the previous slot
       var clock = DateTime.utc(2026, 5, 4, 12);
       final s = await _bootStack(nowFn: () => clock);
       final mk = _mk(0x5A);
       // bundle captures SPK1 (current at bootstrap)
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
         albumId: s.albumId,
         epoch: 0,
@@ -307,7 +308,124 @@ void main() {
       s.api.putWrap(s.albumIdStr, 0, env);
       // rotate : SPK1 -> previous slot, fresh SPK2 -> current
       clock = clock.add(const Duration(days: 31));
-      await s.responder.ensureSpkRotated();
+      await s.responder.svc.ensureSpkRotated();
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+      final got = await s.aks
+          .useMk<List<int>>(s.albumId, 0, (b) async => List<int>.from(b));
+      expect(got, equals(mk));
+    });
+
+    test(
+        'pending SPK: a wrap built against a rotation the server accepted but '
+        'we never got the response for installs WITHOUT any reconciliation',
+        () async {
+      // Delivery must work before network reconciliation can run
+      var clock = DateTime.utc(2026, 5, 4, 12);
+      final s = await _bootStack(nowFn: () => clock);
+      final mk = _mk(0x6C);
+
+      clock = clock.add(const Duration(days: 31));
+      s.responder.api.rotateError = const PrekeyApiException(
+          code: 'E_INTERNAL', message: 'dropped', httpStatus: 500);
+      await expectLater(s.responder.svc.ensureSpkRotated(),
+          throwsA(isA<PrekeyApiException>()));
+      final callsAfterRotate = s.responder.api.fetchOwnKeysCalls as int;
+
+      // Peers receive the pending key after the server accepts the rotation
+      final bundle = await buildResponderBundle(
+          responder: s.responder.svc, spkTs: _spkTs, slot: SpkSlot.pending);
+      final env = await s.admin.buildWrap(
+        albumId: s.albumId,
+        epoch: 0,
+        mk: mk,
+        responderBundle: bundle,
+      );
+      s.api.putWrap(s.albumIdStr, 0, env);
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+      final got = await s.aks
+          .useMk<List<int>>(s.albumId, 0, (b) async => List<int>.from(b));
+      expect(got, equals(mk));
+      expect(s.responder.api.fetchOwnKeysCalls, callsAfterRotate,
+          reason: 'the unwrap path must not need a network round trip');
+    });
+
+    test(
+        'previous SPK fallback still works while a pending rotation is '
+        'unsettled', () async {
+      // Pending must not shadow the previous fallback
+      var clock = DateTime.utc(2026, 5, 4, 12);
+      final s = await _bootStack(nowFn: () => clock);
+      final mk = _mk(0x6D);
+      // wrap captures SPK1 while it is still current
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      final env = await s.admin.buildWrap(
+        albumId: s.albumId,
+        epoch: 0,
+        mk: mk,
+        responderBundle: bundle,
+      );
+      s.api.putWrap(s.albumIdStr, 0, env);
+
+      // Clean rotation: SPK1 -> previous, SPK2 -> current
+      clock = clock.add(const Duration(days: 31));
+      await s.responder.svc.ensureSpkRotated();
+      // A lost response leaves SPK3 pending
+      clock = clock.add(const Duration(days: 31));
+      s.responder.api.rotateError = const PrekeyApiException(
+          code: 'E_INTERNAL', message: 'dropped', httpStatus: 500);
+      await expectLater(s.responder.svc.ensureSpkRotated(),
+          throwsA(isA<PrekeyApiException>()));
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+      final got = await s.aks
+          .useMk<List<int>>(s.albumId, 0, (b) async => List<int>.from(b));
+      expect(got, equals(mk));
+    });
+
+    test(
+        'archived SPK: a wrap built against a key that was briefly advertised '
+        'before an unknown SPK superseded it still installs', () async {
+      var clock = DateTime.utc(2026, 5, 4, 12);
+      final s = await _bootStack(nowFn: () => clock);
+      final mk = _mk(0x7E);
+
+      clock = clock.add(const Duration(days: 31));
+      s.responder.api.rotateError = const PrekeyApiException(
+          code: 'E_INTERNAL', message: 'dropped', httpStatus: 500);
+      await expectLater(s.responder.svc.ensureSpkRotated(),
+          throwsA(isA<PrekeyApiException>()));
+
+      // Build the wrap while the pending key is advertised
+      final bundle = await buildResponderBundle(
+          responder: s.responder.svc, spkTs: _spkTs, slot: SpkSlot.pending);
+      final env = await s.admin.buildWrap(
+        albumId: s.albumId,
+        epoch: 0,
+        mk: mk,
+        responderBundle: bundle,
+      );
+      s.api.putWrap(s.albumIdStr, 0, env);
+
+      // An unknown server SPK moves pending to the archive
+      final myIk = await s.responder.svc.currentIkPub();
+      final myLk = await s.responder.svc.useLk<Uint8List>(
+          (p) async => (await KeyHandleAdapter.toX25519(p)).publicKey);
+      s.responder.api.own = OwnKeys(
+          ikPub: myIk,
+          lkPub: myLk,
+          spkPub: Uint8List(32)..fillRange(0, 32, 0x5A),
+          spkTs: clock.toUtc().millisecondsSinceEpoch ~/ 1000);
+      await expectLater(s.responder.svc.reconcilePendingSpk(),
+          throwsA(isA<SpkReconciliationConflict>()));
 
       await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
 
@@ -323,7 +441,7 @@ void main() {
       var clock = DateTime.utc(2026, 5, 4, 12);
       final s = await _bootStack(nowFn: () => clock);
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
         albumId: s.albumId,
         epoch: 0,
@@ -332,9 +450,10 @@ void main() {
       );
       s.api.putWrap(s.albumIdStr, 0, env);
       clock = clock.add(const Duration(days: 31));
-      await s.responder.ensureSpkRotated(); // SPK1 -> previous
+      await s.responder.svc.ensureSpkRotated(); // SPK1 -> previous
       clock = clock.add(const Duration(days: 31));
-      await s.responder.ensureSpkRotated(); // SPK1 evicted, SPK2 -> previous
+      await s.responder.svc
+          .ensureSpkRotated(); // SPK1 evicted, SPK2 -> previous
 
       await expectLater(
         s.processor.handleEvent(albumId: s.albumId, epoch: 0),
@@ -349,7 +468,7 @@ void main() {
       final s = await _bootStack();
       final mk = _mk(0x77);
       final bundle =
-          await buildResponderBundle(responder: s.responder, spkTs: _spkTs);
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
         albumId: s.albumId,
         epoch: 0,

@@ -114,9 +114,10 @@ class _LandingPageState extends State<LandingPage> {
     try {
       await identity.bootstrap();
     } catch (_) {/* logged via identity.cryptoReady error */}
+    // Reconcile and rotate under the shared SPK transition lock.
     try {
-      await identity.ensureSpkRotated();
-    } catch (_) {/* best effort */}
+      await identity.settleSpkState();
+    } catch (_) {/* diagnostics are logged inside */}
     try {
       // trigger=kTargetOpkPool so the post-bootstrap pool (5) is force refilled
       // up to 20 immediately. Steady state callers (WS opk_low) use the default
