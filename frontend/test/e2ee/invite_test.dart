@@ -27,6 +27,13 @@ class _ByHandlePrekeyApi implements PrekeyApi {
       throw UnimplementedError();
   @override
   Future<int> opkCount() async => 0;
+
+  @override
+  Future<OwnKeys> fetchOwnKeys() async => OwnKeys(
+      ikPub: Uint8List(0),
+      lkPub: Uint8List(0),
+      spkPub: Uint8List(0),
+      spkTs: null);
   @override
   Future<void> replenishOpks(
       {required List<PrekeyOpk> opks, required Uint8List replenishSig}) async {}

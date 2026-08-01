@@ -376,21 +376,9 @@ void main() async {
     } catch (_) {}
   });
 
-  // WS reconnect catch up : every successful WS open replays the cold start
-  // catchUpAll so any e2ee.epoch_changed events that fired while the socket
-  // was down get resolved. catchUpAll is per album resilient + idempotent so
-  // overlap with landing_screen's call is harmless
+  // Reconcile key state and catch up missed epochs after each reconnect.
   realtimeService.connected.listen((_) {
-    final ids = <Uint8List>[];
-    for (final a in appState.albums) {
-      final b = _uuidStringToBytes(a.id);
-      if (b != null) ids.add(b);
-    }
-    if (ids.isEmpty) return;
-    epochProcessor.catchUpAll(ids).then((_) {
-      // Newly installed MKs may make album titles decryptable now
-      appState.refreshAlbumNames();
-    }).catchError((_) {});
+    unawaited(_onReconnect(identityService, epochProcessor, appState));
   });
 
   runApp(
@@ -415,6 +403,31 @@ void main() async {
       child: KeepsyApp(mediaCacheManager: mediaCacheManager),
     ),
   );
+}
+
+// Settle SPK state before processing wraps, including for album-less accounts
+Future<void> _onReconnect(
+  IdentityService identity,
+  EpochProcessor epochProcessor,
+  AppState appState,
+) async {
+  try {
+    await identity.settleSpkState();
+  } catch (_) {/*diagnostics are logged inside */}
+
+  final ids = <Uint8List>[];
+  for (final a in appState.albums) {
+    final b = _uuidStringToBytes(a.id);
+    if (b != null) ids.add(b);
+  }
+  if (ids.isEmpty) return;
+  try {
+    // Per album resilient + idempotent : overlapping with landing_screen's
+    // cold start call is harmless, so both entry points keep their own
+    await epochProcessor.catchUpAll(ids);
+    // Newly installed MKs may make album titles decryptable now
+    appState.refreshAlbumNames();
+  } catch (_) {}
 }
 
 Future<void> _prewarmAlbumKeyStore(AlbumKeyStore aks) async {

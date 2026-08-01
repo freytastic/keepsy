@@ -136,6 +136,8 @@ func main() {
 	authed.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
 	authed.HandleFunc("/users/me", userHandler.UpdateMe).Methods(http.MethodPatch)
 	authed.HandleFunc("/users/me/keys", prekeyHandler.UpsertIdentity).Methods(http.MethodPut)
+	// Side-effect-free self key state for publication reconciliation
+	authed.HandleFunc("/users/me/keys", prekeyHandler.GetOwnKeys).Methods(http.MethodGet)
 	authed.HandleFunc("/users/me/spk", prekeyHandler.RotateSPK).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks", prekeyHandler.ReplenishOPKs).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks/count", prekeyHandler.GetOPKCount).Methods(http.MethodGet)

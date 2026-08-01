@@ -63,6 +63,13 @@ class _StubPrekeyApi implements PrekeyApi, MemberBundleFetcher {
 
   @override
   Future<int> opkCount() async => 20;
+
+  @override
+  Future<OwnKeys> fetchOwnKeys() async => OwnKeys(
+      ikPub: Uint8List(0),
+      lkPub: Uint8List(0),
+      spkPub: Uint8List(0),
+      spkTs: null);
   @override
   Future<void> replenishOpks(
           {required List<PrekeyOpk> opks,
@@ -137,7 +144,7 @@ Future<
       Uint8List ikPub,
       Uint8List lkPub
     })> _newCreatorStack() async {
-  final (svc: svc, store: store) = await newResponderIdentity();
+  final (svc: svc, store: store, api: _) = await newResponderIdentity();
   final aks = AlbumKeyStore(store);
   await aks.initialize();
   return (

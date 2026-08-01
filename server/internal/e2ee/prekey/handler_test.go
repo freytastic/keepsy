@@ -44,6 +44,7 @@ func (c *captureNotifier) EmitToUsers(_ context.Context, ids []uuid.UUID, typ st
 func newRouter(h *Handler) http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/users/me/keys", h.UpsertIdentity).Methods(http.MethodPut)
+	r.HandleFunc("/users/me/keys", h.GetOwnKeys).Methods(http.MethodGet)
 	r.HandleFunc("/users/me/spk", h.RotateSPK).Methods(http.MethodPost)
 	r.HandleFunc("/users/me/opks", h.ReplenishOPKs).Methods(http.MethodPost)
 	r.HandleFunc("/users/me/opks/count", h.GetOPKCount).Methods(http.MethodGet)
@@ -75,18 +76,14 @@ func authReq(method, path string, body []byte, userID uuid.UUID) *http.Request {
 	return req.WithContext(ctx)
 }
 
+// A repository identity conflict must surface as HTTP 409
 func TestUpsertIdentity_OneShot(t *testing.T) {
 	ikPub, priv, spk, _ := genIdentity(t, fixedTs)
 	sig := ed25519.Sign(priv, spkSelfMsg(spk, fixedTs))
 
 	store := &mockStore{
-		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
-			// already set => one shot rule must trip
-			return &Identity{IKPub: []byte(ikPub), SPKPub: spk}, nil
-		},
-		upsertIdentityFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error {
-			t.Fatal("UpsertIdentity must not be called when identity already set")
-			return nil
+		publishOrRefreshFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error {
+			return ErrIdentityConflict
 		},
 	}
 	svc := NewService(store)
@@ -111,6 +108,71 @@ func TestUpsertIdentity_OneShot(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&env)
 	if env.Code != "E_IDENTITY_ALREADY_SET" {
 		t.Fatalf("code = %q, want E_IDENTITY_ALREADY_SET", env.Code)
+	}
+}
+
+func TestGetOwnKeys_ReturnsPublishedStateWithoutPoppingOpk(t *testing.T) {
+	ikPub, _, spk, sig := genIdentity(t, fixedTs)
+	ts := int64(fixedTs)
+
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{IKPub: []byte(ikPub), LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: &ts}, nil
+		},
+		popRandomFn: func(_ context.Context, _ uuid.UUID) (*model.OneTimePrekey, error) {
+			t.Fatal("GetOwnKeys must not consume a one-time prekey")
+			return nil, nil
+		},
+	}
+	h := NewHandler(NewService(store), nil, nil, nil)
+
+	rec := httptest.NewRecorder()
+	newRouter(h).ServeHTTP(rec, authReq(http.MethodGet, "/users/me/keys", nil, uuid.New()))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got struct {
+		IKPub  string `json:"ik_pub"`
+		SPKPub string `json:"spk_pub"`
+		SPKTs  int64  `json:"spk_ts"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.IKPub != base64.StdEncoding.EncodeToString(ikPub) {
+		t.Error("ik_pub mismatch")
+	}
+	if got.SPKPub != base64.StdEncoding.EncodeToString(spk) {
+		t.Error("spk_pub mismatch")
+	}
+	if got.SPKTs != ts {
+		t.Errorf("spk_ts = %d, want %d", got.SPKTs, ts)
+	}
+}
+
+// An unpublished identity is valid self-key state
+func TestGetOwnKeys_UnpublishedReturnsEmpty(t *testing.T) {
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{}, nil
+		},
+	}
+	h := NewHandler(NewService(store), nil, nil, nil)
+
+	rec := httptest.NewRecorder()
+	newRouter(h).ServeHTTP(rec, authReq(http.MethodGet, "/users/me/keys", nil, uuid.New()))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&got)
+	if got["ik_pub"] != "" {
+		t.Errorf("ik_pub = %v, want empty", got["ik_pub"])
+	}
+	if _, ok := got["spk_ts"]; ok {
+		t.Error("spk_ts must be absent when never published")
 	}
 }
 
@@ -215,7 +277,7 @@ func TestPrekeyBundle_ConcurrentConsumesDistinctOPKs(t *testing.T) {
 
 	// Seed identity + 6 OPKs
 	ts := int64(time.Now().Unix())
-	if err := repo.UpsertIdentity(context.Background(), target,
+	if err := repo.PublishOrRefreshIdentity(context.Background(), target,
 		bytes.Repeat([]byte{0xAA}, 32), bytes.Repeat([]byte{0xBB}, 32),
 		bytes.Repeat([]byte{0xCC}, 32), bytes.Repeat([]byte{0xDD}, 64), ts); err != nil {
 		t.Fatalf("upsert: %v", err)

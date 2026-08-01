@@ -1,6 +1,7 @@
 package prekey
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/freytastic/keepsy/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,32 +51,66 @@ func (r *Repo) IdentityByID(ctx context.Context, userID uuid.UUID) (*Identity, e
 	return &id, nil
 }
 
-// UpsertIdentity writes the 5 E2EE columns. one shot enforcement (must be
-// unset) is the service's job : this just executes the UPDATE
-func (r *Repo) UpsertIdentity(ctx context.Context, userID uuid.UUID, ikPub, lkPub, spkPub, spkSig []byte, spkTs int64) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE users SET ik_pub=$1, lk_pub=$2, spk_pub=$3, spk_sig=$4, spk_ts=$5, updated_at=NOW() WHERE id=$6`,
+// ErrIdentityConflict means the account holds different public keys
+var ErrIdentityConflict = errors.New("prekey: identity already published with different keys")
+
+// PublishOrRefreshIdentity installs a new identity or accepts an identical
+// retry. Guarded updates prevent races with rotation; the CASE expressions keep
+// spk_sig and spk_ts paired without regressing the stored attestation
+func (r *Repo) PublishOrRefreshIdentity(ctx context.Context, userID uuid.UUID, ikPub, lkPub, spkPub, spkSig []byte, spkTs int64) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE users SET ik_pub=$1, lk_pub=$2, spk_pub=$3, spk_sig=$4, spk_ts=$5, updated_at=NOW()
+		 WHERE id=$6 AND ik_pub IS NULL`,
 		ikPub, lkPub, spkPub, spkSig, spkTs, userID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+
+	tag, err = r.db.Exec(ctx,
+		`UPDATE users SET
+		   spk_sig = CASE WHEN spk_ts IS NULL OR $5 > spk_ts THEN $4 ELSE spk_sig END,
+		   spk_ts  = CASE WHEN spk_ts IS NULL OR $5 > spk_ts THEN $5 ELSE spk_ts END,
+		   updated_at = NOW()
+		 WHERE id=$6 AND ik_pub=$1 AND lk_pub=$2 AND spk_pub=$3`,
+		ikPub, lkPub, spkPub, spkSig, spkTs, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	return ErrIdentityConflict
 }
 
-// SpkRotation captures the audit row written alongside an SPK update.
-// IP + User Agent intentionally absent : per audit M2 they built a long term
-// IP/device fingerprint per user with no offsetting product value
-type SpkRotation struct {
-	OldSpkTs *int64
-	NewSpkTs int64
-}
+// ErrTsNotMonotonic means spk_ts did not advance under the row lock
+var ErrTsNotMonotonic = errors.New("prekey: spk_ts not strictly greater than stored spk_ts")
 
-// RotateSPK updates users.spk_* and inserts one spk_rotations audit row in a
-// single txn so a failed audit cannot leave a rotated SPK without history
-func (r *Repo) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64, audit SpkRotation) error {
+// RotateSPK locks the current timestamp, updates the SPK, and records the audit
+// transition in one transaction so concurrent rotations remain ordered
+func (r *Repo) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	var oldTs *int64
+	if err := tx.QueryRow(ctx,
+		`SELECT spk_ts FROM users WHERE id=$1 FOR UPDATE`, userID,
+	).Scan(&oldTs); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return repository.ErrUserNotFound
+		}
+		return err
+	}
+	if oldTs != nil && spkTs <= *oldTs {
+		return ErrTsNotMonotonic
+	}
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE users SET spk_pub=$1, spk_sig=$2, spk_ts=$3, updated_at=NOW() WHERE id=$4`,
@@ -88,7 +122,7 @@ func (r *Repo) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig [
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO spk_rotations (user_id, old_spk_ts, new_spk_ts)
 		 VALUES ($1, $2, $3)`,
-		userID, audit.OldSpkTs, audit.NewSpkTs,
+		userID, oldTs, spkTs,
 	); err != nil {
 		return err
 	}
@@ -105,11 +139,11 @@ func (r *Repo) SpkRotationCount(ctx context.Context, userID uuid.UUID) (int, err
 	return n, err
 }
 
-// ErrOPKIndexTaken signals a unique violation on (user_id, opk_idx) during CreateBatchAtomic
+// ErrOPKIndexTaken means an index is already bound to a different key
 var ErrOPKIndexTaken = errors.New("prekey: opk_idx already taken")
 
-// CreateBatchAtomic inserts every OPK in one txn : any duplicate (user_id, opk_idx)
-// rolls the whole batch back and returns ErrOPKIndexTaken
+// CreateBatchAtomic accepts identical retries, including consumed rows, without
+// resurrecting them. A mismatched key rolls back the entire batch
 func (r *Repo) CreateBatchAtomic(ctx context.Context, opks []model.OneTimePrekey) error {
 	if len(opks) == 0 {
 		return nil
@@ -124,15 +158,26 @@ func (r *Repo) CreateBatchAtomic(ctx context.Context, opks []model.OneTimePrekey
 		if id == uuid.Nil {
 			id = uuid.New()
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO one_time_prekeys (id, user_id, opk_idx, key_pub) VALUES ($1, $2, $3, $4)`,
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO one_time_prekeys (id, user_id, opk_idx, key_pub) VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (user_id, opk_idx) DO NOTHING`,
 			id, o.UserID, o.OPKIdx, o.KeyPub,
-		); err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return ErrOPKIndexTaken
-			}
+		)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 1 {
+			continue
+		}
+		var existing []byte
+		if err := tx.QueryRow(ctx,
+			`SELECT key_pub FROM one_time_prekeys WHERE user_id=$1 AND opk_idx=$2`,
+			o.UserID, o.OPKIdx,
+		).Scan(&existing); err != nil {
+			return err
+		}
+		if !bytes.Equal(existing, o.KeyPub) {
+			return ErrOPKIndexTaken
 		}
 	}
 	return tx.Commit(ctx)

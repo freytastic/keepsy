@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:keepsy/secure_store/key_store_exceptions.dart';
 
 import 'album_keys.dart';
 import 'epoch_api.dart';
@@ -184,16 +185,31 @@ class EpochProcessor {
     final ok = await Sign.verify(pubs.ikPub, msg, envelope.senderSig);
     if (!ok) throw const WrapVerificationException('sig_invalid');
 
-    // Try the current SPK, then the previous one. A wrap a sender built against
-    // our SPK moments before we rotated only fails at the wrap AEAD tag (derive
-    // itself always yields some SK) : the previous SPK is retained one
-    // generation back for exactly this delayed-wrap race
+    // Try current -> pending -> previous -> archived. Pending covers an
+    // ambiguous rotation; previous and archived cover delayed wraps
     final aad = _aad(albumId, epoch);
-    Uint8List? mk = await _unwrapWithSpk(albumId, epoch, envelope, pubs, aad,
-        useSpkPrevious: false);
+    var vanished = false;
+    Future<Uint8List?> attempt(SpkSlot slot) async {
+      final r =
+          await _unwrapWithSpk(albumId, epoch, envelope, pubs, aad, slot: slot);
+      vanished = vanished || r.vanished;
+      return r.mk;
+    }
+
+    Uint8List? mk = await attempt(SpkSlot.current);
+    if (mk == null && _identity.hasPendingSpk) {
+      mk = await attempt(SpkSlot.pending);
+    }
     if (mk == null && _identity.hasPreviousSpk) {
-      mk = await _unwrapWithSpk(albumId, epoch, envelope, pubs, aad,
-          useSpkPrevious: true);
+      mk = await attempt(SpkSlot.previous);
+    }
+    // Archive fallback is bounded to one retained key
+    if (mk == null && _identity.hasArchivedSpk) {
+      mk = await attempt(SpkSlot.archived);
+    }
+    // Reconciliation may have promoted a vanished slot after current was tried
+    if (mk == null && vanished) {
+      mk = await attempt(SpkSlot.current);
     }
     if (mk == null) {
       throw const WrapVerificationException('aead_auth_failed');
@@ -211,32 +227,43 @@ class EpochProcessor {
     return envelope.ekPub;
   }
 
-  // Derives the SK under the selected SPK (current or previous) and unwraps the
-  // MK. Returns null when the wrap AEAD tag fails (wrong SPK : the caller then
-  // retries with the previous SPK). Zeroes the SK on every path
-  Future<Uint8List?> _unwrapWithSpk(
+  // Returns a null MK on authentication failure and marks slots that disappear
+  // during concurrent reconciliation. The derived secret is always zeroed
+  Future<({Uint8List? mk, bool vanished})> _unwrapWithSpk(
     Uint8List albumId,
     int epoch,
     WrapEnvelope envelope,
     MemberPubs pubs,
     Uint8List aad, {
-    required bool useSpkPrevious,
+    required SpkSlot slot,
   }) async {
     Uint8List? sk;
     try {
+      // A non current slot may disappear after its presence check
       sk = await X3dhSession.derive(
         identity: _identity,
         ekPub: envelope.ekPub,
         peerLkPub: pubs.lkPub,
         opkIdx: envelope.opkIdxUsed,
         albumId: albumId,
-        useSpkPrevious: useSpkPrevious,
+        spkSlot: slot,
       );
       try {
-        return await Aead.decrypt(wire: envelope.wrap, key: sk, aad: aad);
+        return (
+          mk: await Aead.decrypt(wire: envelope.wrap, key: sk, aad: aad),
+          vanished: false
+        );
       } on AeadAuthFailed {
-        return null;
+        return (mk: null, vanished: false);
       }
+    } on StateError {
+      // Reconciliation cleared the label
+      if (slot == SpkSlot.current) rethrow;
+      return (mk: null, vanished: true);
+    } on KeyNotFoundException {
+      // Reconciliation deleted the replaced handle
+      if (slot == SpkSlot.current) rethrow;
+      return (mk: null, vanished: true);
     } finally {
       if (sk != null) sk.fillRange(0, sk.length, 0);
     }

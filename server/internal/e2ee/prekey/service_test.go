@@ -16,8 +16,8 @@ import (
 // in the spirit of internal/handler/album_members_test.go::mockAlbumStore
 type mockStore struct {
 	identityByIDFn      func(ctx context.Context, userID uuid.UUID) (*Identity, error)
-	upsertIdentityFn    func(ctx context.Context, userID uuid.UUID, ik, lk, spk, sig []byte, ts int64) error
-	rotateSPKFn         func(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64, audit SpkRotation) error
+	publishOrRefreshFn  func(ctx context.Context, userID uuid.UUID, ik, lk, spk, sig []byte, ts int64) error
+	rotateSPKFn         func(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64) error
 	createBatchAtomicFn func(ctx context.Context, opks []model.OneTimePrekey) error
 	popRandomFn         func(ctx context.Context, userID uuid.UUID) (*model.OneTimePrekey, error)
 	countFn             func(ctx context.Context, userID uuid.UUID) (int, error)
@@ -26,11 +26,11 @@ type mockStore struct {
 func (m *mockStore) IdentityByID(ctx context.Context, userID uuid.UUID) (*Identity, error) {
 	return m.identityByIDFn(ctx, userID)
 }
-func (m *mockStore) UpsertIdentity(ctx context.Context, userID uuid.UUID, ik, lk, spk, sig []byte, ts int64) error {
-	return m.upsertIdentityFn(ctx, userID, ik, lk, spk, sig, ts)
+func (m *mockStore) PublishOrRefreshIdentity(ctx context.Context, userID uuid.UUID, ik, lk, spk, sig []byte, ts int64) error {
+	return m.publishOrRefreshFn(ctx, userID, ik, lk, spk, sig, ts)
 }
-func (m *mockStore) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64, audit SpkRotation) error {
-	return m.rotateSPKFn(ctx, userID, spkPub, spkSig, spkTs, audit)
+func (m *mockStore) RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64) error {
+	return m.rotateSPKFn(ctx, userID, spkPub, spkSig, spkTs)
 }
 func (m *mockStore) CreateBatchAtomic(ctx context.Context, opks []model.OneTimePrekey) error {
 	return m.createBatchAtomicFn(ctx, opks)
@@ -73,7 +73,10 @@ func TestUpsertIdentity_RejectsBadSig(t *testing.T) {
 		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
 			return &Identity{}, nil
 		},
-		upsertIdentityFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error { return nil },
+		publishOrRefreshFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error {
+			t.Fatal("publishOrRefreshFn must not be called when spk_sig is invalid")
+			return nil
+		},
 	}
 	svc := NewService(store)
 	svc.SetClock(fixedClock)
@@ -131,7 +134,7 @@ func TestRotateSPK_RequiresRotationSig(t *testing.T) {
 		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
 			return &Identity{IKPub: []byte(ikPub), SPKPub: spk, SPKTs: &cur}, nil
 		},
-		rotateSPKFn: func(_ context.Context, _ uuid.UUID, _, _ []byte, _ int64, _ SpkRotation) error {
+		rotateSPKFn: func(_ context.Context, _ uuid.UUID, _, _ []byte, _ int64) error {
 			t.Fatal("rotateSPKFn must not be called when rotation_sig is invalid")
 			return nil
 		},
@@ -148,21 +151,22 @@ func TestRotateSPK_RequiresRotationSig(t *testing.T) {
 	}
 }
 
-func TestRotateSPK_AuditRowWritten(t *testing.T) {
+// Repository integration tests cover the locked audit transition
+func TestRotateSPK_ReachesRepoAfterVerification(t *testing.T) {
 	ikPub, priv, spk, _ := genIdentity(t, fixedTs)
 	cur := int64(fixedTs - 60)
 	sig := ed25519.Sign(priv, spkSelfMsg(spk, fixedTs))
 	rsig := ed25519.Sign(priv, RotationMsg(spk, fixedTs))
 
-	var got SpkRotation
+	var gotTs int64
 	called := false
 	store := &mockStore{
 		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
 			return &Identity{IKPub: []byte(ikPub), SPKPub: spk, SPKTs: &cur}, nil
 		},
-		rotateSPKFn: func(_ context.Context, _ uuid.UUID, _, _ []byte, _ int64, audit SpkRotation) error {
+		rotateSPKFn: func(_ context.Context, _ uuid.UUID, _, _ []byte, ts int64) error {
 			called = true
-			got = audit
+			gotTs = ts
 			return nil
 		},
 	}
@@ -178,11 +182,74 @@ func TestRotateSPK_AuditRowWritten(t *testing.T) {
 	if !called {
 		t.Fatal("repo.RotateSPK was not called")
 	}
-	if got.NewSpkTs != fixedTs {
-		t.Errorf("NewSpkTs = %d, want %d", got.NewSpkTs, fixedTs)
+	if gotTs != fixedTs {
+		t.Errorf("ts = %d, want %d", gotTs, fixedTs)
 	}
-	if got.OldSpkTs == nil || *got.OldSpkTs != cur {
-		t.Errorf("OldSpkTs = %v, want %d", got.OldSpkTs, cur)
+}
+
+// Only genuine key mismatches map to E_IDENTITY_ALREADY_SET
+func TestUpsertIdentity_ResendAcceptedByRepoSucceeds(t *testing.T) {
+	ikPub, priv, spk, _ := genIdentity(t, fixedTs)
+	sig := ed25519.Sign(priv, spkSelfMsg(spk, fixedTs))
+
+	store := &mockStore{
+		publishOrRefreshFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error {
+			return nil
+		},
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+
+	if err := svc.UpsertIdentity(context.Background(), uuid.New(), UpsertIdentityInput{
+		IKPub: ikPub, LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: fixedTs,
+	}); err != nil {
+		t.Fatalf("resend must succeed, got %v", err)
+	}
+}
+
+func TestUpsertIdentity_KeyMismatchMapsToAlreadySet(t *testing.T) {
+	ikPub, priv, spk, _ := genIdentity(t, fixedTs)
+	sig := ed25519.Sign(priv, spkSelfMsg(spk, fixedTs))
+
+	store := &mockStore{
+		publishOrRefreshFn: func(_ context.Context, _ uuid.UUID, _, _, _, _ []byte, _ int64) error {
+			return ErrIdentityConflict
+		},
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+
+	err := svc.UpsertIdentity(context.Background(), uuid.New(), UpsertIdentityInput{
+		IKPub: ikPub, LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: fixedTs,
+	})
+	if !apierr.IsCode(err, "E_IDENTITY_ALREADY_SET") {
+		t.Fatalf("err = %v, want E_IDENTITY_ALREADY_SET", err)
+	}
+}
+
+// A repository monotonicity failure must retain its API error code
+func TestRotateSPK_RepoMonotonicRejectionMapsToApiErr(t *testing.T) {
+	ikPub, priv, spk, _ := genIdentity(t, fixedTs)
+	cur := int64(fixedTs - 60)
+	sig := ed25519.Sign(priv, spkSelfMsg(spk, fixedTs))
+	rsig := ed25519.Sign(priv, RotationMsg(spk, fixedTs))
+
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{IKPub: []byte(ikPub), SPKPub: spk, SPKTs: &cur}, nil
+		},
+		rotateSPKFn: func(_ context.Context, _ uuid.UUID, _, _ []byte, _ int64) error {
+			return ErrTsNotMonotonic
+		},
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+
+	err := svc.RotateSPK(context.Background(), uuid.New(), RotateSPKInput{
+		SPKPub: spk, SPKSig: sig, SPKTs: fixedTs, RotationSig: rsig,
+	})
+	if !apierr.IsCode(err, "E_TS_NOT_MONOTONIC") {
+		t.Fatalf("err = %v, want E_TS_NOT_MONOTONIC", err)
 	}
 }
 

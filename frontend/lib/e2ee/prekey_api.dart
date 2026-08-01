@@ -14,6 +14,33 @@ class PrekeyOpk {
   const PrekeyOpk({required this.idx, required this.keyPub});
 }
 
+// Server held key state used only to reconcile ambiguous publications. Local
+// private keys remain the authority for identity decisions
+class OwnKeys {
+  final Uint8List ikPub;
+  final Uint8List lkPub;
+  final Uint8List spkPub;
+  final int? spkTs;
+  const OwnKeys({
+    required this.ikPub,
+    required this.lkPub,
+    required this.spkPub,
+    required this.spkTs,
+  });
+
+  factory OwnKeys.fromJson(Map<String, dynamic> json) {
+    Uint8List dec(String? s) =>
+        s == null || s.isEmpty ? Uint8List(0) : base64Decode(s);
+    final ts = json['spk_ts'];
+    return OwnKeys(
+      ikPub: dec(json['ik_pub'] as String?),
+      lkPub: dec(json['lk_pub'] as String?),
+      spkPub: dec(json['spk_pub'] as String?),
+      spkTs: ts is num ? ts.toInt() : null,
+    );
+  }
+}
+
 // Surfaced when a prekey/SPK/OPK endpoint returns a structured server error
 // Translated from the data layer ApiError by the PrekeyJsonClient adapter so
 // e2ee/ never has to import package:keepsy/data/
@@ -61,6 +88,9 @@ abstract class PrekeyApi {
   });
 
   Future<int> opkCount();
+
+  // Side-effect-free self-read; unlike bundle fetches, it pops no OPK
+  Future<OwnKeys> fetchOwnKeys();
 
   // GET /users/{id}/prekey-bundle. Returns the raw bytes-in/bytes-out value
   // type : caller MUST gate on PrekeyBundle.verify() before X3dhSession.initiate
@@ -179,6 +209,12 @@ class HttpPrekeyApi implements PrekeyApi, MemberBundleFetcher {
   Future<int> opkCount() async {
     final body = await _client.getJson('/users/me/opks/count');
     return body['count'] as int;
+  }
+
+  @override
+  Future<OwnKeys> fetchOwnKeys() async {
+    final body = await _client.getJson('/users/me/keys');
+    return OwnKeys.fromJson(body);
   }
 
   @override
