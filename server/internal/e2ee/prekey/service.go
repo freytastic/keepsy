@@ -28,8 +28,8 @@ const opkLowThreshold = 5
 // tests substitute a mock to exercise pure validation paths
 type store interface {
 	IdentityByID(ctx context.Context, userID uuid.UUID) (*Identity, error)
-	UpsertIdentity(ctx context.Context, userID uuid.UUID, ikPub, lkPub, spkPub, spkSig []byte, spkTs int64) error
-	RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64, audit SpkRotation) error
+	PublishOrRefreshIdentity(ctx context.Context, userID uuid.UUID, ikPub, lkPub, spkPub, spkSig []byte, spkTs int64) error
+	RotateSPK(ctx context.Context, userID uuid.UUID, spkPub, spkSig []byte, spkTs int64) error
 	CreateBatchAtomic(ctx context.Context, opks []model.OneTimePrekey) error
 	PopRandom(ctx context.Context, userID uuid.UUID) (*model.OneTimePrekey, error)
 	Count(ctx context.Context, userID uuid.UUID) (int, error)
@@ -76,14 +76,12 @@ func (s *Service) UpsertIdentity(ctx context.Context, userID uuid.UUID, in Upser
 	if err := crypto.VerifyEd25519(ed25519.PublicKey(in.IKPub), msg, in.SPKSig); err != nil {
 		return apierr.SigInvalid("spk_sig verification failed").WithCause(err)
 	}
-	cur, err := s.repo.IdentityByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if len(cur.IKPub) != 0 {
+	// The repository atomically distinguishes identical retries from conflicts
+	err := s.repo.PublishOrRefreshIdentity(ctx, userID, in.IKPub, in.LKPub, in.SPKPub, in.SPKSig, in.SPKTs)
+	if errors.Is(err, ErrIdentityConflict) {
 		return apierr.IdentityAlreadySet("identity already published; rotate via POST /users/me/spk")
 	}
-	return s.repo.UpsertIdentity(ctx, userID, in.IKPub, in.LKPub, in.SPKPub, in.SPKSig, in.SPKTs)
+	return err
 }
 
 // RotateSPKInput carries the decoded body of POST /users/me/spk
@@ -123,13 +121,20 @@ func (s *Service) RotateSPK(ctx context.Context, userID uuid.UUID, in RotateSPKI
 	if err := crypto.VerifyEd25519(ikPub, RotationMsg(in.SPKPub, in.SPKTs), in.RotationSig); err != nil {
 		return apierr.SigInvalid("rotation_sig verification failed").WithCause(err)
 	}
+	// Fast fail; the repository repeats this check under the row lock
 	if cur.SPKTs != nil && in.SPKTs <= *cur.SPKTs {
 		return apierr.TsNotMonotonic("spk_ts must be strictly greater than current spk_ts")
 	}
-	return s.repo.RotateSPK(ctx, userID, in.SPKPub, in.SPKSig, in.SPKTs, SpkRotation{
-		OldSpkTs: cur.SPKTs,
-		NewSpkTs: in.SPKTs,
-	})
+	err = s.repo.RotateSPK(ctx, userID, in.SPKPub, in.SPKSig, in.SPKTs)
+	if errors.Is(err, ErrTsNotMonotonic) {
+		return apierr.TsNotMonotonic("spk_ts must be strictly greater than current spk_ts")
+	}
+	return err
+}
+
+// OwnKeys returns side-effect-free self key state for reconciliation
+func (s *Service) OwnKeys(ctx context.Context, userID uuid.UUID) (*Identity, error) {
+	return s.repo.IdentityByID(ctx, userID)
 }
 
 // OPKUpload mirrors one entry in the POST /users/me/opks request body

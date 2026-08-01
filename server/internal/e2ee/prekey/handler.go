@@ -99,6 +99,34 @@ func (h *Handler) UpsertIdentity(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetOwnKeys returns the caller's key state without consuming an OPK
+// An unpublished identity is represented by empty key fields
+func (h *Handler) GetOwnKeys(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.MustGetUserID(w, r)
+	if !ok {
+		return
+	}
+	id, err := h.svc.OwnKeys(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			apierr.Write(w, r, apierr.NotFound("user not found"))
+			return
+		}
+		apierr.Write(w, r, err)
+		return
+	}
+	out := map[string]any{
+		"ik_pub":  base64.StdEncoding.EncodeToString(id.IKPub),
+		"lk_pub":  base64.StdEncoding.EncodeToString(id.LKPub),
+		"spk_pub": base64.StdEncoding.EncodeToString(id.SPKPub),
+	}
+	if id.SPKTs != nil {
+		out["spk_ts"] = *id.SPKTs
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 type rotateSPKReq struct {
 	SPKPub      string `json:"spk_pub"`
 	SPKSig      string `json:"spk_sig"`
