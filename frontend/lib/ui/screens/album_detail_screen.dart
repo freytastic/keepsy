@@ -15,6 +15,7 @@ import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/crypto/uuid_bytes.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/invite.dart';
@@ -144,8 +145,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
-  // memberToken -> TOFU state . Advisory only : a changed key is shown
-  // loudly but never blocks uploads, fetches or the X3DH path
+  // memberToken -> roster trust shown by chips and the key change banner
+  // Epoch signing authority and install blocks are tracked separately
   Map<String, TrustState> _trust = {};
 
   IdentityTrust? _trustSvc() {
@@ -214,17 +215,70 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         state: state,
         dark: app.isDark,
         accent: app.accent,
-        // both actions verify/accept the key the user was ACTUALLY SHOWN, not
-        // whatever the roster happens to say by the time they tap
+        // verifies the key the user was ACTUALLY SHOWN, not whatever the
+        // roster happens to say by the time they tap
         onVerify: () async {
           await trust.markVerified(
               albumId: albumIdBytes, memberToken: m.memberToken, peerIkPub: ik);
           await _reconcileTrust(_members);
         },
-        onAccept: () async {
-          await trust.acceptChange(
-              albumId: albumIdBytes, memberToken: m.memberToken, peerIkPub: ik);
-          await _reconcileTrust(_members);
+      ),
+    );
+  }
+
+  // Manually re run contiguous catch up. Reconnects may retry it too: any
+  // unresolved failure simply emits a fresh block
+  Future<void> _retryKeySync() async {
+    final albumIdBytes = uuidToBytes(widget.album.id);
+    if (albumIdBytes == null) return;
+    EpochProcessor proc;
+    try {
+      proc = context.read<EpochProcessor>();
+    } catch (_) {
+      return; // widget tests that dont install the provider
+    }
+    await proc.catchUpAll([albumIdBytes]);
+  }
+
+  // Shows the digits for the key EXACTLY as it was presented during the failed
+  // install. Re reading it from the roster would let a server sign with one key
+  // and show an honest one here, so the human would be comparing the wrong thing
+  Future<void> _verifyBlockingSigner(EpochBlocked block) async {
+    final trust = _trustSvc();
+    final albumIdBytes = uuidToBytes(widget.album.id);
+    final ik = block.presentedIk;
+    final token = block.senderToken;
+    if (trust == null || albumIdBytes == null || ik == null || token == null) {
+      return;
+    }
+    final tokenB64 = base64.encode(token);
+    final name = _members
+        .where((m) => m.memberToken == tokenB64)
+        .map(_memberName)
+        .firstOrNull;
+    final digits =
+        await trust.safetyNumber(albumId: albumIdBytes, peerIkPub: ik);
+    if (!mounted) return;
+
+    final app = context.read<AppState>();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: K.bg(app.isDark),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => SafetyNumberSheet(
+        displayName: name ?? 'this member',
+        digits: digits,
+        state: TrustState.changed,
+        dark: app.isDark,
+        accent: app.accent,
+        onVerify: () async {
+          await trust.markVerified(
+              albumId: albumIdBytes, memberToken: tokenB64, peerIkPub: ik);
+          // Verifying only AUTHORIZES the retry : the block lifts when the
+          // install actually succeeds
+          await _retryKeySync();
         },
       ),
     );
@@ -550,6 +604,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final dark = state.isDark;
     final accent = state.accent;
     final syncing = state.isSyncing(widget.album.id);
+    // A block survives failed sync attempts and disables uploads until a
+    // successful catch up reaches the refused epoch
+    final keyBlock = state.keyBlockFor(widget.album.id);
 
     // Only surface a resolved name whose fingerprint still matches the member's
     // current name_ct : a renamed member falls back to "Member" until re resolved
@@ -593,7 +650,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: (syncing || _uploading) ? null : _pickAndUpload,
+        onPressed:
+            (syncing || _uploading || keyBlock != null) ? null : _pickAndUpload,
         backgroundColor: accent,
         child: _uploading
             ? const SizedBox(
@@ -617,6 +675,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               // admins can long press another (non-revoked) member to remove
               onRemove: _viewerIsAdmin ? _kick : null,
               myToken: widget.album.memberToken),
+          if (keyBlock != null)
+            _KeyBlockBanner(
+              dark: dark,
+              block: keyBlock,
+              onVerify: () => _verifyBlockingSigner(keyBlock),
+              onRetry: _retryKeySync,
+            ),
           if (_changedKeyMembers.isNotEmpty)
             _KeyChangeBanner(
               dark: dark,
@@ -944,6 +1009,97 @@ class _KeyChangeBanner extends StatelessWidget {
             Icon(Icons.chevron_right, size: 16, color: K.t3(dark)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// Persistent key sync failure. It remains visible until a background or manual
+// catch up reaches the blocked epoch
+class _KeyBlockBanner extends StatelessWidget {
+  final bool dark;
+  final EpochBlocked block;
+  final VoidCallback onVerify;
+  final VoidCallback onRetry;
+
+  const _KeyBlockBanner({
+    required this.dark,
+    required this.block,
+    required this.onVerify,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const red = Color(0xFFF87171);
+    // Only a PEER's key can be settled by a human comparison. Our own key needs
+    // no confirming, and the rest have nothing to compare against
+    final verifiable = block.reason == EpochBlockReason.signerMismatch ||
+        block.reason == EpochBlockReason.unknownSigner;
+    final text = switch (block.reason) {
+      EpochBlockReason.signerMismatch =>
+        'New photos are paused. The key that signed this album’s latest '
+            'encryption update is not the one we trust for that member.',
+      EpochBlockReason.unknownSigner =>
+        'New photos are paused. This album’s latest encryption update was '
+            'signed by someone this device has no identity for.',
+      EpochBlockReason.selfSignerMismatch =>
+        'New photos are paused. The server described this device’s own '
+            'identity key incorrectly.',
+      EpochBlockReason.wrapUnavailable =>
+        'New photos are paused. An encryption update for this album could not '
+            'be downloaded, and later ones cannot be applied without it.',
+      EpochBlockReason.verificationFailed =>
+        'New photos are paused. An encryption update for this album failed its '
+            'integrity check.',
+      EpochBlockReason.localKeyMissing =>
+        'New photos are paused. A one time key this album’s encryption update '
+            'was addressed to is no longer on this device.',
+      EpochBlockReason.replayRejected =>
+        'New photos are paused. An encryption update for this album was '
+            'refused as a replay of one already installed.',
+    };
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: red.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.gpp_maybe_outlined, size: 16, color: red),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style:
+                      TextStyle(color: K.t1(dark), fontSize: 12, height: 1.35),
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: verifiable
+                ? TextButton(
+                    onPressed: onVerify,
+                    child: const Text('Verify safety number',
+                        style: TextStyle(fontSize: 12)),
+                  )
+                : TextButton(
+                    onPressed: onRetry,
+                    child: const Text('Retry encryption sync',
+                        style: TextStyle(fontSize: 12)),
+                  ),
+          ),
+        ],
       ),
     );
   }

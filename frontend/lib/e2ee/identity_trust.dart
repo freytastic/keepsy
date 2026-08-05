@@ -4,18 +4,16 @@ import 'package:keepsy/crypto/safety_numbers.dart';
 import 'package:keepsy/data/storage/identity_pin_store.dart';
 import 'package:keepsy/e2ee/identity.dart';
 
-// TOFU trust over the album roster. Fully local + advisory : nothing here
-// gates X3DH, uploads or fetches. A false positive (a fren reinstalled) must
-// never lock a user out of their own album, and a real substitution is still
-// VISIBLE, which is the whole point of a safety number
+// Local TOFU state for the roster UI. Roster pins detect key changes but do not
+// authorize epoch signers: only markVerified writes both trust layers
 enum TrustState {
   // seen, pinned, never compared out of band. NOT a claim of safety : a MITM
   // present at the very first sight is exactly what TOFU cannot rule out
   unverified,
   // the digits were read back to us by the human, and the key hasnt moved since
   verified,
-  // the SAME member token is being presented with a DIFFERENT ik_pub. Either
-  // they re installed, or the server is lying to us
+  // the same stable member token is being presented with a different ik_pub
+  // Account IKs are immutable for now, so this requires out-of-band checking
   changed,
 }
 
@@ -39,8 +37,8 @@ class IdentityTrust {
       : _identity = identity,
         _pins = pins;
 
-  // Pins anyone we havent seen before, then classifies. A changed key is NOT
-  // re pinned here : moving the pin is the user's call (markVerified/acceptChange)
+  // Establishes first sight roster pins for display and change detection. It
+  // never moves an existing pin or grants epoch signing authority
 
   // myMemberToken identifies OUR row. It must be the token we hold locally and
   // NEVER an ik_pub comparison : a server that could get us to skip a row by
@@ -90,18 +88,19 @@ class IdentityTrust {
         ikPubA: myIk, ikPubB: peerIkPub, albumId: albumId);
   }
 
-  // Verifies the key the user was ACTUALLY SHOWN, not whatever the roster says
-  // by the time they tap. Verifying a key necessarily pins it : the human read
-  // back these exact digits, so this IS the key now. Without the re pin, a user
-  // resolving a 'changed' alarm would verify the new key and still be screamed
-  // at, because the stale pin would keep winning the comparison
+  // Verify the exact displayed key, then update both its roster pin and signer
+  // binding. Moving the roster pin clears any prior changed key state
   Future<void> markVerified({
     required Uint8List albumId,
     required String memberToken,
     required Uint8List peerIkPub,
   }) async {
     final myIk = await _identity.currentIkPub();
-    _pins.pin(hexAlbumId(albumId), memberToken, peerIkPub);
+    final album = hexAlbumId(albumId);
+    _pins.pin(album, memberToken, peerIkPub);
+    // Outside first join signer adoption, only out-of-band confirmation may
+    // grant or move epoch signing authority
+    _pins.pinSigner(album, memberToken, peerIkPub);
     _pins.markVerified(myIkPub: myIk, peerIkPub: peerIkPub);
     await _pins.flush();
   }
@@ -111,19 +110,10 @@ class IdentityTrust {
     return _pins.verifiedAt(myIkPub: myIk, peerIkPub: peerIkPub);
   }
 
-  // "yes, that really was them re installing". Moves the pin onto the new key
-  // WITHOUT inheriting the old key's verification : the new key was never
-  // compared out of band
-  Future<void> acceptChange({
-    required Uint8List albumId,
-    required String memberToken,
-    required Uint8List peerIkPub,
-  }) async {
-    _pins.pin(hexAlbumId(albumId), memberToken, peerIkPub);
-    await _pins.flush();
-  }
+  // There is no accept without comparing path: markVerified also grants signer
+  // authority, so a one tap override would bypass the out-of-band check
 
-  // Revoke / leave / delete : the roster is gone, so the pins are unrefreshable
+  // Drop album scoped trust state: global verification claims remain
   Future<void> forgetAlbum(Uint8List albumId) =>
       _pins.clearAlbum(hexAlbumId(albumId));
 

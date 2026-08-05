@@ -10,7 +10,6 @@ Future<void> _pump(
   WidgetTester tester, {
   required TrustState state,
   VoidCallback? onVerify,
-  VoidCallback? onAccept,
 }) {
   return tester.pumpWidget(MaterialApp(
     home: Scaffold(
@@ -21,7 +20,6 @@ Future<void> _pump(
         dark: true,
         accent: Colors.teal,
         onVerify: onVerify ?? () {},
-        onAccept: onAccept ?? () {},
       ),
     ),
   ));
@@ -55,15 +53,46 @@ void main() {
     expect(texts, isNot(contains('is verified')));
   });
 
-  testWidgets('tapping Mark as verified fires onVerify', (tester) async {
+  // Verification has no undo, is not album scoped, and may unblock key installs
+  // A reflex tap while viewing substituted digits must not grant it
+  testWidgets('Mark as verified asks the user to confirm the digits matched',
+      (tester) async {
     var verified = false;
     await _pump(tester,
         state: TrustState.unverified, onVerify: () => verified = true);
 
     await tester.tap(find.textContaining('Mark as verified'));
-    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(verified, isFalse, reason: 'one tap must not be enough');
+    expect(find.textContaining('match exactly'), findsOneWidget);
+  });
+
+  testWidgets('confirming the prompt fires onVerify', (tester) async {
+    var verified = false;
+    await _pump(tester,
+        state: TrustState.unverified, onVerify: () => verified = true);
+
+    await tester.tap(find.textContaining('Mark as verified'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('They matched'));
+    await tester.pumpAndSettle();
 
     expect(verified, isTrue);
+  });
+
+  testWidgets('dismissing the prompt leaves the key unverified',
+      (tester) async {
+    var verified = false;
+    await _pump(tester,
+        state: TrustState.unverified, onVerify: () => verified = true);
+
+    await tester.tap(find.textContaining('Mark as verified'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("They didn't"));
+    await tester.pumpAndSettle();
+
+    expect(verified, isFalse);
   });
 
   testWidgets('verified shows the confirmed state and no verify button',
@@ -74,17 +103,16 @@ void main() {
     expect(find.textContaining('Mark as verified'), findsNothing);
   });
 
-  testWidgets('changed leads with a warning and offers verify or accept',
+  // The old accept button moved trust without comparing digits. Now that
+  // verification also grants signer authority, that shortcut would bypass the
+  // out-of-band check and still serves no valid beta workflow
+  testWidgets('a changed key cannot be accepted without comparing digits',
       (tester) async {
-    var accepted = false;
-    await _pump(tester,
-        state: TrustState.changed, onAccept: () => accepted = true);
+    await _pump(tester, state: TrustState.changed);
 
     expect(find.textContaining('security key changed'), findsOneWidget);
     expect(find.textContaining('Mark as verified'), findsOneWidget);
-
-    await tester.tap(find.textContaining("It's them"));
-    await tester.pump();
-    expect(accepted, isTrue);
+    expect(find.textContaining("It's them"), findsNothing);
+    expect(find.textContaining('new phone'), findsNothing);
   });
 }

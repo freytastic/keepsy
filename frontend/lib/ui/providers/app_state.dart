@@ -5,6 +5,7 @@ import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
 // Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
@@ -70,6 +71,8 @@ class AppState extends ChangeNotifier {
     _albumNames.clear();
     _localNameCt.clear();
     _syncing.clear();
+    _keyBlocks.clear();
+    _selfTokens.clear();
     _lastRemovedAlbumId = null;
     _hasUnreadNotifications = false;
     // realtime one-shot signals
@@ -142,6 +145,10 @@ class AppState extends ChangeNotifier {
     // Overlay any locally authored nameCt so a stale GET placeholder can't
     // regress a title we just PATCHed (create/rename)
     _albums = newAlbums.map(_overlayLocalNameCt).toList();
+    for (final a in _albums) {
+      final t = a.memberToken;
+      if (t != null) _selfTokens[a.id] = t;
+    }
     // A re invited album reappearing clears the stale "was removed" signal so an
     // AlbumDetailScreen opened for it doesnt trip the kicked-while-viewing exit
     if (_lastRemovedAlbumId != null &&
@@ -161,6 +168,8 @@ class AppState extends ChangeNotifier {
     if (_lastRemovedAlbumId == a.id) _lastRemovedAlbumId = null;
     if (_albums.any((x) => x.id == a.id)) return;
     final overlaid = _overlayLocalNameCt(a);
+    final t = overlaid.memberToken;
+    if (t != null) _selfTokens[overlaid.id] = t;
     _albums = [overlaid, ..._albums];
     notifyListeners();
     unawaited(_resolveName(overlaid));
@@ -177,6 +186,8 @@ class AppState extends ChangeNotifier {
     _albums = _albums.where((x) => x.id != albumIdStr).toList();
     _albumNames.remove(albumIdStr);
     _localNameCt.remove(albumIdStr);
+    _keyBlocks.remove(albumIdStr);
+    _selfTokens.remove(albumIdStr);
     _lastRemovedAlbumId = albumIdStr;
     notifyListeners();
   }
@@ -220,6 +231,39 @@ class AppState extends ChangeNotifier {
   void notifyMemberChanged(String albumId) {
     _lastMemberChangedAlbumId = albumId;
     _memberChangeTick++;
+    notifyListeners();
+  }
+
+  // albumId -> MY member_token there. Kept separately from _albums bcs the
+  // signer gate needs it the moment an album exists : the creator's own epoch 0
+  // rotation fans back to them, and that can land before the album list has
+  // refreshed. Without it their own wrap takes the peer path and is refused
+  final Map<String, String> _selfTokens = {};
+  String? selfMemberToken(String albumId) => _selfTokens[albumId];
+
+  void registerSelfToken(String albumId, String memberTokenB64) {
+    _selfTokens[albumId] = memberTokenB64;
+  }
+
+  // Durable per album key sync failures. Unlike in-flight _syncing state, a
+  // block persists until a manual or background catch up reaches its epoch
+  final Map<String, EpochBlocked> _keyBlocks = {};
+  EpochBlocked? keyBlockFor(String albumId) => _keyBlocks[albumId];
+
+  void setKeyBlock(String albumId, EpochBlocked block) {
+    _keyBlocks[albumId] = block;
+    notifyListeners();
+  }
+
+  // reachedEpoch is what the sync actually caught up TO. A delayed duplicate
+  // event for an older epoch completes trivially (everything below it is
+  // already installed) and would otherwise clear a block raised by a newer one
+  // No ops silently: this fires after every successful sync, so the
+  // overwhelmingly common call has nothing to announce
+  void clearKeyBlock(String albumId, int reachedEpoch) {
+    final block = _keyBlocks[albumId];
+    if (block == null || reachedEpoch < block.epoch) return;
+    _keyBlocks.remove(albumId);
     notifyListeners();
   }
 

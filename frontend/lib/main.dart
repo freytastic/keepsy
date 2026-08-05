@@ -131,16 +131,7 @@ void main() async {
   });
   final epochApi = HttpEpochApi(data_epoch.ApiClientEpochJsonClient(apiClient));
   final inviteApi = HttpInviteApi(ApiClientInviteJsonClient(apiClient));
-  final epochProcessor = EpochProcessor(
-    api: epochApi,
-    identity: identityService,
-    store: albumKeyStore,
-    directory: memberDirectory,
-    invites: inviteApi, // §6.3 : backfill posts the join_complete receipt
-  );
-  // EpochRotator : initiator side of an epoch transition. Used rn for the
-  // §5 bootstrap (epoch 0 on album create) : §6 invites + §7 removals will
-  // reuse the same machinery
+  // Initiates epoch 0 during album creation and rotations after member removal
   final epochRotator = EpochRotator(
     epochs: epochApi,
     prekeys: prekeyApi,
@@ -181,11 +172,18 @@ void main() async {
     }
     return resolveAlbumName(albumKeyStore, b, nameCt);
   });
-  // TOFU pins + verifications (sealed under cache_root_key). NOT wiped on
-  // logout : a store that reset on logout would let a hostile server wait for
-  // one, then present a substituted ik_pub as an innocent first sight
+  // Roster pins, verification claims, signer bindings, and creator markers are
+  // sealed under cache_root_key and survive normal logout
   final identityPinStore =
       await IdentityPinStore.open(cacheRootKey: cacheRootKey);
+  // Remove creator markers left by a crash after epoch 0 installed. The gate
+  // already ignores them once local keys exist, but they need not persist.
+  for (final albumIdStr in identityPinStore.creatingAlbums) {
+    final b = _uuidStringToBytes(albumIdStr);
+    if (b == null || await albumKeyStore.latestEpoch(b) >= 0) {
+      await identityPinStore.clearCreating(albumIdStr);
+    }
+  }
   final identityTrust =
       IdentityTrust(identity: identityService, pins: identityPinStore);
   // look up an invitee by keepsy_id + ship all historical MKs. The pinner
@@ -224,21 +222,53 @@ void main() async {
   // other token -> its TOFU pin. A missing pin throws MissingIdentityPinException
   // and the rotation fails closed rather than wrap the new MK to a server
   // substituted bundle (finding #1, in the most sensitive flow)
-  final expectedIkResolver = ExpectedIkResolver(
+  final expectedIkResolver = ExpectedIkResolver.responder(
     selfToken: (albumId) {
-      final albumStr = _uuidStringFromBytes(albumId);
-      for (final a in appState.albums) {
-        if (a.id == albumStr) {
-          final t = a.memberToken;
-          return t == null ? null : base64.decode(base64.normalize(t));
-        }
-      }
-      return null;
+      final t = appState.selfMemberToken(_uuidStringFromBytes(albumId));
+      return t == null ? null : base64.decode(base64.normalize(t));
     },
+    // Roster identity : what a removal rotation wraps each remaining member's
+    // MK to (call()). Every active member has one
     pinned: (albumId, token) =>
         identityPinStore.pinnedIk(hexAlbumId(albumId), base64.encode(token)),
+    // Signing authority (check()/adopt()) : a strictly smaller set. Opening the
+    // member list TOFU pins every unseen row, so reading the roster pin here
+    // would let a server invented member grant itself the right to sign epochs
+    // just by being displayed once
+    signerPinned: (albumId, token) =>
+        identityPinStore.signerIk(hexAlbumId(albumId), base64.encode(token)),
     currentIk: identityService.currentIkPub,
+    // Only this device may sign until the album we just created installs its
+    // epoch 0 : nobody else can have signed for an album that never had one
+    soleSigner: (albumId) =>
+        identityPinStore.isCreating(_uuidStringFromBytes(albumId)),
+    // Responder side (check/adopt) addition : commits a first sight baseline
+    // once the signature has proven the key, and is the only write the gate
+    // makes. Moving an existing binding is markVerified's job
+    pin: (albumId, token, ik) async {
+      identityPinStore.pinSigner(hexAlbumId(albumId), base64.encode(token), ik);
+      await identityPinStore.flush();
+    },
   );
+  // Verifies each epoch wrap against an IK bound locally to the sender's
+  // member_token instead of the roster the server just handed us : without it
+  // the server supplies both the wrap and the key that checks it
+  final epochProcessor = EpochProcessor(
+    api: epochApi,
+    identity: identityService,
+    store: albumKeyStore,
+    directory: memberDirectory,
+    signerGate: expectedIkResolver,
+    invites: inviteApi, // backfill posts the join_complete receipt
+  );
+  // Key sync health : both dispatch paths below swallow throws, so these are
+  // the only way a stalled album ever reaches the user
+  epochProcessor.blocked.listen((b) {
+    appState.setKeyBlock(_uuidStringFromBytes(b.albumId), b);
+  });
+  epochProcessor.unblocked.listen((e) {
+    appState.clearKeyBlock(_uuidStringFromBytes(e.albumId), e.epoch);
+  });
   final memberRemoval = MemberRemovalCoordinator(
     revoke: (albumId, token) => albumService.removeMember(
         _uuidStringFromBytes(albumId), base64.encode(token)),
@@ -283,11 +313,8 @@ void main() async {
     memberRemoval.onSelfRemoved(albumId).catchError((_) {});
   };
 
-  // WS dispatcher: e2ee.opk_low → replenishOpks (service level mutex
-  // collapses bursts), e2ee.epoch_changed → EpochProcessor.handleEvent
-  // (per album mutex serialises events). OpkNotFoundException + verification
-  // failures are logged + swallowed at the dispatch boundary so the listener
-  // chain doesnt die on a single bad event
+  // WS dispatcher. Epoch failures are surfaced through EpochProcessor.blocked
+  // and swallowed here so one bad event cannot terminate the listener
   realtimeService.stream.listen((ev) {
     if (ev.type == 'e2ee.opk_low') {
       identityService.replenishOpks();
@@ -396,6 +423,7 @@ void main() async {
         Provider<DisplayNamePublisher>.value(value: displayNamePublisher),
         Provider<NameCache>.value(value: nameCache),
         Provider<IdentityTrust>.value(value: identityTrust),
+        Provider<IdentityPinStore>.value(value: identityPinStore),
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<SodiumSumo>.value(value: sodium),

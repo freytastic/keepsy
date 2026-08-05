@@ -97,4 +97,53 @@ void main() {
     expect(s.isVerified(myIkPub: _ik(1), peerIkPub: _ik(3)), isFalse);
     expect(pinFile().existsSync(), isFalse);
   });
+
+  test('a signer binding is separate from a roster pin', () async {
+    // Opening the member list TOFU pins every unseen roster row. That must not
+    // silently grant the same token authority to sign epoch transitions
+    final s =
+        await IdentityPinStore.open(file: pinFile(), cacheRootKey: _key(1));
+    s.pin('alb', 'bob', _ik(2));
+
+    expect(s.pinnedIk('alb', 'bob'), _ik(2));
+    expect(s.signerIk('alb', 'bob'), isNull);
+  });
+
+  test('signer bindings and creating marks survive a reopen', () async {
+    final s =
+        await IdentityPinStore.open(file: pinFile(), cacheRootKey: _key(7));
+    s.pinSigner('alb', 'bob', _ik(3));
+    await s.markCreating('alb2');
+    await s.flush();
+
+    final reopened =
+        await IdentityPinStore.open(file: pinFile(), cacheRootKey: _key(7));
+
+    expect(reopened.signerIk('alb', 'bob'), _ik(3));
+    expect(reopened.isCreating('alb2'), isTrue);
+  });
+
+  test('creatingAlbums lists the marks a boot reconcile has to inspect',
+      () async {
+    final s =
+        await IdentityPinStore.open(file: pinFile(), cacheRootKey: _key(1));
+    await s.markCreating('alb');
+
+    expect(s.creatingAlbums, ['alb']);
+    await s.clearCreating('alb');
+    expect(s.creatingAlbums, isEmpty);
+  });
+
+  test('clearAlbum drops that album signer bindings and creating mark',
+      () async {
+    final s =
+        await IdentityPinStore.open(file: pinFile(), cacheRootKey: _key(1));
+    s.pinSigner('alb', 'bob', _ik(3));
+    await s.markCreating('alb');
+
+    await s.clearAlbum('alb');
+
+    expect(s.signerIk('alb', 'bob'), isNull);
+    expect(s.isCreating('alb'), isFalse);
+  });
 }

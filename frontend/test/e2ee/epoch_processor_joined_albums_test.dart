@@ -81,6 +81,7 @@ void main() {
       identity: bob.svc,
       store: bobAks,
       directory: MemberDirectory(singletonAdminFetcher(admin)),
+      signerGate: tofuGate(),
       invites: invites,
     );
     return (proc: proc, invites: invites);

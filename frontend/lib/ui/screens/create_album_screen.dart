@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
+import 'package:keepsy/data/storage/identity_pin_store.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/epoch_rotator.dart';
@@ -13,13 +14,9 @@ import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
-// CreateAlbumScreen : the §5 bridge. Creating an album is two steps :
-//   - POST /albums   -> server mints album_id + caller's member_token
-//   -- EpochRotator.bootstrap -> mint MK_0, X3DH self wrap, POST /epoch
-// -- MUST run before the user can upload anything (the §5.1 pipeline
-// reads MK_0 from AlbumKeyStore.useMk). Both run inline so a partial state
-// is impossible from the user's POV : either everything succeeded or the
-// album appears not to exist
+// Album creation first obtains the album id and local member token, then starts
+// epoch 0 bootstrap in the background. AppState marks the album as syncing so
+// uploads remain disabled while bootstrap and encrypted name publication run
 
 class CreateAlbumScreen extends StatefulWidget {
   const CreateAlbumScreen({super.key});
@@ -53,6 +50,7 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
     final appState = context.read<AppState>();
     final albumKeys = context.read<AlbumKeyStore>();
     final namePublisher = context.read<DisplayNamePublisher>();
+    final pinStore = context.read<IdentityPinStore>();
     final userId = appState.userId;
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -79,20 +77,25 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
       if (albumIdBytes == null) {
         throw Exception('Invalid album id from server');
       }
+      // Register our token before epoch 0 fanout can race the album list refresh
+      // Otherwise the signer gate would treat our own wrap as peer signed
+      appState.registerSelfToken(album.id, tokenB64);
+      // Until epoch 0 lands, only this device can legitimately sign. Flush the
+      // marker now so it can survive a crash before bootstrap completes
+      await pinStore.markCreating(album.id);
       // Mark syncing : album_detail's _SyncingPlaceholder + FAB disable
       // already key off appState.isSyncing(albumId), so navigating into the
       // album before rotate completes is safe + visually consistent
       appState.markSyncing([album.id]);
-      // Defer rotate off the blocking path. ~700ms of AndroidKeyStore I/O
-      // runs in the
-      // background while the user is already on the album list / album
-      // detail with a static syncing indicator
+      // Run AndroidKeyStore work after navigation while the syncing indicator
+      // keeps the album read only
       unawaited(_runRotateInBackground(
         rotator: rotator,
         identity: identity,
         appState: appState,
         albumKeys: albumKeys,
         namePublisher: namePublisher,
+        pinStore: pinStore,
         messenger: messenger,
         albumId: album.id,
         albumIdBytes: albumIdBytes,
@@ -120,6 +123,7 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
     required AppState appState,
     required AlbumKeyStore albumKeys,
     required DisplayNamePublisher namePublisher,
+    required IdentityPinStore pinStore,
     required ScaffoldMessengerState messenger,
     required String albumId,
     required Uint8List albumIdBytes,
@@ -135,6 +139,8 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
         creatorMemberToken: creatorMemberToken,
         creatorUserId: creatorUserId,
       );
+      // Local epoch 0 now exists, so the creator only signing window can close
+      await pinStore.clearCreating(albumId);
       // epoch 0 MK now exists : seal the real title and PATCH it in, then
       // show it immediately (we hold the plaintext, no decrypt needed)
       final nameCt =
