@@ -92,6 +92,7 @@ void main() {
       identity: bob.svc,
       store: bobAks,
       directory: MemberDirectory(singletonAdminFetcher(admin)),
+      signerGate: tofuGate(),
       invites: invites,
     );
     final bobIk = await bob.svc.useIk<Uint8List>(

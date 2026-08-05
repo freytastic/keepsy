@@ -185,7 +185,7 @@ void main() {
       expect(
           (await t.trust.reconcile(alb, newRoster))['bob'], TrustState.changed);
 
-      // they got a new phone, read the new digits back, and they match
+      // the replacement key's displayed digits were compared and matched
       await t.trust
           .markVerified(albumId: alb, memberToken: 'bob', peerIkPub: _ik(3));
 
@@ -194,22 +194,19 @@ void main() {
       expect(t.store.pinnedIk(hexAlbumId(alb), 'bob'), _ik(3));
     });
 
-    test('acceptChange re-pins the new key and leaves it unverified', () async {
+    test('a changed key stays changed until the digits are compared', () async {
+      // Only markVerified may move the roster pin; it also updates the separate
+      // signer binding after the out-of-band comparison
       final t = await newTrust();
       final alb = _albumId(1);
       await t.trust
           .reconcile(alb, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
-      await t.trust
-          .markVerified(albumId: alb, memberToken: 'bob', peerIkPub: _ik(2));
       final newRoster = [PeerIdentity(memberToken: 'bob', ikPub: _ik(3))];
-      await t.trust.reconcile(alb, newRoster);
 
-      await t.trust
-          .acceptChange(albumId: alb, memberToken: 'bob', peerIkPub: _ik(3));
-
-      expect((await t.trust.reconcile(alb, newRoster))['bob'],
-          TrustState.unverified);
-      expect(t.store.pinnedIk(hexAlbumId(alb), 'bob'), _ik(3));
+      expect(
+          (await t.trust.reconcile(alb, newRoster))['bob'], TrustState.changed);
+      expect(t.store.pinnedIk(hexAlbumId(alb), 'bob'), _ik(2),
+          reason: 'the pin must survive repeated reconciles of a new key');
     });
   });
 

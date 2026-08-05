@@ -9,27 +9,26 @@ import 'package:path_provider/path_provider.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 
-// TOFU state, sealed under cache_root_key like the name/media caches
-// Two maps with deliberately different keys :
+// Local identity trust state, sealed under cache_root_key. Roster pins detect
+// key changes per stable album member token : verification claims bind this
+// device identity to a peer IK across albums. Separate signer bindings authorize
+// epoch signers, and creator markers protect the epoch 0 bootstrap window
 
-//   pins      (albumId, memberToken) -> ik_pub last seen for that roster slot
-//             member_token is the stable pseudonymous handle, so a DIFFERENT
-//             ik_pub under the SAME token is exactly the key change signal
-//   verified  (myIkPub, peerIkPub) -> when. "this device identity confirmed
-//             that peer identity key". Not album scoped : reading 30 digits to
-//             a fren confirms their KEY, which is the same key in every album
-//             you share. Binding our own IK in too keeps a future second device
-//             (or another account on this phone) from inheriting the claim
-
-// UNLIKE the name/media caches this MUST survive logout : if a logout reset the
-// pins, a hostile server could sit on a new ik_pub until the user logs out once
-// and then present it as an innocent first sight. Only a revoke/leave
-// (clearAlbum) or a full account reset (clear) may drop it
+// This state survives normal logout so a substituted key cannot become an
+// innocent first sight afterward. clearAlbum drops album scoped state: only a
+// full account reset drops verification claims
 class IdentityPinStore {
   final File _file;
   final Uint8List _cacheKey;
   final Map<String, String> _pins = {}; // 'albumId:token' -> base64 ik_pub
   final Map<String, int> _verified = {}; // 'b64(myIk)|b64(peerIk)' -> unix s
+  // Epoch signing authority, deliberately separate from roster pins. Written
+  // only after a first join signature verifies or an out-of-band comparison
+  final Map<String, String> _signers = {}; // 'albumId:token' -> base64 ik_pub
+  // Albums created here whose epoch 0 has not installed. Until then only this
+  // device may sign: the marker is flushed immediately to narrow the crash
+  // window between album creation and bootstrap
+  final Set<String> _creating = {};
   Timer? _flushTimer;
   int _gen = 0;
   Future<void> _inFlight = Future.value();
@@ -54,6 +53,35 @@ class IdentityPinStore {
   Uint8List? pinnedIk(String albumId, String memberToken) {
     final b64 = _pins[_pinKey(albumId, memberToken)];
     return b64 == null ? null : base64.decode(b64);
+  }
+
+  Uint8List? signerIk(String albumId, String memberToken) {
+    final b64 = _signers[_pinKey(albumId, memberToken)];
+    return b64 == null ? null : base64.decode(b64);
+  }
+
+  void pinSigner(String albumId, String memberToken, Uint8List ikPub) {
+    final k = _pinKey(albumId, memberToken);
+    final v = base64.encode(ikPub);
+    if (_signers[k] == v) return;
+    _signers[k] = v;
+    _scheduleFlush();
+  }
+
+  bool isCreating(String albumId) => _creating.contains(albumId);
+
+  // Exposed for boot time cleanup of markers left after epoch 0 installed
+  List<String> get creatingAlbums => _creating.toList();
+
+  // Bypass the debounce so successful writes survive a crash during bootstrap
+  Future<void> markCreating(String albumId) async {
+    if (!_creating.add(albumId)) return;
+    await flush();
+  }
+
+  Future<void> clearCreating(String albumId) async {
+    if (!_creating.remove(albumId)) return;
+    await flush();
   }
 
   void pin(String albumId, String memberToken, Uint8List ikPub) {
@@ -85,13 +113,16 @@ class IdentityPinStore {
         : DateTime.fromMillisecondsSinceEpoch(s * 1000, isUtc: true);
   }
 
-  // Revoke / leave / album delete. Drops the roster pins we can no longer
-  // refresh, but NOT the verifications : "that key is really his" stays true
+  // Revoke, leave, or delete: drop album-scoped roster pins, signer bindings,
+  // and creator state. Verification claims remain because they are not scoped
+  // to an album
   Future<void> clearAlbum(String albumId) async {
     final prefix = '$albumId:';
-    final before = _pins.length;
+    final before = _pins.length + _signers.length + _creating.length;
     _pins.removeWhere((k, _) => k.startsWith(prefix));
-    if (_pins.length == before) return;
+    _signers.removeWhere((k, _) => k.startsWith(prefix));
+    _creating.remove(albumId);
+    if (_pins.length + _signers.length + _creating.length == before) return;
     _gen++;
     _flushTimer?.cancel();
     try {
@@ -106,6 +137,8 @@ class IdentityPinStore {
     _flushTimer?.cancel();
     _pins.clear();
     _verified.clear();
+    _signers.clear();
+    _creating.clear();
     try {
       await _inFlight;
     } catch (_) {}
@@ -121,15 +154,25 @@ class IdentityPinStore {
       final map = jsonDecode(utf8.decode(pt)) as Map<String, dynamic>;
       _pins.clear();
       _verified.clear();
+      _signers.clear();
+      _creating.clear();
       (map['p'] as Map<String, dynamic>? ?? {})
           .forEach((k, v) => _pins[k] = v as String);
       (map['v'] as Map<String, dynamic>? ?? {})
           .forEach((k, v) => _verified[k] = v as int);
+      (map['s'] as Map<String, dynamic>? ?? {})
+          .forEach((k, v) => _signers[k] = v as String);
+      for (final a in (map['c'] as List<dynamic>? ?? const [])) {
+        _creating.add(a as String);
+      }
     } catch (_) {
-      // missing / corrupt / key mismatch : start empty. A lost pin degrades to
-      // a first sight (TOFU), never to a false "verified"
+      // Missing, corrupt, or wrong key state is not trustworthy. Peer signed
+      // updates on established albums fail closed without a signer binding: a
+      // genuine first join may establish TOFU. Nothing is treated as verified
       _pins.clear();
       _verified.clear();
+      _signers.clear();
+      _creating.clear();
     }
   }
 
@@ -150,8 +193,12 @@ class IdentityPinStore {
   Future<void> _write(int gen) async {
     if (gen != _gen) return;
     try {
-      final pt = Uint8List.fromList(
-          utf8.encode(jsonEncode({'p': _pins, 'v': _verified})));
+      final pt = Uint8List.fromList(utf8.encode(jsonEncode({
+        'p': _pins,
+        'v': _verified,
+        's': _signers,
+        'c': _creating.toList(),
+      })));
       final sealed = await Aead.encrypt(
           version: kVerAesGcm, key: _cacheKey, plaintext: pt, aad: _aad);
       if (gen != _gen) return;
@@ -163,7 +210,7 @@ class IdentityPinStore {
       }
       await tmp.rename(_file.path);
     } catch (_) {
-      // a failed write re TOFUs next session : never silently "verified"
+      // Keep the last durable snapshot: in-memory updates may be lost on restart
     }
   }
 

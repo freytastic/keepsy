@@ -30,8 +30,7 @@ class MemberDirectory {
 
   MemberDirectory(this._fetch);
 
-  // Returns null when no member with this token : sender no longer in the
-  // member list. Caller bails (spec §7.1) -> these specs are actually my impl plans.
+  // Returns null when the token is absent from the current album roster
   Future<MemberPubs?> lookup(Uint8List albumId, Uint8List memberToken) async {
     final aHex = _hex(albumId);
     final tHex = _hex(memberToken);
@@ -53,6 +52,13 @@ class MemberDirectory {
   // next lookup of that token re fetches and sees it gone. No op if not cached
   void drop(Uint8List albumId, Uint8List memberToken) {
     _cache[_hex(albumId)]?.remove(_hex(memberToken));
+  }
+
+  // Evicts a whole album. A wrap that failed signature or AEAD verification may
+  // simply have been checked against stale cached keys, so a retry has to be
+  // allowed to see a fresh roster rather than replay the same comparison
+  void dropAlbum(Uint8List albumId) {
+    _cache.remove(_hex(albumId));
   }
 }
 

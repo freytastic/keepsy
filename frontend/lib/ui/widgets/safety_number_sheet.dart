@@ -13,9 +13,9 @@ class SafetyNumberSheet extends StatelessWidget {
   final TrustState state;
   final bool dark;
   final Color accent;
+  // Fired only after the user confirms every digit. There is no accept-without
+  // comparing path because verification also grants signer authority
   final VoidCallback onVerify;
-  // "that really was them re installing" : re pins the new key, still unverified
-  final VoidCallback onAccept;
 
   const SafetyNumberSheet({
     super.key,
@@ -25,8 +25,35 @@ class SafetyNumberSheet extends StatelessWidget {
     required this.dark,
     required this.accent,
     required this.onVerify,
-    required this.onAccept,
   });
+
+  // Verification is durable across shared albums and may authorize a blocked
+  // signer, so require a deliberate confirmation
+  Future<void> _confirmThenVerify(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Did every digit match?'),
+        content: const Text(
+          'Only confirm if all 30 digits match exactly on both phones. This '
+          "can't be undone, and it tells Keepsy to trust this key from now on.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("They didn't"),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('They matched'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    Navigator.of(context).maybePop();
+    onVerify();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,9 +81,10 @@ class SafetyNumberSheet extends StatelessWidget {
             if (changed) ...[
               _Banner(
                 dark: dark,
-                text: "$displayName's security key changed. If that wasn't a "
-                    'new phone or a reinstall, someone may be intercepting '
-                    'this album. Check with them directly.',
+                text: "$displayName's security key changed. Keepsy has stopped "
+                    'trusting it. Read the digits below to them directly : '
+                    'that is the only way to tell a real change from someone '
+                    'intercepting this album.',
               ),
               const SizedBox(height: 16),
             ],
@@ -101,10 +129,7 @@ class SafetyNumberSheet extends StatelessWidget {
             const SizedBox(height: 20),
             if (!verified)
               FilledButton(
-                onPressed: () {
-                  Navigator.of(context).maybePop();
-                  onVerify();
-                },
+                onPressed: () => _confirmThenVerify(context),
                 style: FilledButton.styleFrom(
                   backgroundColor: accent,
                   foregroundColor: Colors.black,
@@ -113,19 +138,6 @@ class SafetyNumberSheet extends StatelessWidget {
                 child: const Text('They match : Mark as verified',
                     style: TextStyle(fontWeight: FontWeight.w700)),
               ),
-            if (changed) ...[
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).maybePop();
-                  onAccept();
-                },
-                child: Text(
-                  "It's them : they got a new phone",
-                  style: TextStyle(color: K.t2(dark), fontSize: 13),
-                ),
-              ),
-            ],
           ],
         ),
       ),

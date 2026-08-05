@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
+import 'package:keepsy/e2ee/expected_ik_resolver.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
@@ -29,6 +30,13 @@ class _Stack {
   final dynamic responder;
   final Uint8List albumId;
   final String albumIdStr;
+  // Signer bindings read and written by the processor gate
+  final Map<String, Uint8List> pins;
+  final Map<String, Uint8List> rosterPins;
+  final List<bool> creating;
+  // Single slot box so a test can declare a token "mine" after the stack (and
+  // therefore its admin) exists
+  final List<Uint8List?> selfBox;
   _Stack({
     required this.api,
     required this.aks,
@@ -37,13 +45,20 @@ class _Stack {
     required this.responder,
     required this.albumId,
     required this.albumIdStr,
+    required this.pins,
+    required this.rosterPins,
+    required this.creating,
+    required this.selfBox,
   });
 }
+
+String _hex(Uint8List b) => b.map((x) => x.toRadixString(16)).join();
 
 Future<_Stack> _bootStack({
   Uint8List? albumId,
   Duration? backoff,
   DateTime Function()? nowFn,
+  bool pinAdmin = false,
 }) async {
   final id = albumId ?? _albumId();
   final responder = await newResponderIdentity(nowFn: nowFn);
@@ -52,11 +67,25 @@ Future<_Stack> _bootStack({
   final api = FakeEpochApi();
   final aks = AlbumKeyStore(responder.store);
   await aks.initialize();
+  final pins = <String, Uint8List>{}; // signer bindings
+  final rosterPins = <String, Uint8List>{}; // what reconcile() writes
+  final selfBox = <Uint8List?>[null];
+  final creating = <bool>[false];
+  final resolver = ExpectedIkResolver.responder(
+    selfToken: (_) => selfBox.first,
+    pinned: (_, token) => rosterPins[_hex(token)],
+    signerPinned: (_, token) => pins[_hex(token)],
+    currentIk: responder.svc.currentIkPub,
+    soleSigner: (_) => creating.first,
+    pin: (_, token, ik) async => pins[_hex(token)] = ik,
+  );
+  if (pinAdmin) pins[_hex(admin.senderToken)] = admin.ikPub;
   final processor = EpochProcessor(
     api: api,
     identity: responder.svc,
     store: aks,
     directory: directory,
+    signerGate: resolver,
     backoff: backoff == null ? null : (_) => backoff,
   );
   return _Stack(
@@ -67,7 +96,23 @@ Future<_Stack> _bootStack({
     responder: responder,
     albumId: id,
     albumIdStr: uuidStringFromBytes(id),
+    pins: pins,
+    rosterPins: rosterPins,
+    creating: creating,
+    selfBox: selfBox,
   );
+}
+
+// Counts roster fetches and serves whatever the box currently holds, so a test
+// can prove a retry actually re read the roster instead of a stale cache entry
+class _MutableRoster {
+  final List<MemberRecord> records;
+  int fetches = 0;
+  _MutableRoster(this.records);
+  MemberFetcher get fetcher => (Uint8List _) async {
+        fetches++;
+        return records;
+      };
 }
 
 const int _spkTs = 1714838400; // anchored, well within ±90d skew
@@ -120,12 +165,14 @@ void main() {
         identity: respA.svc,
         store: aksA,
         directory: dirA,
+        signerGate: tofuGate(),
       );
       final pB = EpochProcessor(
         api: api,
         identity: respB.svc,
         store: aksB,
         directory: dirB,
+        signerGate: tofuGate(),
       );
       final idA = _albumId(0xA1);
       final idB = _albumId(0xB2);
@@ -161,8 +208,13 @@ void main() {
 
     test('AAD mismatch (epoch 4 baked into AAD, URL says 5) -> AEAD auth fails',
         () async {
-      final s = await _bootStack();
+      final s = await _bootStack(pinAdmin: true);
       final mk = _mk(0xDD);
+      // 0..4 already held so the contiguous walk reaches straight for 5
+      for (var i = 0; i <= 4; i++) {
+        await s.aks.installVerified(
+            albumId: s.albumId, epoch: i, mk: _mk(0x10 + i), backfill: false);
+      }
       final bundle =
           await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       // Encrypt with AAD epoch=4 but advertise epoch=5 over the wire (D5 :
@@ -181,15 +233,19 @@ void main() {
         throwsA(isA<WrapVerificationException>()
             .having((e) => e.reason, 'reason', 'aead_auth_failed')),
       );
-      expect(await s.aks.presentEpochs(s.albumId), isEmpty);
+      expect(await s.aks.presentEpochs(s.albumId), [0, 1, 2, 3, 4]);
     });
 
     test('wrap missing 404 -> retries with backoff, eventually succeeds',
         () async {
       // backoff overridden to Duration.zero so the test doesnt wait the real
       // 200/800/3200ms ladder
-      final s = await _bootStack(backoff: Duration.zero);
+      final s = await _bootStack(backoff: Duration.zero, pinAdmin: true);
       final mk = _mk(0xEE);
+      for (var i = 0; i <= 1; i++) {
+        await s.aks.installVerified(
+            albumId: s.albumId, epoch: i, mk: _mk(0x10 + i), backfill: false);
+      }
       final bundle =
           await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
       final env = await s.admin.buildWrap(
@@ -206,12 +262,12 @@ void main() {
 
       expect(s.api.fetchLog.length, 3,
           reason: 'expected 2 retries before the 3rd hit succeeds');
-      expect(await s.aks.presentEpochs(s.albumId), [2]);
+      expect(await s.aks.presentEpochs(s.albumId), [0, 1, 2]);
     });
 
     test('cold start catch up: local up to 3, server on 7 -> fetches 4..7',
         () async {
-      final s = await _bootStack();
+      final s = await _bootStack(pinAdmin: true);
       // Pre install MK_0..MK_3 directly so the processor only chases 4..7
       for (var i = 0; i <= 3; i++) {
         await s.aks.installVerified(
@@ -257,6 +313,7 @@ void main() {
         identity: resp.svc,
         store: aks,
         directory: dirB,
+        signerGate: tofuGate(),
         backoff: (_) => Duration.zero,
       );
 
@@ -461,6 +518,539 @@ void main() {
             .having((e) => e.reason, 'reason', 'aead_auth_failed')),
       );
       expect(await s.aks.presentEpochs(s.albumId), isEmpty);
+    });
+
+    test('a live event that skips an epoch installs the gap in order',
+        () async {
+      // Two rotations can fan out independently, so 5 may arrive before 4. The
+      // old latestEpoch cursor would have stranded 4 permanently
+      final s = await _bootStack(pinAdmin: true);
+      for (var i = 0; i <= 3; i++) {
+        await s.aks.installVerified(
+            albumId: s.albumId, epoch: i, mk: _mk(0x10 + i), backfill: false);
+      }
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      for (var i = 4; i <= 5; i++) {
+        s.api.putWrap(
+            s.albumIdStr,
+            i,
+            await s.admin.buildWrap(
+                albumId: s.albumId,
+                epoch: i,
+                mk: _mk(0x40 + i),
+                responderBundle: bundle));
+      }
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 5);
+
+      expect(s.api.fetchLog.map((e) => e.epoch).toList(), [4, 5]);
+      expect(await s.aks.presentEpochs(s.albumId), [0, 1, 2, 3, 4, 5]);
+    });
+
+    test('a live event whose gap cannot be filled installs nothing', () async {
+      // Blocking is the point: installing 5 while 4 is unfetchable would make
+      // every photo sealed under MK_4 permanently undecryptable
+      final s = await _bootStack(backoff: Duration.zero, pinAdmin: true);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      // epoch 1 is never published: only 2 is available
+      s.api.putWrap(
+          s.albumIdStr,
+          2,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 2,
+              mk: _mk(0x42),
+              responderBundle: bundle));
+
+      await expectLater(
+        s.processor.handleEvent(albumId: s.albumId, epoch: 2),
+        throwsA(isA<EpochWrapNotFoundException>()),
+      );
+      expect(await s.aks.presentEpochs(s.albumId), [0],
+          reason: 'epoch 2 must not install ahead of the missing epoch 1');
+    });
+
+    test('a hole left by an earlier install is repaired on the next event',
+        () async {
+      // Devices from the cursor-only build may already contain gaps, so the
+      // contiguous handler must inspect actual stored epochs
+      final s = await _bootStack(pinAdmin: true);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 2, mk: _mk(0x12), backfill: false);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      for (final i in [1, 3]) {
+        s.api.putWrap(
+            s.albumIdStr,
+            i,
+            await s.admin.buildWrap(
+                albumId: s.albumId,
+                epoch: i,
+                mk: _mk(0x40 + i),
+                responderBundle: bundle));
+      }
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 3);
+
+      expect(s.api.fetchLog.map((e) => e.epoch).toList(), [1, 3]);
+      expect(await s.aks.presentEpochs(s.albumId), [0, 1, 2, 3]);
+    });
+
+    test('a first sight signer key becomes the TOFU baseline', () async {
+      final s = await _bootStack();
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+      expect(s.pins[_hex(s.admin.senderToken)], equals(s.admin.ikPub),
+          reason: 'the baseline every later transition is checked against : it '
+              'does not defend this first one, which is plain TOFU');
+    });
+
+    test('a signer key contradicting the pin is refused and installs nothing',
+        () async {
+      // The substitution attack: roster hands us an attacker IK/LK for the
+      // admin's token, so the server can derive the X3DH secret and sign a wrap
+      // carrying an MK it knows
+      final s = await _bootStack();
+      s.pins[_hex(s.admin.senderToken)] =
+          Uint8List.fromList(List<int>.filled(32, 0x5E));
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(
+        s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+        throwsA(isA<IdentitySignerMismatchException>()),
+      );
+      expect(await s.aks.presentEpochs(s.albumId), isEmpty);
+    });
+
+    test('verifying the presented key out of band unblocks the install',
+        () async {
+      // markVerified moves the signer binding; only the successful retry clears
+      // the block
+      final s = await _bootStack();
+      s.pins[_hex(s.admin.senderToken)] =
+          Uint8List.fromList(List<int>.filled(32, 0x5E));
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<IdentitySignerMismatchException>()));
+
+      s.pins[_hex(s.admin.senderToken)] = s.admin.ikPub; // markVerified
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+    });
+
+    test('an unknown signer is refused once the album has keys', () async {
+      // No signer binding exists for this token, but the album already has MKs.
+      final s = await _bootStack();
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          1,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 1,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 1),
+          throwsA(isA<UnknownSignerException>()));
+      expect(s.pins, isEmpty);
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+    });
+
+    test('a bad signature cannot poison the first sight pin', () async {
+      // check() precedes signature verification, so it must not persist signer
+      // authority yet
+      final s = await _bootStack();
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      final env = await s.admin.buildWrap(
+          albumId: s.albumId, epoch: 0, mk: _mk(0xCC), responderBundle: bundle);
+      final bad = Uint8List.fromList(env.senderSig);
+      bad[0] ^= 0xFF;
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          WrapEnvelope(
+            epoch: env.epoch,
+            ekPub: env.ekPub,
+            wrap: env.wrap,
+            senderToken: env.senderToken,
+            senderSig: bad,
+            opkIdxUsed: env.opkIdxUsed,
+            deliveredAt: env.deliveredAt,
+          ));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<WrapVerificationException>()));
+
+      expect(s.pins, isEmpty,
+          reason: 'a server with no private key must not move our baseline');
+    });
+
+    test('a wrap attributed to our own token must carry our own IK', () async {
+      // No user override exists for this one : the device already holds its own
+      // key, so a mismatch is the server lying about us
+      final s = await _bootStack();
+      // the wrap arrives attributed to OUR token, but carries the admin's IK
+      s.selfBox[0] = s.admin.senderToken;
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(
+        s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+        throwsA(isA<IdentitySignerMismatchException>()
+            .having((e) => e.isSelf, 'isSelf', isTrue)),
+      );
+      expect(s.pins, isEmpty, reason: 'the self path never pins');
+    });
+
+    test('a refused install reports the album blocked with the presented key',
+        () async {
+      // Both catchUpAll and the WS dispatch swallow throws, so without this the
+      // album just stops taking new photos with nothing said to anyone
+      final s = await _bootStack();
+      s.pins[_hex(s.admin.senderToken)] =
+          Uint8List.fromList(List<int>.filled(32, 0x5E));
+      final events = <EpochBlocked>[];
+      s.processor.blocked.listen(events.add);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<IdentitySignerMismatchException>()));
+      await pumpEventQueue();
+
+      expect(events, hasLength(1));
+      expect(events.single.reason, EpochBlockReason.signerMismatch);
+      expect(events.single.epoch, 0);
+      expect(events.single.senderToken, equals(s.admin.senderToken));
+      // the sheet must show THIS key, not one re-fetched from the roster later
+      expect(events.single.presentedIk, equals(s.admin.ikPub));
+    });
+
+    test('a wrap our own token cannot own is reported as a self mismatch',
+        () async {
+      final s = await _bootStack();
+      s.selfBox[0] = s.admin.senderToken;
+      final events = <EpochBlocked>[];
+      s.processor.blocked.listen(events.add);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<IdentitySignerMismatchException>()));
+      await pumpEventQueue();
+
+      expect(events.single.reason, EpochBlockReason.selfSignerMismatch);
+    });
+
+    test('an unfetchable wrap reports the album blocked as unavailable',
+        () async {
+      final s = await _bootStack(backoff: Duration.zero);
+      final events = <EpochBlocked>[];
+      s.processor.blocked.listen(events.add);
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<EpochWrapNotFoundException>()));
+      await pumpEventQueue();
+
+      expect(events.single.reason, EpochBlockReason.wrapUnavailable);
+      expect(events.single.epoch, 0);
+    });
+
+    test('a completed sync reports the album unblocked', () async {
+      final s = await _bootStack();
+      final cleared = <({String album, int epoch})>[];
+      s.processor.unblocked
+          .listen((e) => cleared.add((album: _hex(e.albumId), epoch: e.epoch)));
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 0);
+      await pumpEventQueue();
+
+      expect(cleared, [(album: _hex(s.albumId), epoch: 0)]);
+    });
+
+    test('catch up repairs a hole below the cursor', () async {
+      // With [0, 2] stored and the server on 2, old latest+1 logic did no work
+      // Catch up must inspect actual stored epochs to find 1
+      final s = await _bootStack(pinAdmin: true);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 2, mk: _mk(0x12), backfill: false);
+      s.api.currents[s.albumIdStr] = EpochCurrent(
+        currentEpoch: 2,
+        startedAt: DateTime.utc(2026, 5, 7, 12),
+      );
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          1,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 1,
+              mk: _mk(0x41),
+              responderBundle: bundle));
+
+      await s.processor.catchUpAll([s.albumId]);
+
+      expect(await s.aks.presentEpochs(s.albumId), [0, 1, 2]);
+    });
+
+    test('an older duplicate event reports only the epoch it reached',
+        () async {
+      // Epoch 5 blocks; a delayed duplicate for 4 then succeeds trivially. It
+      // must not claim to have caught up past the epoch that actually failed
+      final s = await _bootStack(pinAdmin: true);
+      for (var i = 0; i <= 4; i++) {
+        await s.aks.installVerified(
+            albumId: s.albumId, epoch: i, mk: _mk(0x10 + i), backfill: false);
+      }
+      final reached = <int>[];
+      s.processor.unblocked.listen((e) => reached.add(e.epoch));
+
+      await s.processor.handleEvent(albumId: s.albumId, epoch: 4);
+      await pumpEventQueue();
+
+      expect(reached, [4]);
+    });
+
+    test('a refused signer is evicted so a retry re-reads the roster',
+        () async {
+      // MemberDirectory caches per (album, token). Without eviction a retry
+      // keeps re checking the same stale key and can never recover, even once
+      // the server serves the honest one
+      final responder = await newResponderIdentity();
+      final admin = await SyntheticAdmin.create();
+      final roster = _MutableRoster([
+        MemberRecord(
+          memberToken: admin.senderToken,
+          ikPub: Uint8List.fromList(List<int>.filled(32, 0x5E)), // wrong key
+          lkPub: admin.lkPub,
+        ),
+      ]);
+      final api = FakeEpochApi();
+      final aks = AlbumKeyStore(responder.store);
+      await aks.initialize();
+      final pins = <String, Uint8List>{
+        _hex(admin.senderToken): admin.ikPub,
+      };
+      final processor = EpochProcessor(
+        api: api,
+        identity: responder.svc,
+        store: aks,
+        directory: MemberDirectory(roster.fetcher),
+        signerGate: ExpectedIkResolver.responder(
+          selfToken: (_) => null,
+          pinned: (_, __) => null,
+          signerPinned: (_, token) => pins[_hex(token)],
+          currentIk: responder.svc.currentIkPub,
+          soleSigner: (_) => false,
+          pin: (_, token, ik) async => pins[_hex(token)] = ik,
+        ),
+      );
+      final albumId = _albumId();
+      final albumIdStr = uuidStringFromBytes(albumId);
+      final bundle =
+          await buildResponderBundle(responder: responder.svc, spkTs: _spkTs);
+      api.putWrap(
+          albumIdStr,
+          0,
+          await admin.buildWrap(
+              albumId: albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(processor.handleEvent(albumId: albumId, epoch: 0),
+          throwsA(isA<IdentitySignerMismatchException>()));
+      expect(roster.fetches, 1);
+
+      // server starts telling the truth; the retry must be able to see it
+      roster.records[0] = MemberRecord(
+        memberToken: admin.senderToken,
+        ikPub: admin.ikPub,
+        lkPub: admin.lkPub,
+      );
+      await processor.handleEvent(albumId: albumId, epoch: 0);
+
+      expect(roster.fetches, 2);
+      expect(await aks.presentEpochs(albumId), [0]);
+    });
+
+    test('a roster pin alone cannot authorize a new epoch signer', () async {
+      // Opening the member list TOFU pins every unseen row. A server invented
+      // member must not gain the right to sign epochs just by being displayed
+      final s = await _bootStack();
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      s.rosterPins[_hex(s.admin.senderToken)] = s.admin.ikPub;
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          1,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 1,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 1),
+          throwsA(isA<UnknownSignerException>()));
+      expect(await s.aks.presentEpochs(s.albumId), [0]);
+    });
+
+    test('an album awaiting our own epoch 0 refuses a peer signed wrap',
+        () async {
+      // Zero local MKs, so the plain TOFU rule would wave this through : but we
+      // created this album, and it has never had an epoch for anyone to sign
+      final s = await _bootStack();
+      s.creating[0] = true;
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<UnknownSignerException>()));
+      expect(await s.aks.presentEpochs(s.albumId), isEmpty);
+      expect(s.pins, isEmpty);
+    });
+
+    test('a missing local OPK surfaces as a blocked album', () async {
+      final s = await _bootStack();
+      final opkPub = Uint8List.fromList(List<int>.filled(32, 0x77));
+      final bundle = await buildResponderBundle(
+          responder: s.responder.svc,
+          spkTs: _spkTs,
+          opk: (idx: 4242, keyPub: opkPub)); // an index this device never had
+      final events = <EpochBlocked>[];
+      s.processor.blocked.listen(events.add);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0xCC),
+              responderBundle: bundle));
+
+      await expectLater(s.processor.handleEvent(albumId: s.albumId, epoch: 0),
+          throwsA(isA<OpkNotFoundException>()));
+      await pumpEventQueue();
+
+      expect(events.single.reason, EpochBlockReason.localKeyMissing);
+    });
+
+    test('a refused replay surfaces as a blocked album', () async {
+      // The backfill path re installs 0..current unconditionally, so a server
+      // re serving an epoch we hold with DIFFERENT bytes lands on the tamper
+      // branch of installVerified rather than being skipped
+      final s = await _bootStack(pinAdmin: true);
+      await s.aks.installVerified(
+          albumId: s.albumId, epoch: 0, mk: _mk(0x10), backfill: false);
+      final bundle =
+          await buildResponderBundle(responder: s.responder.svc, spkTs: _spkTs);
+      s.api.putWrap(
+          s.albumIdStr,
+          0,
+          await s.admin.buildWrap(
+              albumId: s.albumId,
+              epoch: 0,
+              mk: _mk(0x99), // not the MK_0 we already hold
+              responderBundle: bundle));
+      final events = <EpochBlocked>[];
+      s.processor.blocked.listen(events.add);
+
+      await expectLater(
+          s.processor.handleEvent(albumId: s.albumId, epoch: 0, joined: true),
+          throwsA(isA<EpochReplayException>()));
+      await pumpEventQueue();
+
+      expect(events.single.reason, EpochBlockReason.replayRejected);
     });
 
     test('sender_sig invalid -> WrapVerificationException(sig_invalid)',

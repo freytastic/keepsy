@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/e2ee/epoch_api.dart';
+import 'package:keepsy/e2ee/expected_ik_resolver.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/member_directory.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
@@ -214,6 +215,22 @@ Future<({IdentityService svc, MockSecureKeyStore store, SilentPrekeyApi api})>
   );
   await svc.bootstrap();
   return (svc: svc, store: store, api: api);
+}
+
+// Bare TOFU signer gate over an in memory pin map, for tests that are
+// not themselves about the trust rules. Mirrors production first sight
+// behaviour: adopt the presented key, then hold every later one against it
+SignerGate tofuGate() {
+  final pins = <String, Uint8List>{};
+  String hex(Uint8List b) => b.map((x) => x.toRadixString(16)).join();
+  return ExpectedIkResolver.responder(
+    selfToken: (_) => null,
+    pinned: (_, __) => null,
+    signerPinned: (_, token) => pins[hex(token)],
+    currentIk: () async => Uint8List(32),
+    soleSigner: (_) => false,
+    pin: (_, token, ik) async => pins[hex(token)] = ik,
+  );
 }
 
 // In memory MemberFetcher snapshot. Tests register the synthetic admin against
