@@ -40,7 +40,7 @@ import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
-import 'package:keepsy/ui/screens/login_screen.dart';
+import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/theme/app_theme.dart';
 
 // Top-level so the global error boundary in this file can resolve a
@@ -564,7 +564,7 @@ class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
       theme: K.theme(isDark, accent),
       home: const LandingPage(),
       routes: {
-        '/login': (_) => const LoginScreen(),
+        '/login': (_) => const OnboardingScreen(),
       },
     );
   }

@@ -16,7 +16,7 @@ import 'package:keepsy/data/session_teardown.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/ui/widgets/shared_widgets.dart';
-import 'package:keepsy/ui/screens/login_screen.dart';
+import 'package:keepsy/ui/screens/onboarding_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -363,7 +363,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       if (!context.mounted) return;
                       Navigator.of(context).pushAndRemoveUntil(
                         PageRouteBuilder(
-                          pageBuilder: (_, __, ___) => const LoginScreen(),
+                          pageBuilder: (_, __, ___) => const OnboardingScreen(),
                           transitionsBuilder: (_, a, __, child) =>
                               FadeTransition(opacity: a, child: child),
                           transitionDuration: const Duration(milliseconds: 400),
