@@ -10,7 +10,7 @@ import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/ui/screens/login_screen.dart';
+import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 
 class LandingPage extends StatefulWidget {
@@ -89,7 +89,7 @@ class _LandingPageState extends State<LandingPage> {
 
     if (!mounted) return;
 
-    final destination = valid ? const MainShell() : const LoginScreen();
+    final destination = valid ? const MainShell() : const OnboardingScreen();
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
