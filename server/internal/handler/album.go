@@ -9,6 +9,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
+	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/freytastic/keepsy/internal/ws"
 	"github.com/google/uuid"
@@ -148,16 +149,53 @@ func (h *AlbumHandler) ListAlbums(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, len(albums))
 	for i, a := range albums {
 		out[i] = map[string]any{
-			"id":           a.ID,
-			"name_ct":      base64.StdEncoding.EncodeToString(a.NameCT),
-			"created_at":   a.CreatedAt,
-			"updated_at":   a.UpdatedAt,
-			"role":         a.UserRole,
-			"member_token": base64.StdEncoding.EncodeToString(a.MemberToken),
+			"id":                  a.ID,
+			"name_ct":             base64.StdEncoding.EncodeToString(a.NameCT),
+			"created_at":          a.CreatedAt,
+			"updated_at":          a.UpdatedAt,
+			"role":                a.UserRole,
+			"member_token":        base64.StdEncoding.EncodeToString(a.MemberToken),
+			"media_count":         a.Summary.MediaCount,
+			"active_member_count": a.Summary.ActiveMemberCount,
+			"latest_activity_at":  a.Summary.LatestActivityAt,
+			"media_generation":    a.Summary.MediaGeneration,
+			"preview_media":       previewMediaJSON(a.Summary.PreviewMedia),
+			"member_previews":     memberPreviewsJSON(a.Summary.MemberPreviews),
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// Exclude storage coordinates so every thumbnail fetch remains authorized
+func previewMediaJSON(in []model.PreviewMedia) []map[string]any {
+	out := make([]map[string]any, len(in))
+	for i, p := range in {
+		out[i] = map[string]any{
+			"media_id":          p.MediaID,
+			"epoch_tag":         p.EpochTag,
+			"thumb_wrap_nonce":  base64.StdEncoding.EncodeToString(p.ThumbWrapNonce),
+			"thumb_wrap_tag_ct": base64.StdEncoding.EncodeToString(p.ThumbWrapTagCT),
+			"thumb_size":        p.ThumbSize,
+			"thumb_sha256":      base64.StdEncoding.EncodeToString(p.ThumbSHA256),
+		}
+	}
+	return out
+}
+
+func memberPreviewsJSON(in []model.MemberPreview) []map[string]any {
+	out := make([]map[string]any, len(in))
+	for i, m := range in {
+		row := map[string]any{
+			"member_token": base64.StdEncoding.EncodeToString(m.MemberToken),
+			"name_ct":      nil,
+		}
+		if len(m.NameCT) > 0 {
+			row["name_ct"] = base64.StdEncoding.EncodeToString(m.NameCT)
+		}
+		out[i] = row
+	}
+	return out
 }
 
 func (h *AlbumHandler) UpdateAlbum(w http.ResponseWriter, r *http.Request) {

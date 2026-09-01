@@ -24,6 +24,31 @@ type AlbumWithMemberInfo struct {
 	Album
 	UserRole    string `json:"user_role"`
 	MemberToken []byte `json:"member_token"`
+	Summary     AlbumSummary
+}
+
+type AlbumSummary struct {
+	MediaCount        int
+	ActiveMemberCount int
+	LatestActivityAt  *time.Time
+	MediaGeneration   int64
+	PreviewMedia      []PreviewMedia
+	MemberPreviews    []MemberPreview
+}
+
+type PreviewMedia struct {
+	MediaID        uuid.UUID
+	EpochTag       int
+	ThumbWrapNonce []byte
+	ThumbWrapTagCT []byte
+	ThumbSize      int64
+	ThumbSHA256    []byte
+}
+
+// Excludes identity keys bcs shelf previews are not trust verified
+type MemberPreview struct {
+	MemberToken []byte
+	NameCT      []byte
 }
 
 // MemberProfile : public bytes other album members need to render the member

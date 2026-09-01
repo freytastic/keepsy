@@ -50,9 +50,11 @@ func (r *AlbumRepository) CreateWithAdmin(ctx context.Context, nameCT []byte, cr
 	}
 	defer tx.Rollback(ctx)
 
+	// Sequence empty albums created within the same hour
 	a := &model.Album{ID: uuid.New(), NameCT: nameCT}
 	err = tx.QueryRow(ctx,
-		`INSERT INTO albums (id, name_ct) VALUES ($1, $2)
+		`INSERT INTO albums (id, name_ct, last_activity_seq)
+		 VALUES ($1, $2, nextval('album_activity_seq'))
 		 RETURNING created_at, updated_at`,
 		a.ID, a.NameCT,
 	).Scan(&a.CreatedAt, &a.UpdatedAt)
@@ -105,29 +107,141 @@ func (r *AlbumRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Alb
 	return &a, nil
 }
 
+// ListForUser returns authorized shelf summaries in confirm order
+// Aggregates repeat membership checks because the route has no album context
 func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]model.AlbumWithMemberInfo, error) {
+	handle := r.linker.Hash(userID)
 	rows, err := r.DB.Query(ctx, `
-		SELECT a.id, a.name_ct, a.created_at, a.updated_at, am.role, ami.member_token
+		SELECT a.id, a.name_ct, a.created_at, a.updated_at, a.media_generation,
+		       am.role, ami.member_token,
+		       COALESCE(stats.media_count, 0),
+		       stats.latest_activity_at,
+		       COALESCE(members.active_count, 0)
 		FROM albums a
 		JOIN album_member_identities ami ON ami.album_id = a.id
 		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
+		LEFT JOIN LATERAL (
+		    SELECT COUNT(*) AS media_count,
+		           MAX(m.created_at) AS latest_activity_at
+		    FROM media m WHERE m.album_id = a.id AND m.confirmed = TRUE
+		) stats ON TRUE
+		LEFT JOIN LATERAL (
+		    SELECT COUNT(*) AS active_count
+		    FROM album_members x
+		    WHERE x.album_id = a.id AND x.revoked_at IS NULL
+		) members ON TRUE
 		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL
-		ORDER BY a.updated_at DESC`,
-		r.linker.Hash(userID))
+		ORDER BY a.last_activity_seq DESC NULLS LAST,
+		         COALESCE(stats.latest_activity_at, a.created_at) DESC,
+		         a.created_at DESC, a.id`,
+		handle)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	var out []model.AlbumWithMemberInfo
+	ids := []uuid.UUID{}
 	for rows.Next() {
 		var a model.AlbumWithMemberInfo
-		if err := rows.Scan(&a.ID, &a.NameCT, &a.CreatedAt, &a.UpdatedAt, &a.UserRole, &a.MemberToken); err != nil {
+		if err := rows.Scan(&a.ID, &a.NameCT, &a.CreatedAt, &a.UpdatedAt,
+			&a.Summary.MediaGeneration, &a.UserRole, &a.MemberToken,
+			&a.Summary.MediaCount, &a.Summary.LatestActivityAt,
+			&a.Summary.ActiveMemberCount); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
+		ids = append(ids, a.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	previews, err := r.previewMediaFor(ctx, handle, ids)
+	if err != nil {
+		return nil, err
+	}
+	members, err := r.memberPreviewsFor(ctx, handle, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Summary.PreviewMedia = previews[out[i].ID]
+		out[i].Summary.MemberPreviews = members[out[i].ID]
 	}
 	return out, nil
+}
+
+// Use confirm order bcs media timestamps are hour quantized
+func (r *AlbumRepository) previewMediaFor(ctx context.Context, handle []byte, ids []uuid.UUID) (map[uuid.UUID][]model.PreviewMedia, error) {
+	rows, err := r.DB.Query(ctx, `
+		SELECT m.album_id, m.id, m.epoch_tag, m.thumb_wrap_nonce,
+		       m.thumb_wrap_tag_ct, m.thumb_size, m.thumb_sha256
+		FROM albums a
+		JOIN album_member_identities ami ON ami.album_id = a.id
+		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
+		JOIN LATERAL (
+		    SELECT * FROM media mm
+		    WHERE mm.album_id = a.id AND mm.confirmed = TRUE
+		      AND mm.thumb_wrap_nonce IS NOT NULL
+		    ORDER BY mm.album_seq DESC NULLS LAST, mm.id DESC
+		    LIMIT 3
+		) m ON TRUE
+		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL AND a.id = ANY($2)`,
+		handle, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[uuid.UUID][]model.PreviewMedia{}
+	for rows.Next() {
+		var albumID uuid.UUID
+		var p model.PreviewMedia
+		if err := rows.Scan(&albumID, &p.MediaID, &p.EpochTag, &p.ThumbWrapNonce,
+			&p.ThumbWrapTagCT, &p.ThumbSize, &p.ThumbSHA256); err != nil {
+			return nil, err
+		}
+		out[albumID] = append(out[albumID], p)
+	}
+	return out, rows.Err()
+}
+
+// Stable join order avoids ranking members by activity
+func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, ids []uuid.UUID) (map[uuid.UUID][]model.MemberPreview, error) {
+	rows, err := r.DB.Query(ctx, `
+		SELECT p.album_id, p.member_token, p.name_ct
+		FROM albums a
+		JOIN album_member_identities ami ON ami.album_id = a.id
+		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
+		JOIN LATERAL (
+		    SELECT x.album_id, x.member_token, x.name_ct
+		    FROM album_members x
+		    JOIN album_member_identities xi ON xi.member_token = x.member_token
+		    WHERE x.album_id = a.id AND x.revoked_at IS NULL
+		    ORDER BY xi.joined_at ASC, x.member_token ASC
+		    LIMIT 4
+		) p ON TRUE
+		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL AND a.id = ANY($2)`,
+		handle, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[uuid.UUID][]model.MemberPreview{}
+	for rows.Next() {
+		var albumID uuid.UUID
+		var m model.MemberPreview
+		if err := rows.Scan(&albumID, &m.MemberToken, &m.NameCT); err != nil {
+			return nil, err
+		}
+		out[albumID] = append(out[albumID], m)
+	}
+	return out, rows.Err()
 }
 
 // LookupMember resolves (userID, albumID) → (memberToken, role)
@@ -395,7 +509,8 @@ func (r *AlbumRepository) RevokeMemberTx(ctx context.Context, albumID uuid.UUID,
 
 func (r *AlbumRepository) UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error {
 	_, err := r.DB.Exec(ctx,
-		`UPDATE albums SET name_ct = $1, updated_at = NOW() WHERE id = $2`,
+		`UPDATE albums SET name_ct = $1, updated_at = date_trunc('hour', now())
+		 WHERE id = $2`,
 		nameCT, albumID)
 	return err
 }

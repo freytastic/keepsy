@@ -109,21 +109,55 @@ func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, 
 	return tx.Commit(ctx)
 }
 
-// MarkConfirmed flips confirmed=TRUE for a pending row. Returns ErrMediaNotFound
-// if no pending row exists with that id+album (someone else's id, already
-// confirmed, or never created)
-func (r *MediaRepository) MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) error {
-	tag, err := r.DB.Exec(ctx,
+// MarkConfirmed atomically assigns the album generation and activity order
+// The conditional update is the concurrency guard for duplicate confirms
+func (r *MediaRepository) MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) (int64, error) {
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE media SET confirmed = TRUE WHERE id = $1 AND album_id = $2 AND confirmed = FALSE`,
 		mediaID, albumID,
 	)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrMediaNotFound
+		return 0, ErrMediaNotFound
 	}
-	return nil
+
+	// Stamp activity at confirm time rather than reservation time
+	var generation int64
+	if err := tx.QueryRow(ctx,
+		`UPDATE albums SET media_generation = media_generation + 1,
+		                   last_activity_seq = nextval('album_activity_seq')
+		 WHERE id = $1 RETURNING media_generation`,
+		albumID,
+	).Scan(&generation); err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE media SET album_seq = $1 WHERE id = $2`, generation, mediaID,
+	); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+// MediaGeneration reads the counter without incrementing it
+func (r *MediaRepository) MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error) {
+	var g int64
+	err := r.DB.QueryRow(ctx,
+		`SELECT media_generation FROM albums WHERE id = $1`, albumID).Scan(&g)
+	return g, err
 }
 
 // DeletePending removes a row that was created but never confirmed (S3 upload
@@ -144,7 +178,7 @@ func (r *MediaRepository) GetByID(ctx context.Context, mediaID, albumID uuid.UUI
 		SELECT id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
 			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
-			thumb_sha256
+			thumb_sha256, album_seq
 		FROM media WHERE id = $1 AND album_id = $2`,
 		mediaID, albumID,
 	).Scan(
@@ -152,6 +186,7 @@ func (r *MediaRepository) GetByID(ctx context.Context, mediaID, albumID uuid.UUI
 		&m.WrapNonce, &m.WrapTagCT, &m.EpochTag, &m.BlobSize, &m.BlobSHA256,
 		&m.MediaType, &m.MimeType, &m.Confirmed, &m.CreatedAt,
 		&m.ThumbWrapNonce, &m.ThumbWrapTagCT, &m.ThumbSize, &m.ThumbSHA256,
+		&m.AlbumSeq,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrMediaNotFound
@@ -168,7 +203,7 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
 			thumb_sha256
 		FROM media WHERE album_id = $1 AND confirmed = TRUE
-		ORDER BY created_at DESC, id DESC`,
+		ORDER BY album_seq DESC NULLS LAST, created_at DESC, id DESC`,
 		albumID,
 	)
 	if err != nil {
