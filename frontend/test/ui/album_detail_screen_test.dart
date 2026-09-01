@@ -10,6 +10,7 @@ import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
+import 'package:keepsy/ui/shelf/shelf_data.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
@@ -184,5 +185,40 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('No media yet'), findsOneWidget);
+  });
+
+  testWidgets('a successful realtime reload advances the seen watermark',
+      (tester) async {
+    final aks = await _emptyAks();
+    final album = _fakeAlbum().copyWith(
+      mediaCount: 4,
+      mediaGeneration: 4,
+      hasSummary: true,
+    );
+    final appState = AppState()..setAlbums([album]);
+    final seen = InMemorySeenStore();
+
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: appState),
+        Provider<AlbumKeyStore>.value(value: aks),
+        ListenableProvider<SeenStore>.value(value: seen),
+      ],
+      child: MaterialApp(
+        home: AlbumDetailScreen(
+          album: album,
+          albumService: _MockAlbumService([]),
+          mediaApi: _StubMediaApi(const []),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(seen.lastSeen(album.id), 4);
+
+    appState.applyMediaAdded(album.id, 5);
+    appState.notifyMediaAdded(album.id, 'media-5');
+    await tester.pumpAndSettle();
+
+    expect(seen.lastSeen(album.id), 5);
   });
 }
