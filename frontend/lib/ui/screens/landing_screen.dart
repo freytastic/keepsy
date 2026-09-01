@@ -12,6 +12,7 @@ import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
@@ -154,25 +155,22 @@ class _LandingPageState extends State<LandingPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Read the current default accent securely from AppState
-    final accent = context.watch<AppState>().accent;
-
     return Scaffold(
-      backgroundColor: const Color(0xFF000000), // Simple black screen
+      backgroundColor: Warm.ground,
       body: Center(
         child: Container(
           width: 72,
           height: 72,
           decoration: BoxDecoration(
-            gradient: LinearGradient(
+            gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [accent, accent.withOpacity(0.6)],
+              colors: [Warm.ctaTop, Warm.ctaBottom],
             ),
             borderRadius: BorderRadius.circular(22),
             boxShadow: [
               BoxShadow(
-                color: accent.withOpacity(0.5),
+                color: Warm.ctaTop.withValues(alpha: 0.18),
                 blurRadius: 30,
                 offset: const Offset(0, 8),
               ),

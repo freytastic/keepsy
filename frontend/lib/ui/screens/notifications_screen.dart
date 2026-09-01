@@ -5,8 +5,6 @@ class NotificationsScreen extends StatelessWidget {
   // TODO: implement this screen
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: SizedBox.shrink()
-    );
+    return const Scaffold(body: SizedBox.shrink());
   }
 }

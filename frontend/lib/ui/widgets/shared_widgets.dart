@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
+
 // ui element: orbs glowing in the background
 class GlowOrbs extends StatefulWidget {
   final List<Color> colors;
@@ -19,9 +18,9 @@ class _GlowOrbsState extends State<GlowOrbs>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 10))
-      ..repeat(reverse: true);
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 10))
+          ..repeat(reverse: true);
   }
 
   @override
@@ -92,8 +91,8 @@ class _GlowOrbsState extends State<GlowOrbs>
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(colors: [
-            color.withOpacity(opacity),
-            color.withOpacity(0),
+            color.withValues(alpha: opacity),
+            color.withValues(alpha: 0),
           ]),
         ),
       ),
@@ -126,9 +125,9 @@ class _PrimaryButtonState extends State<PrimaryButton>
   @override
   void initState() {
     super.initState();
-    _shimmer = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))
-      ..repeat();
+    _shimmer =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat();
   }
 
   @override
@@ -139,7 +138,6 @@ class _PrimaryButtonState extends State<PrimaryButton>
 
   @override
   Widget build(BuildContext context) {
-    final accent = context.watch<AppState>().accent;
     return GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) {
@@ -157,12 +155,12 @@ class _PrimaryButtonState extends State<PrimaryButton>
             height: 56,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [accent, accent.withOpacity(0.75)],
+                colors: const [Warm.ctaTop, Warm.ctaBottom],
               ),
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: accent.withOpacity(0.45),
+                  color: Warm.ctaTop.withValues(alpha: 0.18),
                   blurRadius: 24,
                   offset: const Offset(0, 6),
                 ),
@@ -174,8 +172,7 @@ class _PrimaryButtonState extends State<PrimaryButton>
                 children: [
                   Positioned.fill(
                     child: FractionalTranslation(
-                      translation:
-                      Offset(-1.5 + _shimmer.value * 3.0, 0),
+                      translation: Offset(-1.5 + _shimmer.value * 3.0, 0),
                       child: Container(
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(colors: [
@@ -190,19 +187,19 @@ class _PrimaryButtonState extends State<PrimaryButton>
                   Center(
                     child: widget.loading
                         ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2),
-                    )
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2),
+                          )
                         : Text(
-                      widget.label,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.2),
-                    ),
+                            widget.label,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2),
+                          ),
                   ),
                 ],
               ),
@@ -220,14 +217,12 @@ class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final BorderRadius? radius;
-  final bool dark;
 
   const GlassCard({
     super.key,
     required this.child,
     this.padding,
     this.radius,
-    required this.dark,
   });
 
   @override
@@ -235,9 +230,9 @@ class GlassCard extends StatelessWidget {
     return Container(
       padding: padding ?? const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: K.cardCol(dark),
+        color: Warm.stoneBottom,
         borderRadius: radius ?? BorderRadius.circular(20),
-        border: Border.all(color: K.borderCol(dark), width: 0.5),
+        border: Border.all(color: Warm.inkGhost, width: 0.5),
       ),
       child: child,
     );
@@ -273,27 +268,28 @@ class UserAvatar extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (ctx, err, stack) => _buildFallback(initials, context),
+          errorBuilder: (ctx, err, stack) => _buildFallback(initials),
         ),
       );
     }
 
-    return _buildFallback(initials, context);
+    return _buildFallback(initials);
   }
 
-  Widget _buildFallback(String initials, BuildContext context) {
-    final accent = context.watch<AppState>().accent;
+  Widget _buildFallback(String initials) {
     final colors = gradientColors != null
-        ? K.gradColors(gradientColors!)
-        : [accent, accent.withOpacity(0.6)];
+        ? gradientColors!.map(_hexColor).toList()
+        : const [Warm.orbPeach, Warm.orbBlush];
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient:
-        LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+        gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: colors),
       ),
       child: Center(
         child: Text(initials,
@@ -304,6 +300,11 @@ class UserAvatar extends StatelessWidget {
                 letterSpacing: 0.5)),
       ),
     );
+  }
+
+  static Color _hexColor(String hex) {
+    final value = hex.replaceAll('#', '');
+    return Color(int.parse('FF$value', radix: 16));
   }
 }
 

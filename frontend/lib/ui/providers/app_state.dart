@@ -1,28 +1,29 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
 
 // Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
 // so AppState itself stays free of crypto/keystore deps
 typedef AlbumNameResolver = Future<String> Function(
     String albumId, String? nameCt);
 
+typedef MemberNameResolver = Future<String?> Function(
+    String albumId, String memberToken, String? nameCt);
+
 class AppState extends ChangeNotifier {
+  final Duration summaryDebounce;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
 
-  // only accent color for now cuz the login screen needs it
-  Color _accent = K.defaultAccent;
-  bool _isDark = true;
   bool _hasUnreadNotifications = false;
 
-  Color get accent => _accent;
-  bool get isDark => _isDark;
+  AppState({this.summaryDebounce = const Duration(seconds: 2)});
+
   bool get hasUnreadNotifications => _hasUnreadNotifications;
 
   void setUnreadNotifications(bool value) {
@@ -60,6 +61,7 @@ class AppState extends ChangeNotifier {
   void clearDisplayNameCaches() {
     _albumNames.clear();
     _localNameCt.clear();
+    _memberNames.clear();
     notifyListeners();
   }
 
@@ -70,6 +72,7 @@ class AppState extends ChangeNotifier {
     _albums = [];
     _albumNames.clear();
     _localNameCt.clear();
+    _memberNames.clear();
     _syncing.clear();
     _keyBlocks.clear();
     _selfTokens.clear();
@@ -93,6 +96,44 @@ class AppState extends ChangeNotifier {
   void attachAlbumNameResolver(AlbumNameResolver r) {
     _nameResolver = r;
     refreshAlbumNames();
+  }
+
+  // Album scoped keys let removal wipe member name plaintext
+  final Map<String, String> _memberNames = {};
+  static String _memberKey(String albumId, String memberToken) =>
+      '$albumId|$memberToken';
+
+  String? memberDisplayName(String albumId, String memberToken) =>
+      _memberNames[_memberKey(albumId, memberToken)];
+
+  MemberNameResolver? _memberNameResolver;
+  void attachMemberNameResolver(MemberNameResolver r) {
+    _memberNameResolver = r;
+    refreshMemberNames();
+  }
+
+  void refreshMemberNames() {
+    final r = _memberNameResolver;
+    if (r == null) return;
+    for (final a in _albums) {
+      for (final m in a.memberPreviews) {
+        if (m.nameCt == null) continue;
+        unawaited(_resolveMemberName(a.id, m));
+      }
+    }
+  }
+
+  Future<void> _resolveMemberName(String albumId, MemberPreview m) async {
+    final r = _memberNameResolver;
+    if (r == null) return;
+    final name = await r(albumId, m.memberToken, m.nameCt);
+    if (name == null || name.isEmpty) return;
+    // Do not restore plaintext after album removal
+    if (!_albums.any((a) => a.id == albumId)) return;
+    final key = _memberKey(albumId, m.memberToken);
+    if (_memberNames[key] == name) return;
+    _memberNames[key] = name;
+    notifyListeners();
   }
 
   // Directly set a title we already hold in plaintext (eg  right after
@@ -143,8 +184,8 @@ class AppState extends ChangeNotifier {
 
   void setAlbums(List<AlbumModel> newAlbums) {
     // Overlay any locally authored nameCt so a stale GET placeholder can't
-    // regress a title we just PATCHed (create/rename)
-    _albums = newAlbums.map(_overlayLocalNameCt).toList();
+    // regress a title me just PATCHed (create/rename)
+    _albums = _mergeMonotonic(newAlbums.map(_overlayLocalNameCt).toList());
     for (final a in _albums) {
       final t = a.memberToken;
       if (t != null) _selfTokens[a.id] = t;
@@ -157,6 +198,39 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     refreshAlbumNames();
+    refreshMemberNames();
+  }
+
+  // Never replace a newer realtime summary with an older HTTP response
+  List<AlbumModel> _mergeMonotonic(List<AlbumModel> incoming) {
+    if (_albums.isEmpty) return incoming;
+    final held = {for (final a in _albums) a.id: a};
+    final order = {
+      for (var i = 0; i < _albums.length; i++) _albums[i].id: i,
+    };
+
+    final ahead = <AlbumModel>[];
+    final rest = <AlbumModel>[];
+    for (final a in incoming) {
+      final was = held[a.id];
+      if (was == null ||
+          !was.hasSummary ||
+          !a.hasSummary ||
+          a.mediaGeneration >= was.mediaGeneration) {
+        rest.add(a);
+        continue;
+      }
+      ahead.add(a.copyWith(
+        mediaCount: was.mediaCount,
+        mediaGeneration: was.mediaGeneration,
+        latestActivityAt: was.latestActivityAt,
+        previewMedia: was.previewMedia,
+      ));
+    }
+    if (ahead.isEmpty) return incoming;
+    ahead.sort(
+        (x, y) => (order[x.id] ?? 1 << 30).compareTo(order[y.id] ?? 1 << 30));
+    return [...ahead, ...rest];
   }
 
   // Insert a freshly joined album at the front of the home grid. Idempotent
@@ -184,6 +258,7 @@ class AppState extends ChangeNotifier {
 
   void removeAlbum(String albumIdStr) {
     _albums = _albums.where((x) => x.id != albumIdStr).toList();
+    _memberNames.removeWhere((k, _) => k.startsWith('$albumIdStr|'));
     _albumNames.remove(albumIdStr);
     _localNameCt.remove(albumIdStr);
     _keyBlocks.remove(albumIdStr);
@@ -192,17 +267,59 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Prefer list data because single album responses lack shelf summaries
   Future<void> refreshAlbumOnJoin(
       String albumIdStr, AlbumService service) async {
     try {
-      final a = await service.getAlbum(albumIdStr);
-      if (a != null) {
-        prependAlbum(a);
+      final all = await service.getMyAlbums();
+      if (all != null) {
+        setAlbums(all);
         return;
       }
-      final all = await service.getMyAlbums();
-      setAlbums(all);
+      final a = await service.getAlbum(albumIdStr);
+      if (a != null) prependAlbum(a);
     } catch (_) {}
+  }
+
+  // Apply realtime generation and move the album to the front
+  void applyMediaAdded(String albumIdStr, int generation,
+      {PreviewMedia? preview}) {
+    final i = _albums.indexWhere((a) => a.id == albumIdStr);
+    if (i < 0) return;
+    final a = _albums[i];
+    if (generation <= a.mediaGeneration) return;
+
+    // A generation gap requires authoritative summary data
+    if (generation > a.mediaGeneration + 1) _scheduleSummaryRefresh();
+
+    final nextPreview = preview == null
+        ? a.previewMedia
+        : [
+            preview,
+            ...a.previewMedia.where((p) => p.mediaId != preview.mediaId),
+          ].take(3).toList();
+
+    final moved = a.copyWith(
+      mediaCount: a.mediaCount + (generation - a.mediaGeneration),
+      mediaGeneration: generation,
+      latestActivityAt: DateTime.now().toUtc(),
+      previewMedia: nextPreview,
+    );
+    _albums = [moved, ..._albums]..removeAt(i + 1);
+    notifyListeners();
+  }
+
+  Future<void> Function()? _summaryRefresh;
+  Timer? _summaryDebounce;
+  void attachSummaryRefresh(Future<void> Function() r) => _summaryRefresh = r;
+
+  void refreshSummarySoon() => _scheduleSummaryRefresh();
+
+  void _scheduleSummaryRefresh() {
+    final r = _summaryRefresh;
+    if (r == null) return;
+    _summaryDebounce?.cancel();
+    _summaryDebounce = Timer(summaryDebounce, () => unawaited(r()));
   }
 
   // last (albumId, mediaId) seen on e2ee.media_added
@@ -316,27 +433,11 @@ class AppState extends ChangeNotifier {
     _userId = data['id'];
     _keepsyId = data['keepsy_id'] as String?;
 
-    if (data['accent_color'] != null) {
-      _accent = K.hexColor(data['accent_color']);
-    }
-    if (data['theme'] != null) {
-      _isDark = data['theme'] == 'dark';
-    }
     notifyListeners();
   }
 
   void setEmail(String? email) {
     _email = email;
-    notifyListeners();
-  }
-
-  void setAccent(Color c) {
-    _accent = c;
-    notifyListeners();
-  }
-
-  void setTheme(bool dark) {
-    _isDark = dark;
     notifyListeners();
   }
 
@@ -375,6 +476,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _realtimeSub?.cancel();
+    _summaryDebounce?.cancel();
     super.dispose();
   }
 }

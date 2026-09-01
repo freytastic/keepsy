@@ -248,13 +248,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final compactCopyTop =
         compactHeroBottom + _kCompactContentGap + compactSlack / 2;
 
-    // Keep system icons visible on the cream background
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark, // Android
-        statusBarBrightness: Brightness.light, // iOS
-      ),
+      value: Warm.overlayOnGround,
       child: Scaffold(
         backgroundColor: Warm.ground,
         resizeToAvoidBottomInset: false,
