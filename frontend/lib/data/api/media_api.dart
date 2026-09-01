@@ -85,33 +85,36 @@ class MediaApi implements MediaApiInterface {
     }
   }
 
-  Future<void> _confirmUpload(String albumId, String mediaId) async {
-    await _api.post(
+  // Zero preserves compatibility with servers that return no generation
+  Future<int> _confirmUpload(String albumId, String mediaId) async {
+    final resp = await _api.post(
       '/albums/$albumId/media/confirm',
       body: {'media_id': mediaId},
     );
+    if (resp.body.isEmpty) return 0;
+    try {
+      final json = jsonDecode(resp.body) as Map<String, dynamic>;
+      return (json['media_generation'] as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
   }
 
-  // Upload runs the full §5.1 sequence : presign → S3 PUT → confirm. The
-  // envelope must come from FilePipeline.prepareUpload. Returns the media_id
-  // committed by the server (same as env.mediaIdString unless the server
-  // overrode the suggestion)
-  Future<String> upload({
+  Future<UploadResult> upload({
     required String albumId,
     required UploadEnvelope envelope,
   }) async {
     final pre = await _requestUploadURL(albumId: albumId, env: envelope);
     await _putToS3(pre.uploadURL, envelope.cipherBytes, pre.requiredHeader);
-    // thumb PUT before confirm. ConfirmUpload HEADs both S3 objects
-    // skipping the thumb PUT would make confirm fail + drop the pending row
     if (envelope.hasThumb && pre.thumbUploadURL != null) {
       await _putToS3(pre.thumbUploadURL!, envelope.thumbCipherBytes!,
           pre.thumbRequiredHeader);
     }
-    await _confirmUpload(albumId, pre.mediaId);
-    return pre.mediaId;
+    final generation = await _confirmUpload(albumId, pre.mediaId);
+    return UploadResult(mediaId: pre.mediaId, mediaGeneration: generation);
   }
 
+  @override
   Future<List<MediaRecord>> listMedia(String albumId) async {
     final resp = await _api.get('/albums/$albumId/media');
     final raw =
@@ -123,6 +126,7 @@ class MediaApi implements MediaApiInterface {
   // refuses pending rows : verifies caller is a member via RequireMember
   // asset=='thumb' requests the thumb object instead of the file
   // server 404s if the row has no thumb
+  @override
   Future<String> requestDownloadURL(String albumId, String mediaId,
       {String asset = 'file'}) async {
     final path = asset == 'thumb'
@@ -136,6 +140,7 @@ class MediaApi implements MediaApiInterface {
   // DownloadCiphertext fetches the bytes from a presigned URL. Bypasses
   // ApiClient since the URL carries auth in the query string and we dont
   // want a Bearer header (would fail S3 sig validation) or auto refresh on 401
+  @override
   Future<Uint8List> downloadCiphertext(String url) async {
     final resp = await _http.get(Uri.parse(url));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
@@ -164,4 +169,11 @@ class _RequestUploadResponse {
     this.thumbUploadURL,
     this.thumbRequiredHeader = const {},
   });
+}
+
+class UploadResult {
+  final String mediaId;
+  final int mediaGeneration;
+
+  const UploadResult({required this.mediaId, required this.mediaGeneration});
 }

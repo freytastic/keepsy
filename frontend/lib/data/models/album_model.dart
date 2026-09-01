@@ -1,3 +1,5 @@
+import 'package:keepsy/data/models/album_summary.dart';
+
 class AlbumModel {
   final String id;
   // Raw base64 name_ct as stored server side (sealed under the album MK, or a
@@ -12,20 +14,52 @@ class AlbumModel {
   // entries where the server hasnt resolved per album member context yet
   final String? memberToken;
 
+  final int mediaCount;
+  final int activeMemberCount;
+  final DateTime? latestActivityAt;
+  final int mediaGeneration;
+  final List<PreviewMedia> previewMedia;
+  final List<MemberPreview> memberPreviews;
+
+  // False when summary values are unknown rather than zero
+  final bool hasSummary;
+
   AlbumModel({
     required this.id,
     required this.nameCt,
     required this.createdAt,
     required this.updatedAt,
     this.memberToken,
+    this.mediaCount = 0,
+    this.activeMemberCount = 0,
+    this.latestActivityAt,
+    this.mediaGeneration = 0,
+    this.previewMedia = const [],
+    this.memberPreviews = const [],
+    this.hasSummary = false,
   });
 
-  AlbumModel copyWith({String? nameCt}) => AlbumModel(
+  AlbumModel copyWith({
+    String? nameCt,
+    int? mediaCount,
+    DateTime? latestActivityAt,
+    int? mediaGeneration,
+    List<PreviewMedia>? previewMedia,
+    bool? hasSummary,
+  }) =>
+      AlbumModel(
         id: id,
         nameCt: nameCt ?? this.nameCt,
         createdAt: createdAt,
         updatedAt: updatedAt,
         memberToken: memberToken,
+        mediaCount: mediaCount ?? this.mediaCount,
+        activeMemberCount: activeMemberCount,
+        latestActivityAt: latestActivityAt ?? this.latestActivityAt,
+        mediaGeneration: mediaGeneration ?? this.mediaGeneration,
+        previewMedia: previewMedia ?? this.previewMedia,
+        memberPreviews: memberPreviews,
+        hasSummary: hasSummary ?? this.hasSummary,
       );
 
   factory AlbumModel.fromJson(Map<String, dynamic> json) {
@@ -39,6 +73,28 @@ class AlbumModel {
           ? DateTime.parse(json['updated_at'])
           : DateTime.now(),
       memberToken: json['member_token'] as String?,
+      hasSummary: json.containsKey('media_generation'),
+      mediaCount: json['media_count'] as int? ?? 0,
+      activeMemberCount: json['active_member_count'] as int? ?? 0,
+      latestActivityAt: json['latest_activity_at'] != null
+          ? DateTime.tryParse(json['latest_activity_at'])
+          : null,
+      mediaGeneration: (json['media_generation'] as num?)?.toInt() ?? 0,
+      previewMedia: _list(json['preview_media'], PreviewMedia.tryFromJson),
+      memberPreviews: _list(json['member_previews'], MemberPreview.tryFromJson),
     );
+  }
+
+  // Drop malformed summary rows without failing the album list
+  static List<T> _list<T>(
+      dynamic raw, T? Function(Map<String, dynamic>) parse) {
+    if (raw is! List) return const [];
+    final out = <T>[];
+    for (final e in raw) {
+      if (e is! Map<String, dynamic>) continue;
+      final v = parse(e);
+      if (v != null) out.add(v);
+    }
+    return out;
   }
 }

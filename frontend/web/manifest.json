@@ -1,11 +1,11 @@
 {
-    "name": "frontend",
-    "short_name": "frontend",
+    "name": "Keepsy",
+    "short_name": "Keepsy",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F6F3EE",
+    "theme_color": "#F6F3EE",
+    "description": "Private shared photo albums",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

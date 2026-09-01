@@ -38,7 +38,8 @@ type MediaStore interface {
 	// re checking (atomically with the insert) that epochTag is still current
 	// and that no rotation is pending
 	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
-	MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) error
+	MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) (int64, error)
+	MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error)
 	DeletePending(ctx context.Context, mediaID, albumID uuid.UUID) error
 	GetByID(ctx context.Context, mediaID, albumID uuid.UUID) (*model.Media, error)
 	ListConfirmed(ctx context.Context, albumID uuid.UUID) ([]model.Media, error)
@@ -263,31 +264,38 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 // ConfirmUpload validates the S3 object against the claimed size + sha256
 // On match : flips confirmed=TRUE. On mismatch : DELETEs the S3 object +
 // pending row. The client gets a typed error so it can retry the whole flow
-func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID) error {
+func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID) (int64, error) {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
-			return apierr.NotFound("media not found")
+			return 0, apierr.NotFound("media not found")
 		}
-		return apierr.Internal("failed to read media row").WithCause(err)
+		return 0, apierr.Internal("failed to read media row").WithCause(err)
 	}
 	if row.Confirmed {
-		// Idempotent : repeated confirms are a no op rather than 409
-		return nil
+		// Return this row's generation so retries cannot mark newer media as seen
+		if row.AlbumSeq != nil {
+			return *row.AlbumSeq, nil
+		}
+		g, gerr := s.repo.MediaGeneration(ctx, albumID)
+		if gerr != nil {
+			return 0, apierr.Internal("failed to read generation").WithCause(gerr)
+		}
+		return g, nil
 	}
 
 	gotSize, gotSHA256B64, err := s.s3.HeadObject(ctx, row.StorageKey)
 	if err != nil {
-		return apierr.Validation("upload not found on storage").WithCause(err)
+		return 0, apierr.Validation("upload not found on storage").WithCause(err)
 	}
 	if gotSize != row.BlobSize {
 		_ = s.dropOrphan(ctx, row)
-		return apierr.Validation("uploaded blob size mismatch ; pending row dropped")
+		return 0, apierr.Validation("uploaded blob size mismatch ; pending row dropped")
 	}
 	wantSHA256B64 := base64.StdEncoding.EncodeToString(row.BlobSHA256)
 	if gotSHA256B64 != "" && gotSHA256B64 != wantSHA256B64 {
 		_ = s.dropOrphan(ctx, row)
-		return apierr.Validation("uploaded blob sha256 mismatch ; pending row dropped")
+		return 0, apierr.Validation("uploaded blob sha256 mismatch ; pending row dropped")
 	}
 
 	// if the row has a thumb, the matching S3 object MUST exist + match
@@ -297,21 +305,32 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 		thGot, thGotSHA256B64, err := s.s3.HeadObject(ctx, *row.ThumbKey)
 		if err != nil {
 			_ = s.dropOrphan(ctx, row)
-			return apierr.Validation("thumb upload not found on storage ; pending row dropped").WithCause(err)
+			return 0, apierr.Validation("thumb upload not found on storage ; pending row dropped").WithCause(err)
 		}
 		if row.ThumbSize == nil || thGot != *row.ThumbSize {
 			_ = s.dropOrphan(ctx, row)
-			return apierr.Validation("uploaded thumb size mismatch ; pending row dropped")
+			return 0, apierr.Validation("uploaded thumb size mismatch ; pending row dropped")
 		}
 		wantThumbSHA256B64 := base64.StdEncoding.EncodeToString(row.ThumbSHA256)
 		if thGotSHA256B64 != "" && thGotSHA256B64 != wantThumbSHA256B64 {
 			_ = s.dropOrphan(ctx, row)
-			return apierr.Validation("uploaded thumb sha256 mismatch ; pending row dropped")
+			return 0, apierr.Validation("uploaded thumb sha256 mismatch ; pending row dropped")
 		}
 	}
 
-	if err := s.repo.MarkConfirmed(ctx, mediaID, albumID); err != nil {
-		return apierr.Internal("failed to mark confirmed").WithCause(err)
+	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID)
+	if err != nil {
+		if errors.Is(err, repository.ErrMediaNotFound) {
+			// Re read the row's generation after losing a concurrent confirm
+			if again, rerr := s.repo.GetByID(ctx, mediaID, albumID); rerr == nil &&
+				again.AlbumSeq != nil {
+				return *again.AlbumSeq, nil
+			}
+			if g, gerr := s.repo.MediaGeneration(ctx, albumID); gerr == nil {
+				return g, nil
+			}
+		}
+		return 0, apierr.Internal("failed to mark confirmed").WithCause(err)
 	}
 
 	// Fanout e2ee.media_added to every active member EXCEPT the uploader
@@ -358,9 +377,10 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 				rec["thumb_sha256"] = base64.StdEncoding.EncodeToString(row.ThumbSHA256)
 			}
 			if err := s.notifier.EmitToUsers(bg, ids, ws.EventMediaAdded, map[string]any{
-				"album_id": albumID.String(),
-				"media_id": mediaID.String(),
-				"record":   rec,
+				"album_id":         albumID.String(),
+				"media_id":         mediaID.String(),
+				"record":           rec,
+				"media_generation": generation,
 			}); err != nil {
 				slog.Warn("media_added: emit failed", "err", err, "album_id", albumID)
 			}
@@ -368,7 +388,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 	} else {
 		slog.Warn("media_added: notifier or lookup is nil — fanout skipped", "album_id", albumID)
 	}
-	return nil
+	return generation, nil
 }
 
 // DownloadURLResult is the per request presigned GET URL. TTL is short on

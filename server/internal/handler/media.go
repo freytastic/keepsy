@@ -159,11 +159,14 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.Validation("invalid media_id").WithCause(err))
 		return
 	}
-	if err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID, uploaderUserID); err != nil {
+	generation, err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID, uploaderUserID)
+	if err != nil {
 		apierr.Write(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// Let the uploader advance its seen watermark
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"media_generation": generation})
 }
 
 func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {

@@ -6,16 +6,17 @@ import 'package:keepsy/data/api/api_client.dart';
 class AlbumService {
   final ApiClient _client = ApiClient();
 
-  Future<List<AlbumModel>> getMyAlbums() async {
+  // Null distinguishes a failed refresh from an empty shelf
+  Future<List<AlbumModel>?> getMyAlbums() async {
     try {
       final response = await _client.get('/albums');
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
         return data.map((json) => AlbumModel.fromJson(json)).toList();
       }
-      return [];
+      return null;
     } catch (_) {
-      return [];
+      return null;
     }
   }
 

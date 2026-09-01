@@ -17,8 +17,6 @@ Future<void> _pump(
         displayName: 'Sami',
         digits: _digits,
         state: state,
-        dark: true,
-        accent: Colors.teal,
         onVerify: onVerify ?? () {},
       ),
     ),

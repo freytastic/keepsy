@@ -21,6 +21,8 @@ type Media struct {
 	MimeType      *string   `json:"mime_type,omitempty"`
 	Confirmed     bool      `json:"confirmed"`
 	CreatedAt     time.Time `json:"created_at"`
+	// Confirm generation used for server ordering only
+	AlbumSeq *int64 `json:"-"`
 	// per file thumb has its own DEK wrapped under same MK as the file
 	// DEK. All four nullable : videos + pre §5.3 rows wont have thumbs
 	ThumbWrapNonce []byte `json:"thumb_wrap_nonce,omitempty"`

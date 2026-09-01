@@ -31,7 +31,8 @@ MediaCacheKey _fileK(String id, {String album = 'A', int epoch = 0}) =>
     MediaCacheKey(
         albumId: album, mediaId: id, epochTag: epoch, asset: CacheAsset.file);
 
-Uint8List _bytes(int n) => Uint8List.fromList(List.generate(n, (i) => i & 0xFF));
+Uint8List _bytes(int n) =>
+    Uint8List.fromList(List.generate(n, (i) => i & 0xFF));
 
 void main() {
   setUpAll(() {
@@ -143,5 +144,88 @@ void main() {
     expect(File('${fresh.path}/old.thumb.bin').existsSync(), isFalse);
     await c.close();
     fresh.deleteSync(recursive: true);
+  });
+  group('cover pinning', () {
+    MediaCacheKey thumbK(String id, {String album = 'A'}) => MediaCacheKey(
+        albumId: album, mediaId: id, epochTag: 0, asset: CacheAsset.thumb);
+
+    test('eviction drops blobs before any thumb', () async {
+      for (final id in ['m1', 'm2']) {
+        await cache.writeRecord(_rec(id));
+        await cache.writeBlob(thumbK(id), _bytes(60));
+        await cache.writeBlob(_fileK(id), _bytes(600));
+      }
+      expect(await cache.readBlob(_fileK('m1')), isNull);
+      expect(await cache.readBlob(thumbK('m1')), isNotNull);
+      expect(await cache.readBlob(thumbK('m2')), isNotNull);
+    });
+
+    test('a pinned cover survives a sweep that evicts an unpinned one',
+        () async {
+      await cache.setCovers('A', ['m1']);
+      for (final id in ['m1', 'm2', 'm3']) {
+        await cache.writeRecord(_rec(id));
+        await cache.writeBlob(thumbK(id), _bytes(400));
+      }
+
+      expect(await cache.readBlob(thumbK('m1')), isNotNull,
+          reason: 'pinned cover must survive');
+      expect(await cache.readBlob(thumbK('m2')), isNull,
+          reason: 'oldest unpinned thumb is the one that goes');
+      expect(await cache.readBlob(thumbK('m3')), isNotNull);
+    });
+
+    test('cover refs do not outlive the media they point at', () async {
+      await cache.writeRecord(_rec('m1'));
+      await cache.setCovers('A', ['m1']);
+      await cache.invalidate('m1');
+      expect(await cache.coversFor('A'), isEmpty);
+    });
+
+    test('clearAlbum drops that album covers', () async {
+      await cache.writeRecord(_rec('m1'));
+      await cache.setCovers('A', ['m1']);
+      await cache.clearAlbum('A');
+      expect(await cache.coversFor('A'), isEmpty);
+    });
+
+    test('setCovers replaces the previous three', () async {
+      await cache.setCovers('A', ['m1', 'm2', 'm3']);
+      await cache.setCovers('A', ['m4']);
+      expect(await cache.coversFor('A'), ['m4']);
+    });
+  });
+
+  group('record upserts', () {
+    MediaCacheKey thumbK(String id) => MediaCacheKey(
+        albumId: 'A', mediaId: id, epochTag: 0, asset: CacheAsset.thumb);
+
+    test('rewriting a record keeps its byte accounting', () async {
+      await cache.writeRecord(_rec('m1'));
+      await cache.writeBlob(thumbK('m1'), _bytes(120));
+      final counted = await cache.totalBytes();
+      expect(counted, greaterThan(0));
+
+      await cache.writeRecord(_rec('m1', blobSize: 900));
+
+      expect(await cache.totalBytes(), counted,
+          reason: 'a REPLACE would zero the columns and orphan the file');
+      expect(await cache.readBlob(thumbK('m1')), isNotNull);
+    });
+
+    test('a preview record never overwrites a full one', () async {
+      await cache.writeRecord(_rec('m1', blobSize: 900));
+      await cache.writeRecordIfAbsent(_rec('m1', blobSize: 0));
+      expect((await cache.readRecord('m1'))!.blobSize, 900);
+    });
+
+    test('a preview record fills in a bytes-only placeholder', () async {
+      await cache.writeBlob(thumbK('m1'), _bytes(64));
+      expect(await cache.readRecord('m1'), isNull);
+
+      await cache.writeRecordIfAbsent(_rec('m1'));
+      expect((await cache.readRecord('m1'))?.id, 'm1');
+      expect(await cache.readBlob(thumbK('m1')), isNotNull);
+    });
   });
 }

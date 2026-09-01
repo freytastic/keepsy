@@ -20,6 +20,7 @@ import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
 import 'package:keepsy/data/storage/identity_pin_store.dart';
+import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/display_name.dart';
@@ -39,9 +40,12 @@ import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/e2ee/prekey_api.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/shelf/seen_store_impl.dart';
+import 'package:keepsy/ui/shelf/shelf_covers_impl.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
 
 // Top-level so the global error boundary in this file can resolve a
 // messenger and route. Lives in ui/ — the data layer must not see it.
@@ -172,6 +176,21 @@ void main() async {
     }
     return resolveAlbumName(albumKeyStore, b, nameCt);
   });
+  appState.attachMemberNameResolver((albumId, memberToken, nameCt) async {
+    if (nameCt == null || nameCt.isEmpty) return null;
+    final key = NameCache.memberKey(albumId, memberToken);
+    final cached = nameCache.get(key, nameCt);
+    if (cached != null) return cached;
+    final b = _uuidStringToBytes(albumId);
+    if (b == null) return null;
+    final token = base64.decode(base64.normalize(memberToken));
+    final opened =
+        await SealedName.openMemberName(albumKeyStore, b, token, nameCt);
+    if (opened != null && appState.albums.any((a) => a.id == albumId)) {
+      nameCache.put(key, opened, nameCt);
+    }
+    return opened;
+  });
   // Roster pins, verification claims, signer bindings, and creator markers are
   // sealed under cache_root_key and survive normal logout
   final identityPinStore =
@@ -205,6 +224,33 @@ void main() async {
   final mediaSealedCache =
       await MediaSealedCache.open(cacheRootKey: cacheRootKey);
   final mediaPlaintextCache = MediaPlaintextCache();
+  // Seen state must survive media cache eviction
+  final seenStore = await SealedSeenStore.open(cacheRootKey: cacheRootKey);
+  final shelfCovers = ShelfCoversImpl(
+    sealedCache: mediaSealedCache,
+    api: mediaApi,
+    albumKeys: albumKeyStore,
+  );
+  // Unknown albums start at their current generation
+  void seedWatermarks() {
+    for (final a in appState.albums) {
+      // Do not seed from an unknown generation
+      if (!a.hasSummary) continue;
+      if (!seenStore.knows(a.id)) {
+        unawaited(seenStore.markSeen(a.id, a.mediaGeneration));
+      }
+    }
+  }
+
+  appState.addListener(seedWatermarks);
+  seedWatermarks();
+
+  // Reconcile gaps in realtime summary data
+  appState.attachSummaryRefresh(() async {
+    final fresh = await albumService.getMyAlbums();
+    if (fresh != null) appState.setAlbums(fresh);
+  });
+
   final mediaCacheManager = MediaCacheManager(
     plaintext: mediaPlaintextCache,
     ciphertext: mediaSealedCache,
@@ -287,7 +333,10 @@ void main() async {
     dropDirectory: (albumId, token) => memberDirectory.drop(albumId, token),
     wipeLocalAlbum: (albumId) async {
       final albumStr = _uuidStringFromBytes(albumId);
+      // Drain cover work before clearing L2
+      await shelfCovers.forget(albumStr);
       await mediaCacheManager.clearAlbum(albumStr);
+      await seenStore.forget(albumStr);
       await albumKeyStore.deleteAlbumMKs(albumId);
       // Mark the album gone FIRST : this pops the open screen (setting
       // _accessLost) and makes in flight resolvers skip re caching, so the
@@ -343,7 +392,19 @@ void main() async {
       } else {
         unawaited(mediaCacheManager.prefetch(albumStr, mediaStr));
       }
+      final gen = ev.payload['media_generation'];
+      if (gen is int) {
+        appState.applyMediaAdded(albumStr, gen,
+            preview: recJson is Map<String, dynamic>
+                ? PreviewMedia.tryFromRecordJson(recJson)
+                : null);
+      }
       appState.notifyMediaAdded(albumStr, mediaStr);
+    } else if (ev.type == 'e2ee.member_added') {
+      final albumStr = ev.payload['album_id'] as String?;
+      if (albumStr == null) return;
+      appState.refreshSummarySoon();
+      appState.notifyMemberChanged(albumStr);
     } else if (ev.type == 'e2ee.member_revoked') {
       // Either I was removed (wipe this album's local data) or another member
       // was (drop them from the directory so the roster re fetches). The server
@@ -368,6 +429,7 @@ void main() async {
         memberRemoval.onSelfRemoved(albumId).catchError((_) {});
       } else {
         memberRemoval.onOtherRemoved(albumId, token);
+        appState.refreshSummarySoon();
       }
       // Tell any open album screen its roster changed so the removed member
       // disappears live (self case pops the screen anyway; harmless there).
@@ -426,9 +488,13 @@ void main() async {
         Provider<IdentityPinStore>.value(value: identityPinStore),
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
+        Provider<MediaSealedCache>.value(value: mediaSealedCache),
+        ListenableProvider<ShelfCovers>.value(value: shelfCovers),
+        ListenableProvider<SeenStore>.value(value: seenStore),
         Provider<SodiumSumo>.value(value: sodium),
       ],
-      child: KeepsyApp(mediaCacheManager: mediaCacheManager),
+      child: KeepsyApp(
+          mediaCacheManager: mediaCacheManager, shelfCovers: shelfCovers),
     ),
   );
 }
@@ -518,13 +584,21 @@ void _showApiError(ApiError err) {
 
 class KeepsyApp extends StatefulWidget {
   final MediaCacheManager mediaCacheManager;
-  const KeepsyApp({super.key, required this.mediaCacheManager});
+  final ShelfCoversImpl shelfCovers;
+  const KeepsyApp({
+    super.key,
+    required this.mediaCacheManager,
+    required this.shelfCovers,
+  });
 
   @override
   State<KeepsyApp> createState() => _KeepsyAppState();
 }
 
 class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
+  // Hides shelf photos from task switcher snapshots
+  bool _shielded = false;
+
   @override
   void initState() {
     super.initState();
@@ -544,28 +618,41 @@ class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
   // every upload and forces L2→decrypt for everything visible on resume
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Task switcher snapshots precede pause
+    final shield = state != AppLifecycleState.resumed;
+    if (shield != _shielded) setState(() => _shielded = shield);
+
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       widget.mediaCacheManager.onAppPaused();
+      widget.shelfCovers.suspend();
+    } else if (state == AppLifecycleState.resumed) {
+      widget.shelfCovers.resume();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.select((AppState s) => s.isDark);
-    final accent = context.select((AppState s) => s.accent);
-
     return MaterialApp(
       title: 'Keepsy',
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavigatorKey,
       scaffoldMessengerKey: rootMessengerKey,
-      theme: K.theme(isDark, accent),
+      theme: Warm.theme,
       home: const LandingPage(),
       routes: {
         '/login': (_) => const OnboardingScreen(),
       },
+      builder: (context, child) => Stack(
+        children: [
+          if (child != null) child,
+          if (_shielded)
+            const Positioned.fill(
+              child: ColoredBox(color: Warm.ground),
+            ),
+        ],
+      ),
     );
   }
 }

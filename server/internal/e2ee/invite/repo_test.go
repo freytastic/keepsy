@@ -140,17 +140,29 @@ func TestDeliverMember_WritesRowsAndConsumesOPK(t *testing.T) {
 // member_token, clears revoked_at, resets role to member, and upserts the fresh
 // wraps (no unique/PK collision), rather than raising ErrAlreadyMember
 func TestDeliverMember_ReactivatesRevokedMember(t *testing.T) {
-	repo, _, pool := testRepo(t)
+	repo, linker, pool := testRepo(t)
 	ctx := context.Background()
 
 	albumID := uuid.New()
 	targetID := uuid.New()
+	senderID := uuid.New()
+	senderToken := randToken(t)
 	if _, err := pool.Exec(ctx, `INSERT INTO albums (id, name_ct) VALUES ($1, $2)`, albumID, []byte("nm")); err != nil {
 		t.Fatalf("seed album: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, keepsy_id) VALUES ($1, $2, $3)`,
 		targetID, targetID[:], targetID.String()); err != nil {
 		t.Fatalf("seed target: %v", err)
+	}
+	// Seed the sender required by the epoch wrap foreign key
+	senderSealed, err := linker.Seal(senderID, senderToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO album_member_identities (member_token, user_handle, user_id_enc, album_id) VALUES ($1, $2, $3, $4)`,
+		senderToken, linker.Hash(senderID), senderSealed, albumID); err != nil {
+		t.Fatalf("seed sender amid: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM album_epoch_wraps WHERE album_id = $1`, albumID)
@@ -161,7 +173,7 @@ func TestDeliverMember_ReactivatesRevokedMember(t *testing.T) {
 	})
 
 	first, err := repo.DeliverMember(ctx, DeliverMemberInput{
-		AlbumID: albumID, UserID: targetID, SenderToken: randToken(t),
+		AlbumID: albumID, UserID: targetID, SenderToken: senderToken,
 		EKPub: make([]byte, 32), Envelopes: envs(0, 1),
 	})
 	if err != nil {
@@ -178,7 +190,7 @@ func TestDeliverMember_ReactivatesRevokedMember(t *testing.T) {
 
 	// Re invite the revoked member: must succeed and reuse the same token
 	second, err := repo.DeliverMember(ctx, DeliverMemberInput{
-		AlbumID: albumID, UserID: targetID, SenderToken: randToken(t),
+		AlbumID: albumID, UserID: targetID, SenderToken: senderToken,
 		EKPub: make([]byte, 32), Envelopes: envs(0, 1, 2),
 	})
 	if err != nil {
@@ -202,11 +214,11 @@ func TestDeliverMember_ReactivatesRevokedMember(t *testing.T) {
 		t.Fatalf("role = %q, want member (rejoin as plain member)", role)
 	}
 
-	// Exactly one identity row for the user (slot preserved), and wraps upserted
-	// to cover epochs 0..2 with no duplicate/PK collision
 	var idCount, wrapCount int
 	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM album_member_identities WHERE album_id = $1`, albumID,
+		`SELECT count(*) FROM album_member_identities
+		 WHERE album_id = $1 AND user_handle = $2`,
+		albumID, linker.Hash(targetID),
 	).Scan(&idCount); err != nil {
 		t.Fatal(err)
 	}

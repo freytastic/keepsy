@@ -22,8 +22,9 @@ import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
@@ -51,6 +52,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _loadingMembers = true;
   bool _loadingMedia = true;
   bool _uploading = false;
+  bool _markedOpenSeen = false;
 
   //  track the last (album,media) tuple we acted on so a
   // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
@@ -79,6 +81,24 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _appState = next;
       _appState!.addListener(_onAppStateChange);
     }
+    if (!_markedOpenSeen) {
+      _markedOpenSeen = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_seenStore()?.markSeen(
+                widget.album.id, _currentMediaGeneration()) ??
+            Future<void>.value());
+      });
+    }
+  }
+
+  int _currentMediaGeneration() {
+    final state = _appState;
+    if (state == null) return widget.album.mediaGeneration;
+    for (final album in state.albums) {
+      if (album.id == widget.album.id) return album.mediaGeneration;
+    }
+    return widget.album.mediaGeneration;
   }
 
   void _onAppStateChange() {
@@ -112,7 +132,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final mid = s.lastMediaAddedMediaId;
       if (mid != null && mid != _lastSeenMediaAddedId) {
         _lastSeenMediaAddedId = mid;
-        _loadMedia();
+        _loadMedia(markSeenThrough: _currentMediaGeneration());
       }
     }
   }
@@ -148,6 +168,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // memberToken -> roster trust shown by chips and the key change banner
   // Epoch signing authority and install blocks are tracked separately
   Map<String, TrustState> _trust = {};
+
+  SeenStore? _seenStore() {
+    try {
+      return context.read<SeenStore>();
+    } catch (_) {
+      return null;
+    }
+  }
 
   IdentityTrust? _trustSvc() {
     try {
@@ -202,10 +230,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         await trust.safetyNumber(albumId: albumIdBytes, peerIkPub: ik);
     if (!mounted) return;
 
-    final app = context.read<AppState>();
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: K.bg(app.isDark),
+      backgroundColor: Warm.ground,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -213,8 +240,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         displayName: _memberName(m),
         digits: digits,
         state: state,
-        dark: app.isDark,
-        accent: app.accent,
         // verifies the key the user was ACTUALLY SHOWN, not whatever the
         // roster happens to say by the time they tap
         onVerify: () async {
@@ -260,10 +285,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         await trust.safetyNumber(albumId: albumIdBytes, peerIkPub: ik);
     if (!mounted) return;
 
-    final app = context.read<AppState>();
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: K.bg(app.isDark),
+      backgroundColor: Warm.ground,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -271,8 +295,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         displayName: name ?? 'this member',
         digits: digits,
         state: TrustState.changed,
-        dark: app.isDark,
-        accent: app.accent,
         onVerify: () async {
           await trust.markVerified(
               albumId: albumIdBytes, memberToken: tokenB64, peerIkPub: ik);
@@ -531,7 +553,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
-  Future<void> _loadMedia() async {
+  Future<void> _loadMedia({int? markSeenThrough}) async {
     try {
       final items = await _media.listMedia(widget.album.id);
       if (mounted) {
@@ -539,6 +561,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           _items = items;
           _loadingMedia = false;
         });
+        if (markSeenThrough != null) {
+          await _seenStore()?.markSeen(widget.album.id, markSeenThrough);
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _loadingMedia = false);
@@ -575,7 +600,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         mediaType: 'photo',
         mimeType: picked.mimeType ?? 'image/jpeg',
       );
-      await _media.upload(albumId: widget.album.id, envelope: env);
+      final result =
+          await _media.upload(albumId: widget.album.id, envelope: env);
+      if (result.mediaGeneration > 0 && mounted) {
+        await _seenStore()?.markSeen(widget.album.id, result.mediaGeneration);
+      }
       // Seed before _loadMedia : the grid rebuild that fires when setState
       // swaps _items will hit L1 instead of going to S3
       await cache.seedFromUpload(albumId: widget.album.id, env: env);
@@ -601,8 +630,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final dark = state.isDark;
-    final accent = state.accent;
     final syncing = state.isSyncing(widget.album.id);
     // A block survives failed sync attempts and disables uploads until a
     // successful catch up reaches the refused epoch
@@ -619,24 +646,24 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
 
     return Scaffold(
-      backgroundColor: K.bg(dark),
+      backgroundColor: Warm.ground,
       appBar: AppBar(
-        backgroundColor: K.bg(dark),
+        backgroundColor: Warm.ground,
         elevation: 0,
         title: Text(
           state.albumDisplayName(widget.album.id) ?? 'Album',
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-              color: K.t1(dark), fontSize: 18, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+              color: Warm.ink, fontSize: 18, fontWeight: FontWeight.w700),
         ),
-        iconTheme: IconThemeData(color: K.t1(dark)),
+        iconTheme: const IconThemeData(color: Warm.ink),
         actions: [
           IconButton(
-            icon: Icon(Icons.person_add_outlined, color: K.t2(dark)),
+            icon: const Icon(Icons.person_add_outlined, color: Warm.inkSoft),
             onPressed: _openAddMember,
           ),
           PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, color: K.t2(dark)),
+            icon: const Icon(Icons.more_vert, color: Warm.inkSoft),
             onSelected: (v) {
               if (v == 'leave') _leave();
             },
@@ -652,7 +679,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       floatingActionButton: FloatingActionButton(
         onPressed:
             (syncing || _uploading || keyBlock != null) ? null : _pickAndUpload,
-        backgroundColor: accent,
+        backgroundColor: Warm.ctaTop,
         child: _uploading
             ? const SizedBox(
                 width: 18,
@@ -667,8 +694,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           _MemberChipsRow(
               members: _members,
               loading: _loadingMembers,
-              dark: dark,
-              accent: accent,
               resolvedNames: memberDisplayNames,
               trust: _trust,
               onTapMember: _openSafetyNumber,
@@ -677,14 +702,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               myToken: widget.album.memberToken),
           if (keyBlock != null)
             _KeyBlockBanner(
-              dark: dark,
               block: keyBlock,
               onVerify: () => _verifyBlockingSigner(keyBlock),
               onRetry: _retryKeySync,
             ),
           if (_changedKeyMembers.isNotEmpty)
             _KeyChangeBanner(
-              dark: dark,
               members: _changedKeyMembers,
               nameOf: _memberName,
               onTap: _openSafetyNumber,
@@ -696,7 +719,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 : _MediaGrid(
                     items: _items,
                     loading: _loadingMedia,
-                    dark: dark,
                   ),
           ),
         ],
@@ -726,12 +748,10 @@ class _SyncingPlaceholder extends StatelessWidget {
 class _MediaGrid extends StatelessWidget {
   final List<MediaRecord> items;
   final bool loading;
-  final bool dark;
 
   const _MediaGrid({
     required this.items,
     required this.loading,
-    required this.dark,
   });
 
   @override
@@ -740,7 +760,7 @@ class _MediaGrid extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
     if (items.isEmpty) {
-      return _MediaEmpty(dark: dark);
+      return const _MediaEmpty();
     }
     final cache = context.read<MediaCacheManager>();
     return GridView.builder(
@@ -773,8 +793,7 @@ class _MediaGrid extends StatelessWidget {
 }
 
 class _MediaEmpty extends StatelessWidget {
-  final bool dark;
-  const _MediaEmpty({required this.dark});
+  const _MediaEmpty();
 
   @override
   Widget build(BuildContext context) {
@@ -782,16 +801,17 @@ class _MediaEmpty extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.photo_library_outlined, size: 48, color: K.t3(dark)),
+          const Icon(Icons.photo_library_outlined,
+              size: 48, color: Warm.inkFaint),
           const SizedBox(height: 12),
-          Text('No media yet',
+          const Text('No media yet',
               style: TextStyle(
-                  color: K.t2(dark),
+                  color: Warm.inkSoft,
                   fontSize: 16,
                   fontWeight: FontWeight.w500)),
           const SizedBox(height: 4),
-          Text('Tap + to upload an encrypted photo',
-              style: TextStyle(color: K.t3(dark), fontSize: 13)),
+          const Text('Tap + to upload an encrypted photo',
+              style: TextStyle(color: Warm.inkFaint, fontSize: 13)),
         ],
       ),
     );
@@ -801,8 +821,6 @@ class _MediaEmpty extends StatelessWidget {
 class _MemberChipsRow extends StatelessWidget {
   final List<AlbumMember> members;
   final bool loading;
-  final bool dark;
-  final Color accent;
   // Non null only for an admin viewer : long pressing a removable chip calls it
   final void Function(AlbumMember)? onRemove;
   // The viewer's own token, so their chip never shows a remove button
@@ -816,8 +834,6 @@ class _MemberChipsRow extends StatelessWidget {
   const _MemberChipsRow({
     required this.members,
     required this.loading,
-    required this.dark,
-    required this.accent,
     required this.resolvedNames,
     required this.trust,
     required this.onTapMember,
@@ -836,7 +852,8 @@ class _MemberChipsRow extends StatelessWidget {
             child: SizedBox(
               width: 16,
               height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2, color: accent),
+              child:
+                  CircularProgressIndicator(strokeWidth: 2, color: Warm.ctaTop),
             ),
           ),
         ),
@@ -858,8 +875,6 @@ class _MemberChipsRow extends StatelessWidget {
           final isMe = m.memberToken == myToken;
           return _MemberChip(
             member: m,
-            dark: dark,
-            accent: accent,
             displayName: resolvedNames[m.memberToken] ?? 'Member',
             // no safety number with yourself
             trust: isMe ? null : trust[m.memberToken],
@@ -874,8 +889,6 @@ class _MemberChipsRow extends StatelessWidget {
 
 class _MemberChip extends StatelessWidget {
   final AlbumMember member;
-  final bool dark;
-  final Color accent;
   final String displayName;
   // null for our own chip, or before the roster has been reconciled
   final TrustState? trust;
@@ -884,8 +897,6 @@ class _MemberChip extends StatelessWidget {
 
   const _MemberChip(
       {required this.member,
-      required this.dark,
-      required this.accent,
       required this.displayName,
       this.trust,
       this.onTap,
@@ -901,17 +912,17 @@ class _MemberChip extends StatelessWidget {
         padding: EdgeInsets.only(
             left: 10, right: onRemove != null ? 2 : 10, top: 4, bottom: 4),
         decoration: BoxDecoration(
-          color: K.cardCol(dark),
+          color: Warm.stoneBottom,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: changed ? const Color(0xFFF87171) : K.borderCol(dark)),
+              color: changed ? const Color(0xFFF87171) : Warm.inkGhost),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             CircleAvatar(
               radius: 10,
-              backgroundColor: K.defaultAccent.withValues(alpha: 0.3),
+              backgroundColor: Warm.orbSage,
               child: Text(
                 displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
                 style: const TextStyle(
@@ -925,15 +936,15 @@ class _MemberChip extends StatelessWidget {
               // resolved global name : "Member" for anyone who hasnt published
               // a name_ct yet (never the raw token)
               displayName,
-              style: TextStyle(
-                  color: K.t1(dark), fontSize: 12, fontWeight: FontWeight.w500),
+              style: const TextStyle(
+                  color: Warm.ink, fontSize: 12, fontWeight: FontWeight.w500),
             ),
             // verified gets a mark, a changed key gets a loud one. An
             // unverified peer gets NOTHING : an icon there would read as a
             // safety claim we cannot make about a key nobody has compared
             if (trust == TrustState.verified) ...[
               const SizedBox(width: 3),
-              Icon(Icons.verified_user, size: 11, color: accent),
+              const Icon(Icons.verified_user, size: 11, color: Warm.ctaTop),
             ] else if (changed) ...[
               const SizedBox(width: 3),
               const Icon(Icons.error, size: 11, color: Color(0xFFF87171)),
@@ -941,7 +952,7 @@ class _MemberChip extends StatelessWidget {
             const SizedBox(width: 4),
             Text(
               member.role,
-              style: TextStyle(color: K.t3(dark), fontSize: 10),
+              style: const TextStyle(color: Warm.inkFaint, fontSize: 10),
             ),
             // Visible remove affordance for admins : a tappable × on each
             // removable member (replaces the old undiscoverable long-press)
@@ -952,7 +963,8 @@ class _MemberChip extends StatelessWidget {
                 radius: 16,
                 child: Padding(
                   padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.close, size: 14, color: K.t3(dark)),
+                  child:
+                      const Icon(Icons.close, size: 14, color: Warm.inkFaint),
                 ),
               ),
             ],
@@ -966,13 +978,11 @@ class _MemberChip extends StatelessWidget {
 // Album level "someone's key changed" strip. A chip badge alone is too easy to
 // miss, and this is the one state that warrants interrupting the user
 class _KeyChangeBanner extends StatelessWidget {
-  final bool dark;
   final List<AlbumMember> members;
   final String Function(AlbumMember) nameOf;
   final void Function(AlbumMember) onTap;
 
   const _KeyChangeBanner({
-    required this.dark,
     required this.members,
     required this.nameOf,
     required this.onTap,
@@ -1003,10 +1013,11 @@ class _KeyChangeBanner extends StatelessWidget {
             Expanded(
               child: Text(
                 '$who. Verify with them directly if that was unexpected.',
-                style: TextStyle(color: K.t1(dark), fontSize: 12, height: 1.35),
+                style: const TextStyle(
+                    color: Warm.ink, fontSize: 12, height: 1.35),
               ),
             ),
-            Icon(Icons.chevron_right, size: 16, color: K.t3(dark)),
+            const Icon(Icons.chevron_right, size: 16, color: Warm.inkFaint),
           ],
         ),
       ),
@@ -1017,13 +1028,11 @@ class _KeyChangeBanner extends StatelessWidget {
 // Persistent key sync failure. It remains visible until a background or manual
 // catch up reaches the blocked epoch
 class _KeyBlockBanner extends StatelessWidget {
-  final bool dark;
   final EpochBlocked block;
   final VoidCallback onVerify;
   final VoidCallback onRetry;
 
   const _KeyBlockBanner({
-    required this.dark,
     required this.block,
     required this.onVerify,
     required this.onRetry,
@@ -1079,8 +1088,8 @@ class _KeyBlockBanner extends StatelessWidget {
               Expanded(
                 child: Text(
                   text,
-                  style:
-                      TextStyle(color: K.t1(dark), fontSize: 12, height: 1.35),
+                  style: const TextStyle(
+                      color: Warm.ink, fontSize: 12, height: 1.35),
                 ),
               ),
             ],

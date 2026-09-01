@@ -35,6 +35,7 @@ type fakeMediaRepo struct {
 	rows          map[uuid.UUID]*model.Media
 	reserveCalls  int
 	confirmCalls  int
+	generation    int64
 	deletePending int
 	deleteCalls   int
 	reserveErr    error
@@ -63,17 +64,25 @@ func (f *fakeMediaRepo) ReserveUploadRow(_ context.Context, m *model.Media, _ in
 	return nil
 }
 
-func (f *fakeMediaRepo) MarkConfirmed(_ context.Context, mediaID, _ uuid.UUID) error {
+func (f *fakeMediaRepo) MarkConfirmed(_ context.Context, mediaID, _ uuid.UUID) (int64, error) {
 	f.confirmCalls++
 	if f.confirmErr != nil {
-		return f.confirmErr
+		return 0, f.confirmErr
 	}
 	row, ok := f.rows[mediaID]
 	if !ok {
-		return repository.ErrMediaNotFound
+		return 0, repository.ErrMediaNotFound
+	}
+	if row.Confirmed {
+		return f.generation, nil
 	}
 	row.Confirmed = true
-	return nil
+	f.generation++
+	return f.generation, nil
+}
+
+func (f *fakeMediaRepo) MediaGeneration(_ context.Context, _ uuid.UUID) (int64, error) {
+	return f.generation, nil
 }
 
 func (f *fakeMediaRepo) DeletePending(_ context.Context, mediaID, _ uuid.UUID) error {
@@ -393,7 +402,7 @@ func TestConfirmUpload_HappyPath(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
 
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	row := repo.rows[res.MediaID]
@@ -410,7 +419,7 @@ func TestConfirmUpload_SizeMismatchDropsRow(t *testing.T) {
 	s3.headSize = in.BlobSize - 1 // S3 stored fewer bytes than promised
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -430,7 +439,7 @@ func TestConfirmUpload_SHA256MismatchDropsRow(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 32))
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -450,7 +459,7 @@ func TestConfirmUpload_SHA256AbsentTrustsPutEnforcement(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = "" // server didnt echo
 
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("err = %v ; expected pass through (PUT-time enforcement)", err)
 	}
 }
@@ -462,7 +471,7 @@ func TestConfirmUpload_HeadFailureReturnsValidation(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headErr = errors.New("404 NoSuchKey")
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -475,18 +484,18 @@ func TestConfirmUpload_IsIdempotent(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	// Second confirm on already confirmed row is a no op
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("second confirm: %v ; expected nil (idempotent)", err)
 	}
 }
 
 func TestConfirmUpload_UnknownMediaIs404(t *testing.T) {
 	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
-	err := svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New(), uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New(), uuid.Nil)
 	if !apierr.IsCode(err, "E_NOT_FOUND") {
 		t.Fatalf("err = %v, want E_NOT_FOUND", err)
 	}
@@ -504,7 +513,7 @@ func confirmedRow(t *testing.T, svc *MediaService, repo *fakeMediaRepo, s3 *fake
 	}
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 	return albumID, res.MediaID, repo.rows[res.MediaID].StorageKey
@@ -662,7 +671,7 @@ func TestConfirmUpload_ThumbHappyPath(t *testing.T) {
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if !repo.rows[res.MediaID].Confirmed {
@@ -683,7 +692,7 @@ func TestConfirmUpload_ThumbMissingDropsRow(t *testing.T) {
 		thumbKey: {err: errors.New("404 NoSuchKey")},
 	}
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -705,7 +714,7 @@ func TestConfirmUpload_ThumbSizeMismatchDropsRow(t *testing.T) {
 		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -727,7 +736,7 @@ func TestConfirmUpload_ThumbSHA256MismatchDropsRow(t *testing.T) {
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 32))},
 	}
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -751,7 +760,7 @@ func TestConfirmUpload_ThumbMismatchDeletesBothObjects(t *testing.T) {
 		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -781,7 +790,7 @@ func TestRequestDownloadURL_ThumbAssetUsesThumbKey(t *testing.T) {
 		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 
@@ -867,7 +876,7 @@ func TestConfirmUpload_FanoutEmitsMediaAdded(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	_ = repo
@@ -919,7 +928,7 @@ func TestConfirmUpload_FanoutSkipsWhenUploaderIsOnlyMember(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -937,7 +946,7 @@ func TestConfirmUpload_FanoutLookupFailDoesNotBubble(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("confirm bubbled lookup failure: %v", err)
 	}
 	// fanout swallowed : no emits and no caller visible error
@@ -956,7 +965,7 @@ func TestConfirmUpload_FanoutEmitFailDoesNotBubble(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("confirm bubbled emit failure: %v", err)
 	}
 }
@@ -970,7 +979,7 @@ func TestConfirmUpload_EmptyMembersSkipsEmit(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)

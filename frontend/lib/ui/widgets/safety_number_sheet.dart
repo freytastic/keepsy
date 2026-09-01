@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
 
 // the out of band comparison ritual. Deliberately says "Not verified"
 // rather than anything reassuring until the user has actually read the digits
@@ -11,8 +11,6 @@ class SafetyNumberSheet extends StatelessWidget {
   final String displayName;
   final String digits;
   final TrustState state;
-  final bool dark;
-  final Color accent;
   // Fired only after the user confirms every digit. There is no accept-without
   // comparing path because verification also grants signer authority
   final VoidCallback onVerify;
@@ -22,8 +20,6 @@ class SafetyNumberSheet extends StatelessWidget {
     required this.displayName,
     required this.digits,
     required this.state,
-    required this.dark,
-    required this.accent,
     required this.onVerify,
   });
 
@@ -72,7 +68,7 @@ class SafetyNumberSheet extends StatelessWidget {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: K.borderCol(dark),
+                  color: Warm.inkGhost,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -80,7 +76,6 @@ class SafetyNumberSheet extends StatelessWidget {
             const SizedBox(height: 18),
             if (changed) ...[
               _Banner(
-                dark: dark,
                 text: "$displayName's security key changed. Keepsy has stopped "
                     'trusting it. Read the digits below to them directly : '
                     'that is the only way to tell a real change from someone '
@@ -91,26 +86,26 @@ class SafetyNumberSheet extends StatelessWidget {
             Text(
               'Safety number with $displayName',
               style: TextStyle(
-                color: K.t1(dark),
+                color: Warm.ink,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 6),
-            _StatusPill(state: state, dark: dark, accent: accent),
+            _StatusPill(state: state),
             const SizedBox(height: 18),
             Container(
               padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
               decoration: BoxDecoration(
-                color: K.cardCol(dark),
+                color: Warm.stoneBottom,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: K.borderCol(dark)),
+                border: Border.all(color: Warm.inkGhost),
               ),
               child: Text(
                 digits,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: K.t1(dark),
+                  color: Warm.ink,
                   fontSize: 19,
                   height: 1.7,
                   letterSpacing: 1.6,
@@ -124,15 +119,16 @@ class SafetyNumberSheet extends StatelessWidget {
               'Call $displayName, or meet them, and read these digits to each '
               'other. If they match on both phones, no one is sitting in the '
               'middle of this album.',
-              style: TextStyle(color: K.t2(dark), fontSize: 13, height: 1.45),
+              style: const TextStyle(
+                  color: Warm.inkSoft, fontSize: 13, height: 1.45),
             ),
             const SizedBox(height: 20),
             if (!verified)
               FilledButton(
                 onPressed: () => _confirmThenVerify(context),
                 style: FilledButton.styleFrom(
-                  backgroundColor: accent,
-                  foregroundColor: Colors.black,
+                  backgroundColor: Warm.ctaTop,
+                  foregroundColor: Warm.ctaInk,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 child: const Text('They match : Mark as verified',
@@ -147,16 +143,17 @@ class SafetyNumberSheet extends StatelessWidget {
 
 class _StatusPill extends StatelessWidget {
   final TrustState state;
-  final bool dark;
-  final Color accent;
 
-  const _StatusPill(
-      {required this.state, required this.dark, required this.accent});
+  const _StatusPill({required this.state});
 
   @override
   Widget build(BuildContext context) {
     final (label, color, icon) = switch (state) {
-      TrustState.verified => ('Verified', accent, Icons.verified_user_outlined),
+      TrustState.verified => (
+          'Verified',
+          Warm.ctaTop,
+          Icons.verified_user_outlined
+        ),
       TrustState.changed => (
           'Key changed',
           const Color(0xFFF87171),
@@ -164,7 +161,7 @@ class _StatusPill extends StatelessWidget {
         ),
       TrustState.unverified => (
           'Not verified',
-          K.t3(dark),
+          Warm.inkFaint,
           Icons.shield_outlined
         ),
     };
@@ -182,10 +179,9 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _Banner extends StatelessWidget {
-  final bool dark;
   final String text;
 
-  const _Banner({required this.dark, required this.text});
+  const _Banner({required this.text});
 
   @override
   Widget build(BuildContext context) {
@@ -204,7 +200,8 @@ class _Banner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(text,
-                style: TextStyle(color: K.t1(dark), fontSize: 13, height: 1.4)),
+                style: const TextStyle(
+                    color: Warm.ink, fontSize: 13, height: 1.4)),
           ),
         ],
       ),

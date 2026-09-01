@@ -12,7 +12,7 @@ import 'package:keepsy/e2ee/epoch_rotator.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/app_theme.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
 
 // Album creation first obtains the album id and local member token, then starts
 // epoch 0 bootstrap in the background. AppState marks the album as syncing so
@@ -169,19 +169,15 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final dark = state.isDark;
-    final accent = state.accent;
-
     return Scaffold(
-      backgroundColor: K.bg(dark),
+      backgroundColor: Warm.ground,
       appBar: AppBar(
-        backgroundColor: K.bg(dark),
+        backgroundColor: Warm.ground,
         elevation: 0,
-        iconTheme: IconThemeData(color: K.t1(dark)),
-        title: Text('New Album',
+        iconTheme: const IconThemeData(color: Warm.ink),
+        title: const Text('New Album',
             style: TextStyle(
-                color: K.t1(dark), fontSize: 18, fontWeight: FontWeight.w700)),
+                color: Warm.ink, fontSize: 18, fontWeight: FontWeight.w700)),
       ),
       body: Padding(
         padding: const EdgeInsets.all(20),
@@ -194,21 +190,21 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
               enabled: !_busy,
               decoration: InputDecoration(
                 labelText: 'Album name',
-                labelStyle: TextStyle(color: K.t3(dark)),
+                labelStyle: const TextStyle(color: Warm.inkFaint),
                 filled: true,
-                fillColor: K.cardCol(dark),
+                fillColor: Warm.stoneBottom,
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none),
               ),
-              style: TextStyle(color: K.t1(dark), fontSize: 16),
+              style: const TextStyle(color: Warm.ink, fontSize: 16),
             ),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: _busy ? null : _create,
               style: ElevatedButton.styleFrom(
-                backgroundColor: accent,
-                foregroundColor: Colors.white,
+                backgroundColor: Warm.ctaTop,
+                foregroundColor: Warm.ctaInk,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
@@ -227,7 +223,7 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
             if (_busy) ...[
               const SizedBox(height: 16),
               Text('Generating encryption keys for the album…',
-                  style: TextStyle(color: K.t3(dark), fontSize: 13),
+                  style: const TextStyle(color: Warm.inkFaint, fontSize: 13),
                   textAlign: TextAlign.center),
             ],
             if (_error != null) ...[
