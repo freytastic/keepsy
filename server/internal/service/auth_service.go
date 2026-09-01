@@ -123,11 +123,7 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 	user, err := s.UserRepo.GetByEmailHMAC(ctx, emailHMAC)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
-			user = &model.User{
-				EmailHMAC:   emailHMAC,
-				AccentColor: "#2dd4bf",
-				Theme:       "dark",
-			}
+			user = &model.User{EmailHMAC: emailHMAC}
 			if err := s.createWithKeepsyID(ctx, user); err != nil {
 				log.Printf("VerifyOTP: user create failed: %v", err)
 				return "", err

@@ -10,13 +10,11 @@ import (
 // EmailHMAC). Display name + avatar also absent (M7 : names live encrypted
 // per album in album_members.name_ct ; avatars come back in Phase 5)
 type User struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	EmailHMAC   []byte    `json:"-" db:"email_hmac"`
-	AccentColor string    `json:"accent_color" db:"accent_color"`
-	Theme       string    `json:"theme" db:"theme"`
-	KeepsyID    string    `json:"keepsy_id,omitempty" db:"keepsy_id"`
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	ID        uuid.UUID `json:"id" db:"id"`
+	EmailHMAC []byte    `json:"-" db:"email_hmac"`
+	KeepsyID  string    `json:"keepsy_id,omitempty" db:"keepsy_id"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 
 	IKPub  []byte `json:"ik_pub,omitempty" db:"ik_pub"`
 	LKPub  []byte `json:"lk_pub,omitempty" db:"lk_pub"`

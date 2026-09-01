@@ -22,8 +22,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email_hmac      BYTEA UNIQUE NOT NULL,
-    accent_color    TEXT NOT NULL DEFAULT '#2dd4bf',
-    theme           TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('dark', 'light')),
     ik_pub          BYTEA,
     lk_pub          BYTEA,
     spk_pub         BYTEA,
