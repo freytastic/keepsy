@@ -10,19 +10,28 @@ import (
 type requestIDCtxKey string
 
 const RequestIDKey requestIDCtxKey = "request_id"
+const ClientTraceIDKey requestIDCtxKey = "client_trace_id"
 const RequestIDHeader = "X-Request-ID"
 
-// RequestID injects a 128 bit hex request ID into the context and response header
+// RequestID mints a server ID and stores a valid client ID separately for
+// trace correlation
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rid := r.Header.Get(RequestIDHeader)
-		if !looksLikeRequestID(rid) {
-			rid = newRequestID()
-		}
+		rid := newRequestID()
 		w.Header().Set(RequestIDHeader, rid)
 		ctx := context.WithValue(r.Context(), RequestIDKey, rid)
+		if client := r.Header.Get(RequestIDHeader); looksLikeRequestID(client) {
+			ctx = context.WithValue(ctx, ClientTraceIDKey, client)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func GetClientTraceID(ctx context.Context) string {
+	if v, ok := ctx.Value(ClientTraceIDKey).(string); ok {
+		return v
+	}
+	return ""
 }
 
 func GetRequestID(ctx context.Context) string {

@@ -119,6 +119,8 @@ func main() {
 	requireMember := middleware.RequireMember(albumRepo, "id")
 
 	r := mux.NewRouter()
+	// Router middleware can read the matched route template
+	r.Use(middleware.AccessLog)
 
 	apiV1 := r.PathPrefix("/api/v1").Subrouter()
 	apiV1.HandleFunc("/auth/otp/request", authHandler.RequestOTP).Methods(http.MethodPost)
@@ -195,6 +197,7 @@ func main() {
 	scoped.HandleFunc("/media/confirm", mediaHandler.ConfirmUpload).Methods(http.MethodPost)
 	scoped.HandleFunc("/media", mediaHandler.ListMedia).Methods(http.MethodGet)
 	scoped.HandleFunc("/media/{mid}/download-url", mediaHandler.RequestDownloadURL).Methods(http.MethodPost)
+	scoped.HandleFunc("/media/{mid}/pending", mediaHandler.AbortPendingUpload).Methods(http.MethodDelete)
 	scoped.HandleFunc("/media/{mid}", mediaHandler.DeleteMedia).Methods(http.MethodDelete)
 	scoped.HandleFunc("/epoch", epochHandler.SetEpoch).Methods(http.MethodPost)
 	scoped.HandleFunc("/epoch", epochHandler.GetCurrent).Methods(http.MethodGet)
@@ -217,10 +220,8 @@ func main() {
 		})
 	})
 
-	rootHandler := middleware.Recover(middleware.RequestID(middleware.CORS(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		log.Printf("%s %s", req.Method, req.URL.Path)
-		r.ServeHTTP(w, req)
-	}))))
+	// RequestID must wrap Recover so panic logs retain the generated ID
+	rootHandler := middleware.RequestID(middleware.Recover(middleware.CORS(r)))
 
 	srv := &http.Server{
 		Addr:           ":" + cfg.Port,
@@ -230,6 +231,12 @@ func main() {
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
+	cleanupCtx, stopPendingCleanup := context.WithCancel(context.Background())
+	pendingCleanupDone := make(chan struct{})
+	go func() {
+		defer close(pendingCleanupDone)
+		mediaService.RunPendingUploadCleanup(cleanupCtx)
+	}()
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -242,14 +249,24 @@ func main() {
 
 	select {
 	case err := <-serverErrors:
+		stopPendingCleanup()
 		log.Fatalf("Error starting server: %v", err)
 	case sig := <-shutdown:
 		fmt.Printf("Start shutdown... Signal: %v\n", sig)
+		stopPendingCleanup()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("Shutdown failed: %v. Forcing close.", err)
 			srv.Close()
+		}
+		// Cleanup gets a fresh budget if HTTP shutdown consumed its deadline
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelDrain()
+		select {
+		case <-pendingCleanupDone:
+		case <-drainCtx.Done():
+			log.Printf("Pending media cleanup did not stop before shutdown deadline")
 		}
 		fmt.Println("Server stopped.")
 	}

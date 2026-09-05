@@ -169,6 +169,29 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"media_generation": generation})
 }
 
+// AbortPendingUpload retires the caller's unconfirmed reservation
+func (h *MediaHandler) AbortPendingUpload(w http.ResponseWriter, r *http.Request) {
+	albumID, ok := scopedAlbumID(w, r)
+	if !ok {
+		return
+	}
+	memberToken, ok := middleware.MustGetMemberToken(r)
+	if !ok {
+		apierr.Write(w, r, apierr.Auth("member token missing in context"))
+		return
+	}
+	mediaID, err := uuid.Parse(mux.Vars(r)["mid"])
+	if err != nil {
+		apierr.Write(w, r, apierr.Validation("invalid media id").WithCause(err))
+		return
+	}
+	if err := h.svc.AbortPendingUpload(r.Context(), albumID, mediaID, memberToken); err != nil {
+		apierr.Write(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 	albumID, ok := scopedAlbumID(w, r)
 	if !ok {
