@@ -32,7 +32,9 @@ class _DeadApi implements MediaApiInterface {
           {String asset = 'file'}) async =>
       throw StateError('api must not be called during logout');
   @override
-  Future<Uint8List> downloadCiphertext(String url) async =>
+  Future<Uint8List> downloadCiphertext(String url,
+          {int expectedBytes = 0,
+          Future<String> Function()? refreshUrl}) async =>
       throw StateError('api must not be called during logout');
 }
 

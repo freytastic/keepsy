@@ -88,7 +88,8 @@ class _FakeMediaApi implements MediaApiInterface {
   }
 
   @override
-  Future<Uint8List> downloadCiphertext(String url) async {
+  Future<Uint8List> downloadCiphertext(String url,
+      {int expectedBytes = 0, Future<String> Function()? refreshUrl}) async {
     downloadCiphertextCalls++;
     final b = bytesByUrl[url];
     if (b == null) throw StateError('no bytes for $url');

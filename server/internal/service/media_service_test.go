@@ -33,21 +33,26 @@ func validInput() RequestUploadInput {
 
 type fakeMediaRepo struct {
 	rows          map[uuid.UUID]*model.Media
+	cleanupQueue  map[string]bool
+	rescheduled   []string
+	attempts      map[string]int
 	reserveCalls  int
 	confirmCalls  int
 	generation    int64
-	deletePending int
 	deleteCalls   int
 	reserveErr    error
 	confirmErr    error
 	getErr        error
-	deletePendErr error
 	objectKeys    []repository.MediaObjectKeys
 	objectKeysErr error
 }
 
 func newFakeMediaRepo() *fakeMediaRepo {
-	return &fakeMediaRepo{rows: map[uuid.UUID]*model.Media{}}
+	return &fakeMediaRepo{
+		rows:         map[uuid.UUID]*model.Media{},
+		cleanupQueue: map[string]bool{},
+		attempts:     map[string]int{},
+	}
 }
 
 func (f *fakeMediaRepo) ReserveUploadRow(_ context.Context, m *model.Media, _ int) error {
@@ -85,13 +90,59 @@ func (f *fakeMediaRepo) MediaGeneration(_ context.Context, _ uuid.UUID) (int64, 
 	return f.generation, nil
 }
 
-func (f *fakeMediaRepo) DeletePending(_ context.Context, mediaID, _ uuid.UUID) error {
-	f.deletePending++
-	if f.deletePendErr != nil {
-		return f.deletePendErr
+func (f *fakeMediaRepo) QueuePendingCleanup(_ context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (repository.PendingCleanupBatch, error) {
+	row, ok := f.rows[mediaID]
+	if !ok || row.AlbumID != albumID || row.Confirmed || !bytes.Equal(row.UploaderToken, uploaderToken) {
+		return repository.PendingCleanupBatch{}, nil
 	}
 	delete(f.rows, mediaID)
+	keys := []string{row.StorageKey}
+	f.cleanupQueue[row.StorageKey] = true
+	if row.ThumbKey != nil && *row.ThumbKey != "" {
+		keys = append(keys, *row.ThumbKey)
+		f.cleanupQueue[*row.ThumbKey] = true
+	}
+	return repository.PendingCleanupBatch{MediaCount: 1, Keys: keys}, nil
+}
+
+func (f *fakeMediaRepo) QueueStalePendingCleanup(_ context.Context, before time.Time, limit int) (repository.PendingCleanupBatch, error) {
+	batch := repository.PendingCleanupBatch{}
+	for id, row := range f.rows {
+		if batch.MediaCount >= limit || row.Confirmed || row.CreatedAt.After(before) {
+			continue
+		}
+		delete(f.rows, id)
+		batch.MediaCount++
+		batch.Keys = append(batch.Keys, row.StorageKey)
+		f.cleanupQueue[row.StorageKey] = true
+		if row.ThumbKey != nil && *row.ThumbKey != "" {
+			batch.Keys = append(batch.Keys, *row.ThumbKey)
+			f.cleanupQueue[*row.ThumbKey] = true
+		}
+	}
+	return batch, nil
+}
+
+func (f *fakeMediaRepo) ListObjectCleanupKeys(_ context.Context, limit int) ([]string, error) {
+	keys := make([]string, 0, limit)
+	for key := range f.cleanupQueue {
+		if len(keys) >= limit {
+			break
+		}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func (f *fakeMediaRepo) DeleteObjectCleanupKey(_ context.Context, key string) error {
+	delete(f.cleanupQueue, key)
 	return nil
+}
+
+func (f *fakeMediaRepo) RescheduleObjectCleanupKey(_ context.Context, key string) (int, error) {
+	f.rescheduled = append(f.rescheduled, key)
+	f.attempts[key]++
+	return f.attempts[key], nil
 }
 
 func (f *fakeMediaRepo) GetByID(_ context.Context, mediaID, _ uuid.UUID) (*model.Media, error) {
@@ -183,6 +234,206 @@ func TestDeleteMedia_DeletesBlobAndThumb(t *testing.T) {
 	}
 	if _, ok := repo.rows[mediaID]; ok {
 		t.Error("media row not deleted")
+	}
+}
+
+func TestAbortPendingUpload_DeletesOnlyCallersPendingReservation(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	uploaderToken := []byte{0xAA, 0xBB}
+	res, err := svc.RequestUploadURL(context.Background(), albumID, uploaderToken, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	thumb := "thumb-key"
+	repo.rows[res.MediaID].ThumbKey = &thumb
+
+	if err := svc.AbortPendingUpload(context.Background(), albumID, res.MediaID, uploaderToken); err != nil {
+		t.Fatalf("AbortPendingUpload: %v", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; ok {
+		t.Fatal("pending row was not retired")
+	}
+	if len(repo.cleanupQueue) != 0 {
+		t.Fatalf("successful deletes were not acknowledged: %v", repo.cleanupQueue)
+	}
+	want := map[string]bool{res.StorageKey: true, thumb: true}
+	for _, key := range s3.deleteKeys {
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("objects not deleted: %v", want)
+	}
+}
+
+func TestAbortPendingUpload_CannotAbortAnotherMembersReservation(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	res, err := svc.RequestUploadURL(context.Background(), albumID, []byte{0xAA}, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+
+	if err := svc.AbortPendingUpload(context.Background(), albumID, res.MediaID, []byte{0xBB}); err != nil {
+		t.Fatalf("foreign abort should be an idempotent no-op: %v", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; !ok {
+		t.Fatal("foreign member deleted the pending row")
+	}
+	if s3.deleteCalls != 0 {
+		t.Fatalf("foreign member triggered %d object deletes", s3.deleteCalls)
+	}
+}
+
+func TestAbortPendingUpload_DoesNotDeleteConfirmedMedia(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	uploaderToken := []byte{0xAA}
+	res, err := svc.RequestUploadURL(context.Background(), albumID, uploaderToken, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	repo.rows[res.MediaID].Confirmed = true
+
+	if err := svc.AbortPendingUpload(context.Background(), albumID, res.MediaID, uploaderToken); err != nil {
+		t.Fatalf("confirmed abort should be an idempotent no-op: %v", err)
+	}
+	if _, ok := repo.rows[res.MediaID]; !ok {
+		t.Fatal("confirmed media row was deleted")
+	}
+	if s3.deleteCalls != 0 {
+		t.Fatalf("confirmed media triggered %d object deletes", s3.deleteCalls)
+	}
+}
+
+func TestPendingCleanup_RetriesFailedObjectDeletion(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	uploaderToken := []byte{0xAA}
+	res, err := svc.RequestUploadURL(context.Background(), albumID, uploaderToken, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	s3.deleteErr = errors.New("object store unavailable")
+
+	if err := svc.AbortPendingUpload(context.Background(), albumID, res.MediaID, uploaderToken); err != nil {
+		t.Fatalf("AbortPendingUpload: %v", err)
+	}
+	if !repo.cleanupQueue[res.StorageKey] {
+		t.Fatal("failed object deletion lost its durable retry key")
+	}
+
+	s3.deleteErr = nil
+	stats, err := svc.SweepStalePendingUploads(context.Background(), time.Now(), 10)
+	if err != nil {
+		t.Fatalf("retry sweep: %v", err)
+	}
+	if stats.DeletedObject != 1 || stats.FailedObject != 0 {
+		t.Fatalf("retry stats = %+v", stats)
+	}
+	if len(repo.cleanupQueue) != 0 {
+		t.Fatalf("retry key still queued: %v", repo.cleanupQueue)
+	}
+}
+
+func TestPendingCleanup_BacksOffAKeyThatWillNotDelete(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	uploaderToken := []byte{0xAA}
+	res, err := svc.RequestUploadURL(context.Background(), albumID, uploaderToken, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	s3.deleteErr = errors.New("permanently rejected")
+
+	if err := svc.AbortPendingUpload(context.Background(), albumID, res.MediaID, uploaderToken); err != nil {
+		t.Fatalf("AbortPendingUpload: %v", err)
+	}
+
+	if len(repo.rescheduled) == 0 {
+		t.Fatal("a failed object delete was not backed off")
+	}
+	if repo.rescheduled[0] != res.StorageKey {
+		t.Fatalf("backed off %q, want %q", repo.rescheduled[0], res.StorageKey)
+	}
+	if !repo.cleanupQueue[res.StorageKey] {
+		t.Fatal("backed off key must stay queued for a later attempt")
+	}
+}
+
+func TestPendingCleanup_ReportsAKeyThatIsStuck(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+	albumID := uuid.New()
+	uploaderToken := []byte{0xAA}
+	res, err := svc.RequestUploadURL(context.Background(), albumID, uploaderToken, validInput())
+	if err != nil {
+		t.Fatalf("RequestUploadURL: %v", err)
+	}
+	s3.deleteErr = errors.New("permanently rejected")
+	repo.attempts[res.StorageKey] = ObjectCleanupAlertAttempts - 1
+
+	stats, err := svc.SweepStalePendingUploads(context.Background(), time.Now(), 10)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if stats.StuckObject == 0 {
+		t.Fatalf("a key past the alert threshold was not reported, stats = %+v", stats)
+	}
+}
+
+func TestSweepStalePendingUploads_RetiresOnlyOldUnconfirmedRows(t *testing.T) {
+	svc, repo, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
+	now := time.Now()
+	oldID := uuid.New()
+	recentID := uuid.New()
+	confirmedID := uuid.New()
+	thumb := "old-thumb"
+	repo.rows[oldID] = &model.Media{
+		ID: oldID, StorageKey: "old-file", ThumbKey: &thumb,
+		CreatedAt: now.Add(-3 * time.Hour),
+	}
+	repo.rows[recentID] = &model.Media{
+		ID: recentID, StorageKey: "recent-file",
+		CreatedAt: now.Add(-30 * time.Minute),
+	}
+	repo.rows[confirmedID] = &model.Media{
+		ID: confirmedID, StorageKey: "confirmed-file", Confirmed: true,
+		CreatedAt: now.Add(-3 * time.Hour),
+	}
+
+	stats, err := svc.SweepStalePendingUploads(
+		context.Background(), now.Add(-PendingUploadStaleAfter), 10)
+	if err != nil {
+		t.Fatalf("SweepStalePendingUploads: %v", err)
+	}
+	if stats.RetiredMedia != 1 || stats.DeletedObject != 2 || stats.FailedObject != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if _, ok := repo.rows[oldID]; ok {
+		t.Fatal("old pending row survived sweep")
+	}
+	if _, ok := repo.rows[recentID]; !ok {
+		t.Fatal("recent pending row was swept")
+	}
+	if _, ok := repo.rows[confirmedID]; !ok {
+		t.Fatal("confirmed row was swept")
+	}
+}
+
+func TestRunPendingUploadCleanup_StopsWithContext(t *testing.T) {
+	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.RunPendingUploadCleanup(ctx)
+	}()
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("pending cleanup worker did not stop after cancellation")
 	}
 }
 

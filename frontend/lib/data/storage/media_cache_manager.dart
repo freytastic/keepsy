@@ -6,6 +6,8 @@ import 'package:keepsy/e2ee/file_decryptor.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
+import 'package:keepsy/diagnostics/trace.dart';
+
 import 'media_cache_key.dart';
 import 'media_plaintext_cache.dart';
 import 'media_sealed_cache.dart';
@@ -48,10 +50,16 @@ class MediaCacheManager {
     );
 
     final ram = _l1.get(k);
-    if (ram != null) return ram;
+    if (ram != null) {
+      Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'l1'});
+      return ram;
+    }
 
     final pending = _inflightPt[k];
-    if (pending != null) return pending;
+    if (pending != null) {
+      Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'dedupe_pt'});
+      return pending;
+    }
 
     final f = _resolveAndStore(r, k, thumb: thumb);
     _inflightPt[k] = f;
@@ -65,11 +73,29 @@ class MediaCacheManager {
   Future<Uint8List> _resolveAndStore(MediaRecord r, MediaCacheKey k,
       {required bool thumb}) async {
     // Warm L2 hit returns plaintext directly : no FileDecryptor, no useMk
-    final disk = await _l2.readBlob(k);
+    final disk = await Trace.measure<Uint8List?>(
+      'media.l2Read',
+      () => _l2.readBlob(k),
+      fields: _keyFields(k),
+      endFields: (result) => {
+        'hit': result != null,
+        'bytes': result?.length ?? 0,
+      },
+    );
+    if (disk != null) {
+      Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'l2'});
+    }
     final pt = disk ?? await _coldFill(r, k, thumb: thumb);
     _l1.put(k, pt);
     return pt;
   }
+
+  static Map<String, Object?> _keyFields(MediaCacheKey k) => {
+        'album': Trace.id(k.albumId),
+        'media': Trace.id(k.mediaId),
+        'epoch': k.epochTag,
+        'asset': k.asset == CacheAsset.thumb ? 'thumb' : 'file',
+      };
 
   // L3 cold fill : fetch S3 ciphertext, unwrap+decrypt via FileDecryptor (the
   // one useMk per photo), then seal the plaintext into L2. Concurrent callers
@@ -77,7 +103,10 @@ class MediaCacheManager {
   Future<Uint8List> _coldFill(MediaRecord r, MediaCacheKey k,
       {required bool thumb}) async {
     final pending = _inflightCt[k];
-    if (pending != null) return pending;
+    if (pending != null) {
+      Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'dedupe_ct'});
+      return pending;
+    }
     final f = _doColdFill(r, k, thumb: thumb);
     _inflightCt[k] = f;
     try {
@@ -89,13 +118,55 @@ class MediaCacheManager {
 
   Future<Uint8List> _doColdFill(MediaRecord r, MediaCacheKey k,
       {required bool thumb}) async {
+    Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'l3'});
+    final span = Trace.start('media.coldFill', fields: _keyFields(k));
     final tag = k.asset == CacheAsset.thumb ? 'thumb' : 'file';
-    final url = await _api.requestDownloadURL(k.albumId, k.mediaId, asset: tag);
-    final cipher = await _api.downloadCiphertext(url);
-    final pt = await _decrypt(r, thumb: thumb, ciphertext: cipher);
-    await _l2.writeRecord(r);
-    await _l2.writeBlob(k, pt);
-    return pt;
+    try {
+      final url = await Trace.measure<String>(
+        'media.presign',
+        () => _api.requestDownloadURL(k.albumId, k.mediaId, asset: tag),
+        fields: _keyFields(k),
+        endFields: (result) => {'host': Trace.url(result)},
+      );
+
+      final expected =
+          k.asset == CacheAsset.thumb ? (r.thumbSize ?? 0) : r.blobSize;
+      final cipher = await Trace.measure<Uint8List>(
+        'media.download',
+        () => _api.downloadCiphertext(
+          url,
+          expectedBytes: expected,
+          // Refresh the presigned URL between retries
+          refreshUrl: () =>
+              _api.requestDownloadURL(k.albumId, k.mediaId, asset: tag),
+        ),
+        fields: _keyFields(k),
+        endFields: (result) => {'bytes': result.length},
+      );
+
+      final pt = await Trace.measure<Uint8List>(
+        'media.decrypt',
+        () => _decrypt(r, thumb: thumb, ciphertext: cipher),
+        fields: _keyFields(k),
+        endFields: (result) => {'bytes': result.length},
+      );
+
+      await Trace.measure<void>(
+        'media.l2Write',
+        () async {
+          await _l2.writeRecord(r);
+          await _l2.writeBlob(k, pt);
+        },
+        fields: _keyFields(k),
+        endFields: (_) => {'bytes': pt.length},
+      );
+
+      span.end(fields: {'bytes': pt.length});
+      return pt;
+    } catch (e) {
+      span.fail(e is FileDecryptError ? e.reason : e.runtimeType.toString());
+      rethrow;
+    }
   }
 
   // FileDecryptor takes a download closure : feed it the cached ciphertext so
@@ -156,24 +227,35 @@ class MediaCacheManager {
     required UploadEnvelope env,
   }) async {
     final mid = env.mediaIdString;
-    final fileK = MediaCacheKey(
-      albumId: albumId,
-      mediaId: mid,
-      epochTag: env.epoch,
-      asset: CacheAsset.file,
+    await Trace.measure<void>(
+      'media.seedUpload',
+      () async {
+        final fileK = MediaCacheKey(
+          albumId: albumId,
+          mediaId: mid,
+          epochTag: env.epoch,
+          asset: CacheAsset.file,
+        );
+        _l1.put(fileK, env.filePlaintext);
+        await _l2.writeBlob(fileK, env.filePlaintext);
+        if (env.hasThumb && env.thumbPlaintext != null) {
+          final thumbK = MediaCacheKey(
+            albumId: albumId,
+            mediaId: mid,
+            epochTag: env.epoch,
+            asset: CacheAsset.thumb,
+          );
+          _l1.put(thumbK, env.thumbPlaintext!);
+          await _l2.writeBlob(thumbK, env.thumbPlaintext!);
+        }
+      },
+      fields: {
+        'album': Trace.id(albumId),
+        'media': Trace.id(mid),
+        'file_bytes': env.filePlaintext.length,
+        'thumb_bytes': env.thumbPlaintext?.length ?? 0,
+      },
     );
-    _l1.put(fileK, env.filePlaintext);
-    await _l2.writeBlob(fileK, env.filePlaintext);
-    if (env.hasThumb && env.thumbPlaintext != null) {
-      final thumbK = MediaCacheKey(
-        albumId: albumId,
-        mediaId: mid,
-        epochTag: env.epoch,
-        asset: CacheAsset.thumb,
-      );
-      _l1.put(thumbK, env.thumbPlaintext!);
-      await _l2.writeBlob(thumbK, env.thumbPlaintext!);
-    }
   }
 
   Future<void> invalidate(String mediaId) async {

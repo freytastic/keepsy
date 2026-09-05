@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/google/uuid"
@@ -19,6 +20,12 @@ var (
 
 type MediaRepository struct {
 	DB *pgxpool.Pool
+}
+
+// PendingCleanupBatch describes rows retired into the durable object queue
+type PendingCleanupBatch struct {
+	MediaCount int
+	Keys       []string
 }
 
 func NewMediaRepository(db *pgxpool.Pool) *MediaRepository {
@@ -160,14 +167,163 @@ func (r *MediaRepository) MediaGeneration(ctx context.Context, albumID uuid.UUID
 	return g, err
 }
 
-// DeletePending removes a row that was created but never confirmed (S3 upload
-// failed checksum, client gave up, etc.). Returns no error on missing : idempotent
-func (r *MediaRepository) DeletePending(ctx context.Context, mediaID, albumID uuid.UUID) error {
+// QueuePendingCleanup atomically retires an owned row and preserves its keys
+func (r *MediaRepository) QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (PendingCleanupBatch, error) {
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var storageKey string
+	var thumbKey *string
+	err = tx.QueryRow(ctx, `
+		DELETE FROM media
+		WHERE id = $1 AND album_id = $2 AND uploader_token = $3
+		  AND confirmed = FALSE
+		RETURNING storage_key, thumb_key`,
+		mediaID, albumID, uploaderToken,
+	).Scan(&storageKey, &thumbKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PendingCleanupBatch{}, tx.Commit(ctx)
+	}
+	if err != nil {
+		return PendingCleanupBatch{}, err
+	}
+
+	keys := cleanupKeys(storageKey, thumbKey)
+	if err := enqueueObjectCleanup(ctx, tx, keys); err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	return PendingCleanupBatch{MediaCount: 1, Keys: keys}, nil
+}
+
+// QueueStalePendingCleanup locks rows against concurrent confirmation
+func (r *MediaRepository) QueueStalePendingCleanup(ctx context.Context, before time.Time, limit int) (PendingCleanupBatch, error) {
+	if limit <= 0 {
+		return PendingCleanupBatch{}, nil
+	}
+	tx, err := r.DB.Begin(ctx)
+	if err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		WITH stale AS (
+			SELECT id
+			FROM media
+			WHERE confirmed = FALSE AND created_at <= $1
+			ORDER BY created_at, id
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		DELETE FROM media m
+		USING stale
+		WHERE m.id = stale.id AND m.confirmed = FALSE
+		RETURNING m.storage_key, m.thumb_key`, before, limit)
+	if err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	defer rows.Close()
+
+	batch := PendingCleanupBatch{}
+	for rows.Next() {
+		var storageKey string
+		var thumbKey *string
+		if err := rows.Scan(&storageKey, &thumbKey); err != nil {
+			return PendingCleanupBatch{}, err
+		}
+		batch.MediaCount++
+		batch.Keys = append(batch.Keys, cleanupKeys(storageKey, thumbKey)...)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	if err := enqueueObjectCleanup(ctx, tx, batch.Keys); err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PendingCleanupBatch{}, err
+	}
+	return batch, nil
+}
+
+// ListObjectCleanupKeys returns due keys with the least-retried first so a
+// poison key cannot block fresh work
+func (r *MediaRepository) ListObjectCleanupKeys(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.DB.Query(ctx, `
+		SELECT storage_key
+		FROM media_object_cleanup
+		WHERE next_attempt_at <= now()
+		ORDER BY attempts, next_attempt_at, storage_key
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (r *MediaRepository) DeleteObjectCleanupKey(ctx context.Context, key string) error {
 	_, err := r.DB.Exec(ctx,
-		`DELETE FROM media WHERE id = $1 AND album_id = $2 AND confirmed = FALSE`,
-		mediaID, albumID,
-	)
+		`DELETE FROM media_object_cleanup WHERE storage_key = $1`, key)
 	return err
+}
+
+// RescheduleObjectCleanupKey applies capped exponential backoff
+func (r *MediaRepository) RescheduleObjectCleanupKey(ctx context.Context, key string) (int, error) {
+	var attempts int
+	err := r.DB.QueryRow(ctx, `
+		UPDATE media_object_cleanup
+		SET attempts = attempts + 1,
+		    next_attempt_at = now() +
+		        LEAST(15 * POWER(2, LEAST(attempts, 8))::int, 60) * interval '1 minute'
+		WHERE storage_key = $1
+		RETURNING attempts`, key).Scan(&attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return attempts, err
+}
+
+func enqueueObjectCleanup(ctx context.Context, tx pgx.Tx, keys []string) error {
+	for _, key := range keys {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO media_object_cleanup (storage_key)
+			VALUES ($1)
+			ON CONFLICT (storage_key) DO NOTHING`, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cleanupKeys(storageKey string, thumbKey *string) []string {
+	keys := make([]string, 0, 2)
+	if storageKey != "" {
+		keys = append(keys, storageKey)
+	}
+	if thumbKey != nil && *thumbKey != "" {
+		keys = append(keys, *thumbKey)
+	}
+	return keys
 }
 
 // GetByID returns one media row regardless of confirmed state. Used by

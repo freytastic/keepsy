@@ -6,6 +6,7 @@ import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 
 // Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
@@ -394,11 +395,19 @@ class AppState extends ChangeNotifier {
   void markSyncing(Iterable<String> ids) {
     if (ids.isEmpty) return;
     _syncing.addAll(ids);
+    Trace.event('sync.mark', fields: {
+      'added': ids.length,
+      'held': _syncing.length,
+    });
     notifyListeners();
   }
 
   void clearSyncing(String id) {
-    if (_syncing.remove(id)) notifyListeners();
+    if (_syncing.remove(id)) {
+      Trace.event('sync.clear',
+          fields: {'album': Trace.id(id), 'held': _syncing.length});
+      notifyListeners();
+    }
   }
 
   void clearAllSyncing() {

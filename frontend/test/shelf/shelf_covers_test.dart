@@ -35,7 +35,8 @@ class FakeApi implements MediaApiInterface {
   Uint8List cipher = Uint8List(0);
 
   @override
-  Future<Uint8List> downloadCiphertext(String url) async {
+  Future<Uint8List> downloadCiphertext(String url,
+      {int expectedBytes = 0, Future<String> Function()? refreshUrl}) async {
     await gate?.future;
     return cipher;
   }

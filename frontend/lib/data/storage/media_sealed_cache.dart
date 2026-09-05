@@ -11,6 +11,7 @@ import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
 import 'media_cache_key.dart';
+import 'media_catalog.dart';
 
 // L2 disk cache : each blob is sealed under cache_root_key as the Aead wire
 // VER‖NONCE‖TAG‖CT, NOT the S3 ciphertext. readBlob/writeBlob deal in
@@ -30,7 +31,7 @@ const String _createCovers = '''
   )
 ''';
 
-class MediaSealedCache {
+class MediaSealedCache implements MediaCatalog {
   final Directory _root;
   final Database _db;
   final Uint8List _cacheKey;
@@ -52,7 +53,7 @@ class MediaSealedCache {
     if (!root.existsSync()) root.createSync(recursive: true);
     final db = await openDatabase(
       p.join(root.path, 'records.db'),
-      version: 2,
+      version: 3,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE media_records (
@@ -61,7 +62,8 @@ class MediaSealedCache {
             record_json TEXT NOT NULL,
             blob_bytes  INTEGER NOT NULL DEFAULT 0,
             thumb_bytes INTEGER NOT NULL DEFAULT 0,
-            last_access INTEGER NOT NULL
+            last_access INTEGER NOT NULL,
+            sort_index  INTEGER NOT NULL DEFAULT 0
           )
         ''');
         await db.execute(
@@ -72,6 +74,11 @@ class MediaSealedCache {
       },
       onUpgrade: (db, from, to) async {
         if (from < 2) await db.execute(_createCovers);
+        // created_at is only hour-precise, so persist explicit server order
+        if (from < 3) {
+          await db.execute('ALTER TABLE media_records '
+              'ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0');
+        }
       },
     );
     final cache = MediaSealedCache._(root, db, cacheRootKey, budgetBytes);
@@ -122,15 +129,71 @@ class MediaSealedCache {
     }
   }
 
+  // Ignore byte-accounting placeholders without render metadata
+  @override
+  Future<List<MediaRecord>> listRecordsForAlbum(String albumId) async {
+    final rows = await _db.query('media_records',
+        columns: ['record_json'],
+        where: 'album_id = ? AND length(record_json) > 2',
+        whereArgs: [albumId],
+        orderBy: 'sort_index ASC');
+    final out = <MediaRecord>[];
+    for (final row in rows) {
+      try {
+        out.add(MediaRecord.fromJson(
+            jsonDecode(row['record_json'] as String) as Map<String, dynamic>));
+      } catch (_) {
+        // Keep one corrupt row from hiding the rest of the album
+      }
+    }
+    return out;
+  }
+
+  @override
+  Future<void> reconcileAlbum(String albumId, List<MediaRecord> records) async {
+    final keep = {for (final r in records) r.id};
+    final existing = await _db.query('media_records',
+        columns: ['media_id'], where: 'album_id = ?', whereArgs: [albumId]);
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.transaction((txn) async {
+      for (var i = 0; i < records.length; i++) {
+        final r = records[i];
+        final json = jsonEncode(r.toJson());
+        await txn.rawInsert(
+          'INSERT OR IGNORE INTO media_records '
+          '(media_id, album_id, record_json, last_access, sort_index) '
+          'VALUES (?, ?, ?, ?, ?)',
+          [r.id, albumId, json, now, i],
+        );
+        // A listing is not a view, so it must not refresh the LRU timestamp
+        await txn.rawUpdate(
+          'UPDATE media_records SET album_id = ?, record_json = ?, '
+          'sort_index = ? WHERE media_id = ?',
+          [albumId, json, i, r.id],
+        );
+      }
+    });
+
+    for (final row in existing) {
+      final id = row['media_id'] as String;
+      if (!keep.contains(id)) await invalidate(id);
+    }
+  }
+
   // Preserve byte accounting without REPLACE or API 30 only UPSERT syntax
   Future<void> writeRecord(MediaRecord r) async {
     final json = jsonEncode(r.toJson());
     final now = DateTime.now().millisecondsSinceEpoch;
     await _db.transaction((txn) async {
+      // New arrivals stay first until the next server reconciliation
       await txn.rawInsert(
         'INSERT OR IGNORE INTO media_records '
-        '(media_id, album_id, record_json, last_access) VALUES (?, ?, ?, ?)',
-        [r.id, r.albumId, json, now],
+        '(media_id, album_id, record_json, last_access, sort_index) '
+        'VALUES (?, ?, ?, ?, '
+        'COALESCE((SELECT MIN(sort_index) - 1 FROM media_records '
+        'WHERE album_id = ?), -1))',
+        [r.id, r.albumId, json, now, r.albumId],
       );
       await txn.rawUpdate(
         'UPDATE media_records SET album_id = ?, record_json = ?, '
@@ -145,15 +208,21 @@ class MediaSealedCache {
     final json = jsonEncode(r.toJson());
     final now = DateTime.now().millisecondsSinceEpoch;
     await _db.transaction((txn) async {
+      // Put new previews first, including when filling a placeholder row
       await txn.rawInsert(
         'INSERT OR IGNORE INTO media_records '
-        '(media_id, album_id, record_json, last_access) VALUES (?, ?, ?, ?)',
-        [r.id, r.albumId, json, now],
+        '(media_id, album_id, record_json, last_access, sort_index) '
+        'VALUES (?, ?, ?, ?, '
+        'COALESCE((SELECT MIN(sort_index) - 1 FROM media_records '
+        'WHERE album_id = ?), -1))',
+        [r.id, r.albumId, json, now, r.albumId],
       );
       await txn.rawUpdate(
-        "UPDATE media_records SET record_json = ?, last_access = ? "
+        "UPDATE media_records SET record_json = ?, last_access = ?, "
+        "sort_index = COALESCE("
+        "(SELECT MIN(sort_index) - 1 FROM media_records WHERE album_id = ?), -1) "
         "WHERE media_id = ? AND record_json = '{}'",
-        [json, now, r.id],
+        [json, now, r.albumId, r.id],
       );
     });
   }
@@ -235,8 +304,10 @@ class MediaSealedCache {
       await _dropAsset(id, CacheAsset.thumb);
       total -= bytes;
     }
+    // Keep metadata-only rows so albums remain available offline
     await _db.delete('media_records',
-        where: 'blob_bytes = 0 AND thumb_bytes = 0');
+        where:
+            'blob_bytes = 0 AND thumb_bytes = 0 AND length(record_json) <= 2');
   }
 
   Future<Set<String>> _pinnedMediaIds() async {

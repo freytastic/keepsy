@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
@@ -6,6 +7,7 @@ import 'package:image/image.dart' as img;
 import 'package:keepsy/crypto/aead_stream.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 
@@ -213,6 +215,47 @@ void main() {
   });
 
   group('FilePipeline.prepareUpload photo metadata stripping', () {
+    test('emits correlated timings for every CPU-heavy photo stage', () async {
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final lines = <String>[];
+      Trace.debugEnabled = true;
+      try {
+        await runZoned(
+          () => Trace.withId(
+            'uploadtrace',
+            () => FilePipeline.prepareUpload(
+              aks: aks,
+              albumIdBytes: _albumId(),
+              currentEpoch: 0,
+              plaintext: _jpegWithExif(),
+              mediaType: 'photo',
+            ),
+          ),
+          zoneSpecification: ZoneSpecification(
+            print: (_, __, ___, line) => lines.add(line),
+          ),
+        );
+      } finally {
+        Trace.debugEnabled = null;
+      }
+
+      for (final name in [
+        'media.prepareUpload',
+        'media.imageDecode',
+        'media.imageEncode',
+        'media.thumbResize',
+        'media.thumbEncode',
+        'media.fileEncrypt',
+        'media.keyWrap',
+      ]) {
+        expect(lines.any((line) => line.contains('$name.start')), isTrue,
+            reason: '$name must have a start marker');
+        expect(lines.any((line) => line.contains('$name.end')), isTrue,
+            reason: '$name must have an end marker');
+      }
+      expect(lines, everyElement(contains('tid=uploadtrace')));
+    });
+
     test('uploaded photo bytes carry no EXIF/GPS, thumb included', () async {
       final withExif = _jpegWithExif();
       // precondition : the fixture really does carry EXIF

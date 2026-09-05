@@ -8,6 +8,7 @@ import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
@@ -35,11 +36,17 @@ class _LandingPageState extends State<LandingPage> {
     final valid = await storage.isValid();
 
     if (valid) {
-      // Fetch user profile and their albums concurrently
-      final responses = await Future.wait([
-        userService.getMe(),
-        albumService.getMyAlbums(),
-      ]);
+      // Measure the two parallel requests that gate cold start
+      final responses = await Trace.measure<List<dynamic>>(
+        'coldstart.identity_and_albums',
+        () => Future.wait([
+          userService.getMe(),
+          albumService.getMyAlbums(),
+        ]),
+        endFields: (result) => {
+          'albums': (result[1] as List<dynamic>?)?.length ?? -1,
+        },
+      );
 
       final userData = responses[0] as Map<String, dynamic>?;
       final userAlbums = responses[1] as List<dynamic>?;
@@ -212,14 +219,40 @@ Future<void> syncAlbumKeys({
 }) async {
   if (albumIds.isEmpty) return;
   final ids = albumIds.map(uuidStringFromBytes).toList();
+  final span = Trace.start('sync.albumKeys', fields: {'albums': ids.length});
   appState.markSyncing(ids);
+
+  // Release each album as soon as its key sync completes
+  var cursor = 0;
+  Future<void> worker() async {
+    while (true) {
+      final i = cursor++;
+      if (i >= albumIds.length) return;
+      try {
+        await catchUp([albumIds[i]]);
+      } catch (_) {
+      } finally {
+        appState.clearSyncing(ids[i]);
+      }
+    }
+  }
+
+  // Bound network fan-out across large shelves
+  const maxConcurrent = 2;
+  final workers = <Future<void>>[
+    for (var i = 0; i < maxConcurrent && i < albumIds.length; i++) worker(),
+  ];
+
   try {
-    await catchUp(albumIds);
+    await Future.wait(workers);
     // MKs are installed now : titles that setAlbums couldnt decrypt yet
     // (cold start before catch up) become resolvable
     appState.refreshAlbumNames();
-  } catch (_) {
+    span.end();
+  } catch (e) {
+    span.fail(Trace.reasonOf(e));
   } finally {
+    // Clear IDs left by an unexpected worker failure
     for (final id in ids) {
       appState.clearSyncing(id);
     }

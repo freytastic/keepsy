@@ -5,6 +5,7 @@ import 'package:image/image.dart' as img;
 import 'package:keepsy/crypto/aead_stream.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:uuid/uuid.dart';
 
 import 'album_keys.dart';
@@ -121,6 +122,13 @@ abstract class FilePipeline {
 
     final mediaId = _newUuidBytes();
     final dek = Csprng.bytes(_dekLen);
+    final traceFields = <String, Object?>{
+      'media': Trace.id(_uuidStringFromBytes(mediaId)),
+      'kind': mediaType,
+      'input_bytes': plaintext.length,
+      'epoch': currentEpoch,
+    };
+    final prepareSpan = Trace.start('media.prepareUpload', fields: traceFields);
 
     try {
       // for photos, decode + re encode as a fresh JPEG with EXIF explicitly
@@ -131,7 +139,7 @@ abstract class FilePipeline {
       Uint8List bytesToEncrypt = plaintext;
       Uint8List? thumbPlaintext;
       if (mediaType == 'photo') {
-        final stripped = _stripExifAndThumb(plaintext);
+        final stripped = _stripExifAndThumb(plaintext, traceFields);
         // Fail closed : if we couldnt decode the photo we cant guarantee its
         // metadata was stripped, so we refuse rather than upload the original
         // bytes with EXIF/GPS intact (video keeps the raw path : no image codec)
@@ -146,21 +154,27 @@ abstract class FilePipeline {
       // Algorithm select by plaintext size only (D5) : <1 MiB → VER=0x01
       // single tag, >=1 MiB → VER=0x03 streaming. Anything that picks an
       // algorithm from anywhere other than this size check is a bug
-      Uint8List cipher;
-      if (bytesToEncrypt.length < kSegmentSize) {
-        cipher = await Aead.encrypt(
-          version: kVerAesGcm,
-          key: dek,
-          plaintext: bytesToEncrypt,
-          aad: mediaId,
-        );
-      } else {
-        cipher = await AeadStream.encryptBytes(
-          dek: dek,
-          plaintext: bytesToEncrypt,
-          mediaId: mediaId,
-        );
-      }
+      final cipher = await Trace.measure<Uint8List>(
+        'media.fileEncrypt',
+        () => bytesToEncrypt.length < kSegmentSize
+            ? Aead.encrypt(
+                version: kVerAesGcm,
+                key: dek,
+                plaintext: bytesToEncrypt,
+                aad: mediaId,
+              )
+            : AeadStream.encryptBytes(
+                dek: dek,
+                plaintext: bytesToEncrypt,
+                mediaId: mediaId,
+              ),
+        fields: {
+          ...traceFields,
+          'bytes': bytesToEncrypt.length,
+          'mode': bytesToEncrypt.length < kSegmentSize ? 'single' : 'stream',
+        },
+        endFields: (result) => {'output_bytes': result.length},
+      );
 
       final blobSha256 = await _sha256(cipher);
 
@@ -196,39 +210,46 @@ abstract class FilePipeline {
           );
           thumbSha256 = await _sha256(thumbCipher);
         }
-        await aks.useMk<void>(albumIdBytes, currentEpoch, (mk) async {
-          final wrapWire = await Aead.encrypt(
-            version: kVerAesGcm,
-            key: mk,
-            plaintext: dek,
-            aad: wrapAad,
-          );
-          if (wrapWire.length != _wrapWireLen) {
-            throw StateError(
-                'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
-          }
-          wrapNonce =
-              Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
-          wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
-
-          if (dekThumb != null) {
-            final thumbWrapWire = await Aead.encrypt(
+        await Trace.measure<void>(
+          'media.keyWrap',
+          () => aks.useMk<void>(albumIdBytes, currentEpoch, (mk) async {
+            final wrapWire = await Aead.encrypt(
               version: kVerAesGcm,
               key: mk,
-              plaintext: dekThumb,
+              plaintext: dek,
               aad: wrapAad,
             );
-            thumbWrapNonce =
-                Uint8List.fromList(thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
-            thumbWrapTagCT =
-                Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
-          }
-        });
+            if (wrapWire.length != _wrapWireLen) {
+              throw StateError(
+                  'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
+            }
+            wrapNonce =
+                Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
+            wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
+
+            if (dekThumb != null) {
+              final thumbWrapWire = await Aead.encrypt(
+                version: kVerAesGcm,
+                key: mk,
+                plaintext: dekThumb,
+                aad: wrapAad,
+              );
+              thumbWrapNonce = Uint8List.fromList(
+                  thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
+              thumbWrapTagCT =
+                  Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
+            }
+          }),
+          fields: {
+            ...traceFields,
+            'wraps': dekThumb == null ? 1 : 2,
+          },
+        );
       } finally {
         dekThumb?.fillRange(0, dekThumb.length, 0);
       }
 
-      return UploadEnvelope(
+      final envelope = UploadEnvelope(
         mediaId: mediaId,
         cipherBytes: cipher,
         wrapNonce: wrapNonce,
@@ -247,6 +268,14 @@ abstract class FilePipeline {
         thumbSha256: thumbSha256,
         thumbPlaintext: thumbPlaintext,
       );
+      prepareSpan.end(fields: {
+        'file_bytes': envelope.blobSize,
+        'thumb_bytes': envelope.thumbSize,
+      });
+      return envelope;
+    } catch (e) {
+      prepareSpan.fail(Trace.reasonOf(e));
+      rethrow;
     } finally {
       dek.fillRange(0, dek.length, 0);
     }
@@ -283,8 +312,18 @@ class _StrippedAndThumb {
 // re encode as a clean JPEG + pull a 400px long-edge thumbnail off the same
 // Image. Returns null if the bytes arent a decodable image : the caller fails
 // closed rather than upload unstripped bytes
-_StrippedAndThumb? _stripExifAndThumb(Uint8List bytes) {
-  final decoded = img.decodeImage(bytes);
+_StrippedAndThumb? _stripExifAndThumb(
+    Uint8List bytes, Map<String, Object?> traceFields) {
+  final decoded = Trace.measureSync<img.Image?>(
+    'media.imageDecode',
+    () => img.decodeImage(bytes),
+    fields: {...traceFields, 'bytes': bytes.length},
+    endFields: (result) => {
+      'decoded': result != null,
+      if (result != null) 'width': result.width,
+      if (result != null) 'height': result.height,
+    },
+  );
   if (decoded == null) return null;
   // Drop EXIF (GPS, camera, capture time) + any XMP/IPTC BEFORE re encoding :
   // package:image parses EXIF into decoded.exif and encodeJpg writes it back
@@ -292,13 +331,35 @@ _StrippedAndThumb? _stripExifAndThumb(Uint8List bytes) {
   // clean JPEG and the thumbnail (derived below from the same Image) are
   // metadata free. ICC colour profile is left alone (not privacy sensitive)
   decoded.exif = img.ExifData();
-  final cleanJpeg = img.encodeJpg(decoded, quality: 90);
+  final cleanJpeg = Trace.measureSync<Uint8List>(
+    'media.imageEncode',
+    () => img.encodeJpg(decoded, quality: 90),
+    fields: traceFields,
+    endFields: (result) => {'bytes': result.length, 'quality': 90},
+  );
   // Resize the LONG edge to _thumbMaxDim. copyResize preserves aspect ratio
   // when only one of width/height is given
-  final thumbImg = decoded.width >= decoded.height
-      ? img.copyResize(decoded, width: _thumbMaxDim)
-      : img.copyResize(decoded, height: _thumbMaxDim);
-  final thumb = img.encodeJpg(thumbImg, quality: _thumbJpegQuality);
+  final thumbImg = Trace.measureSync<img.Image>(
+    'media.thumbResize',
+    () => decoded.width >= decoded.height
+        ? img.copyResize(decoded, width: _thumbMaxDim)
+        : img.copyResize(decoded, height: _thumbMaxDim),
+    fields: traceFields,
+    endFields: (result) => {
+      'width': result.width,
+      'height': result.height,
+    },
+  );
+
+  final thumb = Trace.measureSync<Uint8List>(
+    'media.thumbEncode',
+    () => img.encodeJpg(thumbImg, quality: _thumbJpegQuality),
+    fields: traceFields,
+    endFields: (result) => {
+      'bytes': result.length,
+      'quality': _thumbJpegQuality,
+    },
+  );
   return _StrippedAndThumb(cleanJpeg, thumb);
 }
 

@@ -18,9 +18,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// PresignTTL : the client uploads to S3 right after RequestUploadURL returns,
-// so a short TTL is fine and reduces the window for URL replay
-const PresignTTL = 15 * time.Minute
+// PresignTTL covers the largest transfer at the client's 64 KiB/s floor
+const PresignTTL = 30 * time.Minute
 
 // EpochLookup is the slice of *epoch.Repo this service needs : keeps the dep
 // surface small + lets tests stub without pulling pgx
@@ -40,7 +39,11 @@ type MediaStore interface {
 	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
 	MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) (int64, error)
 	MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error)
-	DeletePending(ctx context.Context, mediaID, albumID uuid.UUID) error
+	QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (repository.PendingCleanupBatch, error)
+	QueueStalePendingCleanup(ctx context.Context, before time.Time, limit int) (repository.PendingCleanupBatch, error)
+	ListObjectCleanupKeys(ctx context.Context, limit int) ([]string, error)
+	DeleteObjectCleanupKey(ctx context.Context, key string) error
+	RescheduleObjectCleanupKey(ctx context.Context, key string) (int, error)
 	GetByID(ctx context.Context, mediaID, albumID uuid.UUID) (*model.Media, error)
 	ListConfirmed(ctx context.Context, albumID uuid.UUID) ([]model.Media, error)
 	Delete(ctx context.Context, mediaID, albumID uuid.UUID) error
@@ -235,8 +238,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 	sha256B64 := base64.StdEncoding.EncodeToString(in.BlobSHA256)
 	pre, err := s.s3.GetPresignedUploadURLWithChecksum(ctx, storageKey, contentType, in.BlobSize, sha256B64, PresignTTL)
 	if err != nil {
-		// Best effort cleanup : if this fails the GC sweep picks up the row
-		_ = s.repo.DeletePending(ctx, mediaID, albumID)
+		_ = s.retirePending(ctx, row)
 		return nil, apierr.Internal("failed to presign upload").WithCause(err)
 	}
 	res := &RequestUploadResult{
@@ -252,7 +254,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		// thumb is application/octet-stream or worse
 		thumbPre, err := s.s3.GetPresignedUploadURLWithChecksum(ctx, thumbKey, "image/webp", in.ThumbSize, thumbSHA256B64, PresignTTL)
 		if err != nil {
-			_ = s.repo.DeletePending(ctx, mediaID, albumID)
+			_ = s.retirePending(ctx, row)
 			return nil, apierr.Internal("failed to presign thumb upload").WithCause(err)
 		}
 		res.ThumbUploadURL = thumbPre.URL
@@ -321,14 +323,19 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
-			// Re read the row's generation after losing a concurrent confirm
-			if again, rerr := s.repo.GetByID(ctx, mediaID, albumID); rerr == nil &&
-				again.AlbumSeq != nil {
-				return *again.AlbumSeq, nil
+			// Only an already confirmed row makes a repeated confirm successful
+			if again, rerr := s.repo.GetByID(ctx, mediaID, albumID); rerr == nil {
+				if again.Confirmed && again.AlbumSeq != nil {
+					return *again.AlbumSeq, nil
+				}
+				if again.Confirmed {
+					if g, gerr := s.repo.MediaGeneration(ctx, albumID); gerr == nil {
+						return g, nil
+					}
+				}
+				return 0, apierr.Conflict("media upload is no longer pending")
 			}
-			if g, gerr := s.repo.MediaGeneration(ctx, albumID); gerr == nil {
-				return g, nil
-			}
+			return 0, apierr.NotFound("media upload was aborted")
 		}
 		return 0, apierr.Internal("failed to mark confirmed").WithCause(err)
 	}
@@ -399,9 +406,8 @@ type DownloadURLResult struct {
 	ExpiresAt time.Time
 }
 
-// DownloadURLTTL : longer than upload TTL since the client may take a moment
-// to actually issue the GET (image picker, UI animation, etc.)
-const DownloadURLTTL = 15 * time.Minute
+// DownloadURLTTL matches the longest client transfer budget
+const DownloadURLTTL = 30 * time.Minute
 
 // RequestDownloadURL : returns a fresh presigned GET URL for a confirmed
 // media row. Refuses pending rows (their S3 object may not exist yet) and
@@ -471,6 +477,87 @@ func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UU
 	return nil
 }
 
+// AbortPendingUpload retires a pending reservation owned by the caller
+func (s *MediaService) AbortPendingUpload(ctx context.Context, albumID, mediaID uuid.UUID, uploaderToken []byte) error {
+	batch, err := s.repo.QueuePendingCleanup(ctx, mediaID, albumID, uploaderToken)
+	if err != nil {
+		return apierr.Internal("failed to abort pending upload").WithCause(err)
+	}
+	s.cleanupObjectKeys(ctx, batch.Keys)
+	return nil
+}
+
+// MaxBlobBytes is mirrored by the client when deriving transfer deadlines
+const MaxBlobBytes int64 = 64 * 1024 * 1024
+
+const (
+	// Two hours avoids early cleanup of hour-quantized timestamps
+	PendingUploadStaleAfter = 2 * time.Hour
+	PendingCleanupInterval  = 10 * time.Minute
+	PendingCleanupBatchSize = 100
+	// Attempts after which a key is treated as stuck
+	ObjectCleanupAlertAttempts = 10
+)
+
+type PendingCleanupStats struct {
+	RetiredMedia  int
+	DeletedObject int
+	FailedObject  int
+	StuckObject   int
+}
+
+// SweepStalePendingUploads queues stale rows before deleting their objects
+func (s *MediaService) SweepStalePendingUploads(ctx context.Context, before time.Time, batchSize int) (PendingCleanupStats, error) {
+	batch, err := s.repo.QueueStalePendingCleanup(ctx, before, batchSize)
+	if err != nil {
+		return PendingCleanupStats{}, err
+	}
+	keys, err := s.repo.ListObjectCleanupKeys(ctx, batchSize*2)
+	if err != nil {
+		return PendingCleanupStats{RetiredMedia: batch.MediaCount}, err
+	}
+	deleted, failed, stuck := s.cleanupObjectKeys(ctx, keys)
+	return PendingCleanupStats{
+		RetiredMedia:  batch.MediaCount,
+		DeletedObject: deleted,
+		FailedObject:  failed,
+		StuckObject:   stuck,
+	}, nil
+}
+
+func (s *MediaService) RunPendingUploadCleanup(ctx context.Context) {
+	run := func() {
+		stats, err := s.SweepStalePendingUploads(
+			ctx,
+			time.Now().Add(-PendingUploadStaleAfter),
+			PendingCleanupBatchSize,
+		)
+		if err != nil {
+			slog.ErrorContext(ctx, "pending media cleanup failed", "err", err)
+			return
+		}
+		if stats.RetiredMedia > 0 || stats.DeletedObject > 0 || stats.FailedObject > 0 {
+			slog.InfoContext(ctx, "pending media cleanup",
+				"retired_media", stats.RetiredMedia,
+				"deleted_objects", stats.DeletedObject,
+				"failed_objects", stats.FailedObject,
+				"stuck_objects", stats.StuckObject)
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(PendingCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
 // deletes every media object (blob + thumbnail) for an album
 // from object storage. Called before the album row is dropped, since the media
 // rows cascade away with it and the S3 objects would otherwise orphan (S3 is
@@ -506,13 +593,45 @@ func (s *MediaService) PurgeAlbumObjects(ctx context.Context, albumID uuid.UUID)
 }
 
 func (s *MediaService) dropOrphan(ctx context.Context, row *model.Media) error {
-	_ = s.s3.DeleteObject(ctx, row.StorageKey)
-	// drop the thumb object too, else a failed confirm on a thumb carrying row
-	// orphans the thumb in storage (DeleteObject is idempotent)
-	if row.ThumbKey != nil && *row.ThumbKey != "" {
-		_ = s.s3.DeleteObject(ctx, *row.ThumbKey)
+	return s.retirePending(ctx, row)
+}
+
+func (s *MediaService) retirePending(ctx context.Context, row *model.Media) error {
+	batch, err := s.repo.QueuePendingCleanup(ctx, row.ID, row.AlbumID, row.UploaderToken)
+	if err != nil {
+		return err
 	}
-	return s.repo.DeletePending(ctx, row.ID, row.AlbumID)
+	s.cleanupObjectKeys(ctx, batch.Keys)
+	return nil
+}
+
+func (s *MediaService) cleanupObjectKeys(ctx context.Context, keys []string) (deleted, failed, stuck int) {
+	for _, key := range keys {
+		if err := s.s3.DeleteObject(ctx, key); err != nil {
+			failed++
+			slog.WarnContext(ctx, "pending media object delete failed", "err", err)
+			// Back off failed keys so fresh work can proceed
+			attempts, rerr := s.repo.RescheduleObjectCleanupKey(ctx, key)
+			if rerr != nil {
+				slog.WarnContext(ctx, "pending media cleanup reschedule failed", "err", rerr)
+			}
+			// Keep retrying to avoid leaving encrypted user objects behind
+			if attempts >= ObjectCleanupAlertAttempts {
+				stuck++
+				slog.ErrorContext(ctx, "pending media object will not delete",
+					"attempts", attempts, "err", err)
+			}
+			continue
+		}
+		if err := s.repo.DeleteObjectCleanupKey(ctx, key); err != nil {
+			// Keep the key queued; repeating object deletion is safe
+			failed++
+			slog.WarnContext(ctx, "pending media cleanup acknowledgement failed", "err", err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, failed, stuck
 }
 
 func newStorageKey() (string, error) {
@@ -531,6 +650,13 @@ func validateUploadInput(in RequestUploadInput) error {
 	}
 	if in.BlobSize <= 0 {
 		return apierr.Validation("blob_size must be > 0")
+	}
+	// Keep this limit aligned with kMaxMediaBytes in the client
+	if in.BlobSize > MaxBlobBytes {
+		return apierr.Validation("blob_size exceeds the maximum media size")
+	}
+	if in.ThumbSize > MaxBlobBytes {
+		return apierr.Validation("thumb_size exceeds the maximum media size")
 	}
 	if len(in.BlobSHA256) != sha256Len {
 		return apierr.Validation("blob_sha256 must be 32 bytes")

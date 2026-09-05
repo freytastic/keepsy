@@ -49,6 +49,7 @@ frontend/**/.pub-cache/
 frontend/**/.pub/
 frontend/**/build/
 frontend/coverage/
+frontend/out/
 
 # Symbolication related
 frontend/app.*.symbols
