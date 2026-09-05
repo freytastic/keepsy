@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/file_decryptor.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
@@ -14,12 +15,16 @@ class EncryptedImage extends StatefulWidget {
   final MediaRecord record;
   final MediaCacheManager cache;
   final BoxFit fit;
+  final String? traceId;
+  final VoidCallback? onFirstFrame;
 
   const EncryptedImage({
     super.key,
     required this.record,
     required this.cache,
     this.fit = BoxFit.cover,
+    this.traceId,
+    this.onFirstFrame,
   });
 
   @override
@@ -30,45 +35,83 @@ class _EncryptedImageState extends State<EncryptedImage> {
   Uint8List? _bytes;
   String? _error;
   bool _loading = true;
+  TraceSpan? _toFrameSpan;
+  bool _frameReported = false;
+  late String _resolvedTraceId;
 
   @override
   void initState() {
     super.initState();
+    _resolvedTraceId = widget.traceId ?? Trace.newTraceId();
     _decrypt();
   }
 
   @override
   void didUpdateWidget(covariant EncryptedImage old) {
     super.didUpdateWidget(old);
-    if (old.record.id != widget.record.id) {
+    if (old.record.id != widget.record.id || old.traceId != widget.traceId) {
+      _toFrameSpan?.fail('record_changed_before_frame');
+      _toFrameSpan = null;
       _bytes = null;
       _error = null;
       _loading = true;
+      _frameReported = false;
+      _resolvedTraceId = widget.traceId ?? Trace.newTraceId();
       _decrypt();
     }
   }
 
   Future<void> _decrypt() async {
+    _toFrameSpan = Trace.start('media.fullImageToFrame',
+        traceId: _resolvedTraceId,
+        fields: {
+          'album': Trace.id(widget.record.albumId),
+          'media': Trace.id(widget.record.id),
+          'asset': 'file',
+        });
     try {
-      final pt = await widget.cache.getDecrypted(widget.record, thumb: false);
+      final pt = await Trace.withId(_resolvedTraceId,
+          () => widget.cache.getDecrypted(widget.record, thumb: false));
       if (!mounted) return;
       setState(() {
         _bytes = pt;
         _loading = false;
       });
     } on FileDecryptError catch (e) {
+      _toFrameSpan?.fail(e.reason);
+      _toFrameSpan = null;
       if (!mounted) return;
       setState(() {
         _error = e.reason;
         _loading = false;
       });
     } catch (_) {
+      _toFrameSpan?.fail('unexpected');
+      _toFrameSpan = null;
       if (!mounted) return;
       setState(() {
         _error = 'unexpected';
         _loading = false;
       });
     }
+  }
+
+  void _reportFirstFrame(bool synchronouslyLoaded) {
+    if (_frameReported) return;
+    _frameReported = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _toFrameSpan?.end(fields: {'sync': synchronouslyLoaded});
+      _toFrameSpan = null;
+      widget.onFirstFrame?.call();
+    });
+  }
+
+  @override
+  void dispose() {
+    _toFrameSpan?.fail('disposed_before_frame');
+    _toFrameSpan = null;
+    super.dispose();
   }
 
   @override
@@ -101,6 +144,14 @@ class _EncryptedImageState extends State<EncryptedImage> {
         ),
       );
     }
-    return Image.memory(_bytes!, fit: widget.fit, gaplessPlayback: true);
+    return Image.memory(
+      _bytes!,
+      fit: widget.fit,
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, synchronouslyLoaded) {
+        if (frame != null) _reportFirstFrame(synchronouslyLoaded);
+        return child;
+      },
+    );
   }
 }

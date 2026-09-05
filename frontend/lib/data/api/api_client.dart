@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:keepsy/data/constants.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'api_error.dart';
 
 class ApiClient {
@@ -23,6 +24,24 @@ class ApiClient {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
     };
+  }
+
+  // Reuse the trace ID when retrying after token refresh
+  Map<String, String> _withTraceHeader(Map<String, String> h, String traceId) =>
+      {...h, 'X-Request-ID': traceId};
+
+  // Replace identifier-bearing path segments before logging
+  static String _routeOf(String path) {
+    final noQuery = path.split('?').first;
+    return noQuery
+        .replaceFirst(RegExp(r'^/invite/[^/]+'), '/invite/{code}')
+        .replaceFirst(
+            RegExp(r'^/users/by-handle/[^/]+'), '/users/by-handle/{handle}')
+        .replaceAll(
+            RegExp(r'/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+                r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'),
+            '/{id}')
+        .replaceAll(RegExp(r'/[A-Za-z0-9_-]{22,}'), '/{token}');
   }
 
   Future<bool> _handleRefresh() async {
@@ -62,72 +81,100 @@ class ApiClient {
     }
   }
 
-  Future<http.Response> _sendWithRetry(
-      String path, Future<http.Response> Function() requestAction) async {
-    http.Response response = await requestAction();
+  Future<http.Response> _sendWithRetry(String method, String path,
+      String traceId, Future<http.Response> Function() requestAction) async {
+    final span = Trace.start('api.request', traceId: traceId, fields: {
+      'method': method,
+      'route': _routeOf(path),
+    });
+    try {
+      var response = await requestAction();
 
-    if (response.statusCode == 401) {
-      final refreshSuccess = await _handleRefresh();
-      if (refreshSuccess) {
-        response = await requestAction();
-      } else {
-        await _storage.deleteAuth();
+      var refreshed = false;
+      if (response.statusCode == 401) {
+        final refreshSuccess = await _handleRefresh();
+        if (refreshSuccess) {
+          refreshed = true;
+          response = await requestAction();
+        } else {
+          await _storage.deleteAuth();
+        }
       }
-    }
 
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return response;
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        span.end(fields: {
+          'status': response.statusCode,
+          'bytes': response.bodyBytes.length,
+          if (refreshed) 'refreshed': true,
+        });
+        return response;
+      }
+      span.fail('http_${response.statusCode}', fields: {
+        'status': response.statusCode,
+        'bytes': response.bodyBytes.length,
+        if (refreshed) 'refreshed': true,
+      });
+      final err = ApiError.fromResponse(response);
+      if (err.code == 'E_MEMBER_REVOKED' && onMemberRevoked != null) {
+        final m = _albumIdRe.firstMatch(path);
+        if (m != null) onMemberRevoked!(m.group(1)!);
+      }
+      throw err;
+    } catch (error) {
+      span.fail(Trace.reasonOf(error));
+      rethrow;
     }
-    final err = ApiError.fromResponse(response);
-    if (err.code == 'E_MEMBER_REVOKED' && onMemberRevoked != null) {
-      final m = _albumIdRe.firstMatch(path);
-      if (m != null) onMemberRevoked!(m.group(1)!);
-    }
-    throw err;
   }
 
   Future<http.Response> get(String path) async {
-    return _sendWithRetry(path, () async {
+    final tid = Trace.currentId ?? Trace.newTraceId();
+    return _sendWithRetry('GET', path, tid, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
-      return await http.get(url, headers: await _headers());
+      return await http.get(url,
+          headers: _withTraceHeader(await _headers(), tid));
     });
   }
 
   Future<http.Response> post(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(path, () async {
+    final tid = Trace.currentId ?? Trace.newTraceId();
+    return _sendWithRetry('POST', path, tid, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.post(
         url,
-        headers: await _headers(),
+        headers: _withTraceHeader(await _headers(), tid),
         body: body != null ? jsonEncode(body) : null,
       );
     });
   }
 
   Future<http.Response> put(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(path, () async {
+    final tid = Trace.currentId ?? Trace.newTraceId();
+    return _sendWithRetry('PUT', path, tid, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.put(
         url,
-        headers: await _headers(),
+        headers: _withTraceHeader(await _headers(), tid),
         body: body != null ? jsonEncode(body) : null,
       );
     });
   }
 
   Future<http.Response> delete(String path) async {
-    return _sendWithRetry(path, () async {
+    final tid = Trace.currentId ?? Trace.newTraceId();
+    return _sendWithRetry('DELETE', path, tid, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
-      return await http.delete(url, headers: await _headers());
+      return await http.delete(url,
+          headers: _withTraceHeader(await _headers(), tid));
     });
   }
 
   Future<http.Response> patch(String path, {Map<String, dynamic>? body}) async {
-    return _sendWithRetry(path, () async {
+    final tid = Trace.currentId ?? Trace.newTraceId();
+    return _sendWithRetry('PATCH', path, tid, () async {
       final url = Uri.parse('${AppConstants.baseURL}$path');
       return await http.patch(
         url,
-        headers: await _headers(),
+        headers: _withTraceHeader(await _headers(), tid),
         body: body != null ? jsonEncode(body) : null,
       );
     });
