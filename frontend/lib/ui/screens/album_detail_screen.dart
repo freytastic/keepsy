@@ -9,11 +9,13 @@ import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/crypto/uuid_bytes.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
@@ -28,6 +30,15 @@ import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
+
+// Distinguishes a confirmed-empty album from an unavailable one
+enum AlbumFeedState {
+  loadingNoCache,
+  showingCached,
+  refreshing,
+  staleOffline,
+  confirmedEmpty,
+}
 
 class AlbumDetailScreen extends StatefulWidget {
   final AlbumModel album;
@@ -50,7 +61,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   List<AlbumMember> _members = [];
   List<MediaRecord> _items = [];
   bool _loadingMembers = true;
-  bool _loadingMedia = true;
+  AlbumFeedState _feed = AlbumFeedState.loadingNoCache;
   bool _uploading = false;
   bool _markedOpenSeen = false;
 
@@ -64,12 +75,54 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _accessLost = false;
   AppState? _appState;
 
+  // One trace ID covers local load, refresh, and first paint
+  late final String _openTraceId = Trace.newTraceId();
+  final Stopwatch _openClock = Stopwatch()..start();
+  bool _firstThumbnailReported = false;
+  String _renderSource = 'none';
+
+  MediaCatalog? _catalog;
+
   @override
   void initState() {
     super.initState();
     _media = widget.mediaApi ?? MediaApi(ApiClient());
+    Trace.event('album.open', fields: {
+      'album': Trace.id(widget.album.id),
+      'tid': _openTraceId,
+      'gen': widget.album.mediaGeneration,
+    });
+    try {
+      _catalog = context.read<MediaCatalog>();
+    } catch (_) {
+      _catalog = null;
+    }
     _loadMembers();
-    _loadMedia();
+    _openLocalFirst();
+  }
+
+  Future<void> _openLocalFirst() async {
+    await _loadLocal();
+    await _loadMedia();
+  }
+
+  Future<void> _loadLocal() async {
+    final cache = _catalog;
+    if (cache == null) return;
+    final span = Trace.start('album.loadLocal',
+        traceId: _openTraceId, fields: {'album': Trace.id(widget.album.id)});
+    try {
+      final local = await cache.listRecordsForAlbum(widget.album.id);
+      span.end(fields: {'n': local.length});
+      if (!mounted || local.isEmpty) return;
+      setState(() {
+        _items = local;
+        _renderSource = 'local';
+        _feed = AlbumFeedState.refreshing;
+      });
+    } catch (e) {
+      span.fail(Trace.reasonOf(e));
+    }
   }
 
   @override
@@ -85,8 +138,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _markedOpenSeen = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(_seenStore()?.markSeen(
-                widget.album.id, _currentMediaGeneration()) ??
+        unawaited(_seenStore()
+                ?.markSeen(widget.album.id, _currentMediaGeneration()) ??
             Future<void>.value());
       });
     }
@@ -151,7 +204,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   Future<void> _loadMembers() async {
-    final members = await widget.albumService.listMembers(widget.album.id);
+    final members = await Trace.withId(
+      _openTraceId,
+      () => Trace.measure<List<AlbumMember>>(
+        'album.loadMembers',
+        () => widget.albumService.listMembers(widget.album.id),
+        fields: {'album': Trace.id(widget.album.id)},
+        endFields: (result) => {'n': result.length},
+      ),
+    );
     if (mounted) {
       setState(() {
         _members = members;
@@ -553,20 +614,60 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
+  // A failed refresh must not blank cached rows
   Future<void> _loadMedia({int? markSeenThrough}) async {
+    if (mounted && _items.isNotEmpty) {
+      setState(() => _feed = AlbumFeedState.refreshing);
+    }
+    final span = Trace.start('album.loadMedia',
+        traceId: _openTraceId, fields: {'album': Trace.id(widget.album.id)});
     try {
-      final items = await _media.listMedia(widget.album.id);
+      final items = await Trace.withId(
+          _openTraceId, () => _media.listMedia(widget.album.id));
+      span.end(fields: {'n': items.length});
+      // Reconcile only from the complete server listing
+      unawaited(_reconcileLocal(items));
       if (mounted) {
+        final hadRenderableItems = _items.isNotEmpty;
         setState(() {
           _items = items;
-          _loadingMedia = false;
+          if (!hadRenderableItems && items.isNotEmpty) {
+            _renderSource = 'network';
+          }
+          _feed = items.isEmpty
+              ? AlbumFeedState.confirmedEmpty
+              : AlbumFeedState.showingCached;
         });
         if (markSeenThrough != null) {
           await _seenStore()?.markSeen(widget.album.id, markSeenThrough);
         }
       }
+    } catch (e) {
+      span.fail(Trace.reasonOf(e), fields: {'held_items': _items.length});
+      if (!mounted) return;
+      setState(() => _feed = AlbumFeedState.staleOffline);
+    }
+  }
+
+  void _onFirstThumbnailPaint() {
+    if (_firstThumbnailReported) return;
+    _firstThumbnailReported = true;
+    _openClock.stop();
+    Trace.event('album.firstThumbnailPaint', fields: {
+      'tid': _openTraceId,
+      'album': Trace.id(widget.album.id),
+      'after_open_ms': _openClock.elapsedMilliseconds,
+      'source': _renderSource,
+    });
+  }
+
+  Future<void> _reconcileLocal(List<MediaRecord> items) async {
+    final cache = _catalog;
+    if (cache == null) return;
+    try {
+      await cache.reconcileAlbum(widget.album.id, items);
     } catch (_) {
-      if (mounted) setState(() => _loadingMedia = false);
+      // A cache write failure must not hide a valid server response
     }
   }
 
@@ -579,41 +680,61 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final aks = context.read<AlbumKeyStore>();
     final cache = context.read<MediaCacheManager>();
     final messenger = ScaffoldMessenger.of(context);
+    TraceSpan? totalSpan;
 
     try {
       final picker = ImagePicker();
       final picked = await picker.pickImage(source: ImageSource.gallery);
       if (picked == null) return;
-      final bytes = await picked.readAsBytes();
-      final albumIdBytes = _uuidStringToBytes(widget.album.id);
-      if (albumIdBytes == null) throw Exception('bad album id');
-      final epoch = await aks.latestEpoch(albumIdBytes);
-      if (epoch < 0) {
-        throw Exception('no MK installed for this album yet');
-      }
+      final uploadTraceId = Trace.newTraceId();
+      totalSpan = Trace.start('media.uploadTotal',
+          traceId: uploadTraceId, fields: {'album': Trace.id(widget.album.id)});
 
-      final env = await FilePipeline.prepareUpload(
-        aks: aks,
-        albumIdBytes: albumIdBytes,
-        currentEpoch: epoch,
-        plaintext: bytes,
-        mediaType: 'photo',
-        mimeType: picked.mimeType ?? 'image/jpeg',
-      );
-      final result =
-          await _media.upload(albumId: widget.album.id, envelope: env);
-      if (result.mediaGeneration > 0 && mounted) {
-        await _seenStore()?.markSeen(widget.album.id, result.mediaGeneration);
-      }
-      // Seed before _loadMedia : the grid rebuild that fires when setState
-      // swaps _items will hit L1 instead of going to S3
-      await cache.seedFromUpload(albumId: widget.album.id, env: env);
-      await _loadMedia();
+      await Trace.withId(uploadTraceId, () async {
+        final bytes = await Trace.measure<Uint8List>(
+          'media.fileRead',
+          picked.readAsBytes,
+          fields: {'album': Trace.id(widget.album.id)},
+          endFields: (result) => {'bytes': result.length},
+        );
+
+        final albumIdBytes = _uuidStringToBytes(widget.album.id);
+        if (albumIdBytes == null) throw Exception('bad album id');
+        final epoch = await Trace.measure<int>(
+          'media.epochLookup',
+          () => aks.latestEpoch(albumIdBytes),
+          fields: {'album': Trace.id(widget.album.id)},
+          endFields: (result) => {'epoch': result},
+        );
+        if (epoch < 0) {
+          throw Exception('no MK installed for this album yet');
+        }
+
+        final env = await FilePipeline.prepareUpload(
+          aks: aks,
+          albumIdBytes: albumIdBytes,
+          currentEpoch: epoch,
+          plaintext: bytes,
+          mediaType: 'photo',
+          mimeType: picked.mimeType ?? 'image/jpeg',
+        );
+        final result =
+            await _media.upload(albumId: widget.album.id, envelope: env);
+        if (result.mediaGeneration > 0 && mounted) {
+          await _seenStore()?.markSeen(widget.album.id, result.mediaGeneration);
+        }
+        // Seed before reloading so the new grid item hits L1
+        await cache.seedFromUpload(albumId: widget.album.id, env: env);
+        await _loadMedia();
+      });
+      totalSpan.end();
     } on UnprocessableImageException {
+      totalSpan?.fail('unprocessable_image');
       messenger.showSnackBar(const SnackBar(
           content:
               Text("This photo's format isn't supported yet , try a JPEG.")));
     } catch (e) {
+      totalSpan?.fail(Trace.reasonOf(e));
       messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
     } finally {
       if (mounted) setState(() => _uploading = false);
@@ -712,13 +833,20 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               nameOf: _memberName,
               onTap: _openSafetyNumber,
             ),
+          // Cached media can render while key sync catches up
+          if (syncing && _items.isNotEmpty) const _SyncingBanner(),
+          if (_feed == AlbumFeedState.staleOffline && _items.isNotEmpty)
+            _StaleBanner(onRetry: () => _loadMedia()),
           const Divider(height: 1, thickness: 0.5),
           Expanded(
-            child: syncing
+            child: syncing && _items.isEmpty
                 ? const _SyncingPlaceholder()
                 : _MediaGrid(
                     items: _items,
-                    loading: _loadingMedia,
+                    state: _feed,
+                    onRetry: _loadMedia,
+                    traceId: _openTraceId,
+                    onFirstThumbnailPaint: _onFirstThumbnailPaint,
                   ),
           ),
         ],
@@ -747,20 +875,32 @@ class _SyncingPlaceholder extends StatelessWidget {
 
 class _MediaGrid extends StatelessWidget {
   final List<MediaRecord> items;
-  final bool loading;
+  final AlbumFeedState state;
+  final Future<void> Function() onRetry;
+  final String traceId;
+  final VoidCallback onFirstThumbnailPaint;
 
   const _MediaGrid({
     required this.items,
-    required this.loading,
+    required this.state,
+    required this.onRetry,
+    required this.traceId,
+    required this.onFirstThumbnailPaint,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
     if (items.isEmpty) {
-      return const _MediaEmpty();
+      switch (state) {
+        case AlbumFeedState.loadingNoCache:
+        case AlbumFeedState.refreshing:
+          return const Center(child: CircularProgressIndicator());
+        case AlbumFeedState.staleOffline:
+          return _MediaUnavailable(onRetry: onRetry);
+        case AlbumFeedState.confirmedEmpty:
+        case AlbumFeedState.showingCached:
+          return const _MediaEmpty();
+      }
     }
     final cache = context.read<MediaCacheManager>();
     return GridView.builder(
@@ -785,8 +925,91 @@ class _MediaGrid extends StatelessWidget {
               ),
             ),
           ),
-          child: EncryptedThumbnail(record: items[i], cache: cache),
+          child: EncryptedThumbnail(
+            record: items[i],
+            cache: cache,
+            traceId: traceId,
+            onFirstFrame: onFirstThumbnailPaint,
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _SyncingBanner extends StatelessWidget {
+  const _SyncingBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Warm.ground,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5),
+          ),
+          const SizedBox(width: 10),
+          Text('Syncing encryption keys…',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Warm.inkSoft)),
+        ],
+      ),
+    );
+  }
+}
+
+class _StaleBanner extends StatelessWidget {
+  final Future<void> Function() onRetry;
+  const _StaleBanner({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Warm.ground,
+      padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 14, color: Warm.inkSoft),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text("Showing saved photos : couldn't reach the server",
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Warm.inkSoft)),
+          ),
+          TextButton(onPressed: () => onRetry(), child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+}
+
+class _MediaUnavailable extends StatelessWidget {
+  final Future<void> Function() onRetry;
+  const _MediaUnavailable({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 32, color: Warm.inkSoft),
+          const SizedBox(height: 12),
+          Text("Couldn't load this album",
+              style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 8),
+          TextButton(onPressed: () => onRetry(), child: const Text('Retry')),
+        ],
       ),
     );
   }

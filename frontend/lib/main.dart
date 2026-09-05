@@ -18,6 +18,7 @@ import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/storage/cache_root_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
+import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
 import 'package:keepsy/data/storage/identity_pin_store.dart';
 import 'package:keepsy/data/models/album_summary.dart';
@@ -489,6 +490,7 @@ void main() async {
         Provider<InviteInitiator>.value(value: inviteInitiator),
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<MediaSealedCache>.value(value: mediaSealedCache),
+        Provider<MediaCatalog>.value(value: mediaSealedCache),
         ListenableProvider<ShelfCovers>.value(value: shelfCovers),
         ListenableProvider<SeenStore>.value(value: seenStore),
         Provider<SodiumSumo>.value(value: sodium),
