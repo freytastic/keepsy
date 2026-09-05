@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -5,7 +6,20 @@ import 'package:http/http.dart' as http;
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 
+import 'package:keepsy/diagnostics/trace.dart';
+
 import 'api_client.dart';
+import 'api_error.dart';
+import 's3_transport.dart';
+
+// Keep retries within the upload UI's lifetime
+const int _confirmAttempts = 3;
+
+Duration _confirmBackoff(int attempt) => Duration(milliseconds: 400 * attempt);
+
+// timeout() does not cancel the request, but confirmation is idempotent, so
+// overlapping attempts are safe
+const Duration _confirmDeadline = Duration(seconds: 15);
 
 // Media HTTP surface (§5.1). The encryption + DEK wrap happens in
 // FilePipeline : this layer is only HTTP plumbing : ask for an upload URL,
@@ -18,17 +32,22 @@ abstract class MediaApiInterface {
   Future<List<MediaRecord>> listMedia(String albumId);
   Future<String> requestDownloadURL(String albumId, String mediaId,
       {String asset = 'file'});
-  Future<Uint8List> downloadCiphertext(String url);
+  Future<Uint8List> downloadCiphertext(String url,
+      {int expectedBytes, Future<String> Function()? refreshUrl});
 }
 
 class MediaApi implements MediaApiInterface {
   final ApiClient _api;
-  // S3 PUT goes through bare http.Client : the presigned URL carries auth
-  // already (no Bearer header needed) and ApiClient would helpfully retry on
-  // 401 which is not what we want against S3
-  final http.Client _http;
+  // Presigned object-store requests must not carry the API bearer token
+  final S3Transport _s3;
 
-  MediaApi(this._api, {http.Client? raw}) : _http = raw ?? http.Client();
+  MediaApi(this._api, {S3Transport? transport, http.Client? raw})
+      : _s3 = transport ??
+            S3Transport(
+              clientFactory: raw == null ? null : (() => raw),
+              // An injected client cannot be recreated after a failed GET
+              maxDownloadAttempts: raw == null ? 3 : 1,
+            );
 
   // RequestUploadResponse mirrors the server's response shape. Thumb URL +
   // headers are populated only when the request carried thumb_* fields
@@ -74,19 +93,53 @@ class MediaApi implements MediaApiInterface {
   // ChecksumSHA256 + ContentLength server side : a wrong byte count or wrong
   // hash gets rejected here before we ever call ConfirmUpload
   Future<void> _putToS3(
-      String url, Uint8List bytes, Map<String, String> headers) async {
-    final resp = await _http.put(
-      Uri.parse(url),
-      headers: headers,
-      body: bytes,
-    );
+      String url, Uint8List bytes, Map<String, String> headers,
+      {required Map<String, Object?> traceFields}) async {
+    final resp =
+        await _s3.put(Uri.parse(url), bytes, headers, traceFields: traceFields);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw Exception('s3 PUT failed: ${resp.statusCode} ${resp.body}');
+      // Object-store errors may echo the signed URL
+      throw Exception('s3 PUT rejected with ${resp.statusCode}');
     }
   }
 
-  // Zero preserves compatibility with servers that return no generation
+  // Confirmation is idempotent, so transient failures are safe to retry
   Future<int> _confirmUpload(String albumId, String mediaId) async {
+    Object? lastError;
+    for (var attempt = 1; attempt <= _confirmAttempts; attempt++) {
+      final span = Trace.start('media.confirm', fields: {
+        'album': Trace.id(albumId),
+        'media': Trace.id(mediaId),
+        'attempt': attempt,
+      });
+      try {
+        final generation =
+            await _confirmOnce(albumId, mediaId).timeout(_confirmDeadline);
+        span.end(fields: {'gen': generation});
+        return generation;
+      } catch (error) {
+        lastError = error;
+        span.fail(error is ApiError
+            ? 'http_${error.httpStatus}'
+            : Trace.reasonOf(error));
+        if (attempt == _confirmAttempts || !_isRetryableConfirm(error)) break;
+        await Future<void>.delayed(_confirmBackoff(attempt));
+      }
+    }
+    throw lastError!;
+  }
+
+  // Retry only transient responses and transport failures
+  static bool _isRetryableConfirm(Object error) {
+    if (error is ApiError) {
+      final status = error.httpStatus;
+      return status == 408 || status == 429 || status >= 500;
+    }
+    return S3Transport.isTransportFailure(error);
+  }
+
+  // Zero preserves compatibility with servers that return no generation
+  Future<int> _confirmOnce(String albumId, String mediaId) async {
     final resp = await _api.post(
       '/albums/$albumId/media/confirm',
       body: {'media_id': mediaId},
@@ -100,18 +153,64 @@ class MediaApi implements MediaApiInterface {
     }
   }
 
+  // The server sweeper handles cleanup if this best-effort request fails
+  Future<void> _abortPendingUpload(String albumId, String mediaId) async {
+    final span = Trace.start('media.abortPending', fields: {
+      'album': Trace.id(albumId),
+      'media': Trace.id(mediaId),
+    });
+    try {
+      await _api
+          .delete('/albums/$albumId/media/$mediaId/pending')
+          .timeout(const Duration(seconds: 5));
+      span.end();
+    } catch (error) {
+      span.fail(Trace.reasonOf(error));
+    }
+  }
+
   Future<UploadResult> upload({
     required String albumId,
     required UploadEnvelope envelope,
   }) async {
-    final pre = await _requestUploadURL(albumId: albumId, env: envelope);
-    await _putToS3(pre.uploadURL, envelope.cipherBytes, pre.requiredHeader);
-    if (envelope.hasThumb && pre.thumbUploadURL != null) {
-      await _putToS3(pre.thumbUploadURL!, envelope.thumbCipherBytes!,
-          pre.thumbRequiredHeader);
+    final span = Trace.start('media.uploadFlow', fields: {
+      'album': Trace.id(albumId),
+      'media': Trace.id(envelope.mediaIdString),
+      'bytes': envelope.blobSize,
+      'thumb': envelope.hasThumb,
+    });
+    _RequestUploadResponse? pre;
+    // After confirmation starts, its outcome is ambiguous; let the server
+    // sweeper handle any remaining pending row
+    var confirmAttempted = false;
+    try {
+      pre = await _requestUploadURL(albumId: albumId, env: envelope);
+      await _putToS3(pre.uploadURL, envelope.cipherBytes, pre.requiredHeader,
+          traceFields: {
+            'album': Trace.id(albumId),
+            'media': Trace.id(envelope.mediaIdString),
+            'asset': 'file',
+          });
+      if (envelope.hasThumb && pre.thumbUploadURL != null) {
+        await _putToS3(pre.thumbUploadURL!, envelope.thumbCipherBytes!,
+            pre.thumbRequiredHeader,
+            traceFields: {
+              'album': Trace.id(albumId),
+              'media': Trace.id(envelope.mediaIdString),
+              'asset': 'thumb',
+            });
+      }
+      confirmAttempted = true;
+      final generation = await _confirmUpload(albumId, pre.mediaId);
+      span.end(fields: {'gen': generation});
+      return UploadResult(mediaId: pre.mediaId, mediaGeneration: generation);
+    } catch (e) {
+      span.fail(Trace.reasonOf(e), fields: {'confirmed': confirmAttempted});
+      if (pre != null && !confirmAttempted) {
+        await _abortPendingUpload(albumId, pre.mediaId);
+      }
+      rethrow;
     }
-    final generation = await _confirmUpload(albumId, pre.mediaId);
-    return UploadResult(mediaId: pre.mediaId, mediaGeneration: generation);
   }
 
   @override
@@ -141,10 +240,16 @@ class MediaApi implements MediaApiInterface {
   // ApiClient since the URL carries auth in the query string and we dont
   // want a Bearer header (would fail S3 sig validation) or auto refresh on 401
   @override
-  Future<Uint8List> downloadCiphertext(String url) async {
-    final resp = await _http.get(Uri.parse(url));
+  Future<Uint8List> downloadCiphertext(String url,
+      {int expectedBytes = 0, Future<String> Function()? refreshUrl}) async {
+    final resp = await _s3.get(
+      Uri.parse(url),
+      expectedBytes: expectedBytes,
+      refreshUrl:
+          refreshUrl == null ? null : () async => Uri.parse(await refreshUrl()),
+    );
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw Exception('s3 GET failed: ${resp.statusCode} ${resp.body}');
+      throw Exception('s3 GET rejected with ${resp.statusCode}');
     }
     return resp.bodyBytes;
   }
@@ -153,7 +258,7 @@ class MediaApi implements MediaApiInterface {
     await _api.delete('/albums/$albumId/media/$mediaId');
   }
 
-  void dispose() => _http.close();
+  void dispose() => _s3.close();
 }
 
 class _RequestUploadResponse {

@@ -184,7 +184,13 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
       MediaRecord record, MediaCacheKey k, String albumId, int epoch) async {
     final url =
         await _api.requestDownloadURL(k.albumId, k.mediaId, asset: 'thumb');
-    final cipher = await _api.downloadCiphertext(url);
+    // Refresh the presigned URL between retries
+    final cipher = await _api.downloadCiphertext(
+      url,
+      expectedBytes: record.thumbSize ?? 0,
+      refreshUrl: () =>
+          _api.requestDownloadURL(k.albumId, k.mediaId, asset: 'thumb'),
+    );
     final pt = await FileDecryptor.downloadAndDecryptThumb(
       aks: _aks,
       record: record,
