@@ -8,6 +8,7 @@ import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:provider/provider.dart';
 
+import 'pressable_scale.dart';
 import 'upload_copy.dart';
 import 'warm_button.dart';
 
@@ -370,16 +371,50 @@ class _Notice extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               if (secondaryLabel != null)
-                TextButton(
-                  onPressed: onSecondary,
-                  child: Text(secondaryLabel!,
-                      style: const TextStyle(color: Warm.inkSoft)),
+                _NoticeAction(
+                  label: secondaryLabel!,
+                  onTap: onSecondary,
+                  color: Warm.inkSoft,
                 ),
               if (actionLabel != null)
-                TextButton(onPressed: onAction, child: Text(actionLabel!)),
+                _NoticeAction(
+                  label: actionLabel!,
+                  onTap: onAction,
+                  color: Warm.ctaTop,
+                ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _NoticeAction extends StatelessWidget {
+  final String label;
+  final VoidCallback? onTap;
+  final Color color;
+
+  const _NoticeAction({
+    required this.label,
+    required this.onTap,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PressableScale(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: onTap == null ? Warm.inkFaint : color,
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }

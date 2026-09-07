@@ -311,4 +311,20 @@ abstract class Warm {
   static const Duration crossfade = Duration(milliseconds: 620);
   static const Duration springSoft = Duration(milliseconds: 760);
   static const Duration springSnappy = Duration(milliseconds: 320);
+
+  // Scale feedback replaces disabled ink effects
+  static const double pressScale = 0.96;
+
+  // Warm glass keeps the shelf visible during album creation
+  static const double glassBlur = 16;
+  static const double glassSaturation = 0.92;
+  static const Color glassScrim = Color(0x801E160F);
+  static const Color glassInk = Color(0xFFFFFFFF);
+  static const Color glassInkSoft = Color(0x75FFFFFF);
+  static const Color glassInkFaint = Color(0x6BFFFFFF);
+  static const Color glassFill = Color(0x21FFFFFF);
+  static const Color glassHairline = Color(0x24FFFFFF);
+  static const Color glassHairlineStrong = Color(0x38FFFFFF);
+  // Raised warning color for the dark glass scrim
+  static const Color warnGlass = Color(0xFFFFB4A6);
 }
