@@ -7,7 +7,7 @@ import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
-import 'package:keepsy/ui/screens/create_album_screen.dart';
+import 'package:keepsy/ui/create/create_album_screen.dart';
 import 'package:keepsy/ui/screens/notifications_screen.dart';
 import 'package:keepsy/ui/shelf/profile_screen.dart';
 import 'package:keepsy/ui/shelf/shelf_screen.dart';
@@ -16,8 +16,10 @@ import 'package:keepsy/ui/theme/warm_tokens.dart';
 class MainShell extends StatelessWidget {
   const MainShell({super.key});
 
-  static Route<T> _slide<T>(Widget page, {Offset from = const Offset(1, 0)}) {
+  static Route<T> _slide<T>(Widget page,
+      {Offset from = const Offset(1, 0), bool opaque = true}) {
     return PageRouteBuilder<T>(
+      opaque: opaque,
       pageBuilder: (_, __, ___) => page,
       transitionsBuilder: (_, a, __, child) => SlideTransition(
         position: Tween<Offset>(begin: from, end: Offset.zero)
@@ -31,8 +33,8 @@ class MainShell extends StatelessWidget {
   Future<void> _create(BuildContext context) async {
     HapticFeedback.mediumImpact();
     final appState = context.read<AppState>();
-    await Navigator.of(context)
-        .push(_slide(const CreateAlbumScreen(), from: const Offset(0, 1)));
+    await Navigator.of(context).push(_slide(const CreateAlbumScreen(),
+        from: const Offset(0, 1), opaque: false));
     await _refresh(appState);
   }
 
