@@ -103,6 +103,19 @@ abstract class Trace {
     }
   }
 
+  // Emits caller-isolate spans for work timed in a background isolate
+  static void replay(
+    String name,
+    int durMs, {
+    Map<String, Object?> fields = const {},
+    Map<String, Object?> endFields = const {},
+  }) {
+    if (!enabled) return;
+    final tid = currentId;
+    _emit('$name.start', null, {...fields, 'tid': tid});
+    _emit('$name.end', durMs, {...fields, ...endFields, 'tid': tid});
+  }
+
   static T measureSync<T>(
     String name,
     T Function() operation, {

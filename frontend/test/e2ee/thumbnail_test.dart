@@ -175,7 +175,7 @@ void main() {
         aks: aks,
         albumIdBytes: _albumId(),
         currentEpoch: 0,
-        plaintext: _syntheticJpegBytes(),
+        plaintext: _syntheticJpegBytes(w: 1600, h: 1200),
         mediaType: 'photo',
       );
       final record = _recordFromEnvelope(env: env, albumIdBytes: _albumId());
@@ -188,10 +188,44 @@ void main() {
       // Decrypted thumb should be a valid JPEG (image.decode returns non-null)
       final decoded = img.decodeImage(pt);
       expect(decoded, isNotNull);
-      // 400px long-edge resize : longer dimension should be ~400
-      expect(decoded!.width == 400 || decoded.height == 400, isTrue,
+      expect(decoded!.width == 640 || decoded.height == 640, isTrue,
           reason:
-              'thumb resized to 400px long edge ; got ${decoded.width}x${decoded.height}');
+              'thumb resized to 640px long edge ; got ${decoded.width}x${decoded.height}');
+    });
+
+    test('a noisy photo is squeezed under the server thumb cap', () async {
+      final aks = await _newAks(_albumId(), 0, _mk());
+      // White noise exercises the worst JPEG compression case
+      final noisy = img.Image(width: 1600, height: 1600);
+      var x = 1;
+      for (final p in noisy) {
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF;
+        p.setRgb((x >> 3) & 0xFF, (x >> 11) & 0xFF, (x >> 19) & 0xFF);
+      }
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: Uint8List.fromList(img.encodeJpg(noisy, quality: 95)),
+        mediaType: 'photo',
+      );
+      expect(env.thumbPlaintext!.length, lessThan(500 * 1024),
+          reason: 'the server rejects a thumb over its 500KB cap');
+      expect(img.decodeImage(env.thumbPlaintext!), isNotNull);
+    });
+
+    test('a source under the cap is not upscaled', () async {
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: _syntheticJpegBytes(w: 200, h: 150),
+        mediaType: 'photo',
+      );
+      final thumb = img.decodeImage(env.thumbPlaintext!)!;
+      expect(thumb.width, 200);
+      expect(thumb.height, 150);
     });
 
     test('no_thumb error when record has no thumb fields', () async {
