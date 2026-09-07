@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -16,6 +17,8 @@ var (
 	ErrNoEpoch         = errors.New("album has no epoch")
 	ErrEpochMismatch   = errors.New("epoch_tag does not match current epoch")
 	ErrPendingRotation = errors.New("album has a pending epoch rotation")
+	ErrMediaConfirmed  = errors.New("media already confirmed")
+	ErrMediaNotOwned   = errors.New("pending media belongs to another uploader")
 )
 
 type MediaRepository struct {
@@ -98,6 +101,59 @@ func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, 
 	}
 	if pending {
 		return ErrPendingRotation
+	}
+
+	// Lock an existing media ID so retries replace only their own pending row
+	var prev struct {
+		confirmed bool
+		token     []byte
+		key       string
+		thumbKey  *string
+		size      int64
+		sha       []byte
+		thumbSize *int64
+		thumbSHA  []byte
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT confirmed, uploader_token, storage_key, thumb_key,
+		       blob_size, blob_sha256, thumb_size, thumb_sha256
+		FROM media WHERE id = $1 AND album_id = $2 FOR UPDATE`,
+		m.ID, m.AlbumID,
+	).Scan(&prev.confirmed, &prev.token, &prev.key, &prev.thumbKey,
+		&prev.size, &prev.sha, &prev.thumbSize, &prev.thumbSHA)
+	switch {
+	case err == nil && prev.confirmed:
+		return ErrMediaConfirmed
+	case err == nil && !bytes.Equal(prev.token, m.UploaderToken):
+		return ErrMediaNotOwned
+	case err == nil:
+		// Keep keys when bytes match because a prior PUT may have completed
+		var stale []string
+		if bytes.Equal(prev.sha, m.BlobSHA256) && prev.size == m.BlobSize {
+			m.StorageKey = prev.key
+		} else {
+			stale = append(stale, prev.key)
+		}
+		sameThumb := prev.thumbKey != nil && m.ThumbKey != nil &&
+			bytes.Equal(prev.thumbSHA, m.ThumbSHA256) &&
+			prev.thumbSize != nil && m.ThumbSize != nil &&
+			*prev.thumbSize == *m.ThumbSize
+		if sameThumb {
+			m.ThumbKey = prev.thumbKey
+		} else if prev.thumbKey != nil && *prev.thumbKey != "" {
+			stale = append(stale, *prev.thumbKey)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM media WHERE id = $1 AND album_id = $2`,
+			m.ID, m.AlbumID); err != nil {
+			return err
+		}
+		if err := enqueueObjectCleanup(ctx, tx, stale); err != nil {
+			return err
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return err
 	}
 
 	if err := tx.QueryRow(ctx, `
