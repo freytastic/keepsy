@@ -44,14 +44,15 @@ func main() {
 	}
 	defer dbPool.Close()
 
+	// Fail startup before serving against an outdated schema
 	m, err := migrate.New("file://migrations", cfg.DatabaseURL)
 	if err != nil {
-		log.Printf("Migration failed to initialize: %v", err)
-	} else if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		log.Printf("Migration failed: %v", err)
-	} else {
-		log.Println("Migrations applied successfully!")
+		log.Fatalf("Unable to initialize migrations: %v", err)
 	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		log.Fatalf("Unable to apply migrations: %v", err)
+	}
+	log.Println("Migrations applied successfully!")
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisURL})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
