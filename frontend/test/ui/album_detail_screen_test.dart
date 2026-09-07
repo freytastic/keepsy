@@ -14,6 +14,9 @@ import 'package:keepsy/ui/shelf/shelf_data.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'upload_scaffold.dart';
+
 class _MockAlbumService extends AlbumService {
   final List<AlbumMember> members;
   _MockAlbumService(this.members);
@@ -62,6 +65,8 @@ Widget _wrap(Widget child, AlbumKeyStore aks) => MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AppState()),
         Provider<AlbumKeyStore>.value(value: aks),
+        ChangeNotifierProvider<UploadQueueModel>.value(
+            value: idleUploadQueue()),
       ],
       child: MaterialApp(home: child),
     );
@@ -105,6 +110,8 @@ void main() {
       providers: [
         ChangeNotifierProvider.value(value: appState),
         Provider<AlbumKeyStore>.value(value: aks),
+        ChangeNotifierProvider<UploadQueueModel>.value(
+            value: idleUploadQueue()),
       ],
       child: MaterialApp(
         home: Builder(
@@ -155,6 +162,8 @@ void main() {
       providers: [
         ChangeNotifierProvider.value(value: appState),
         Provider<AlbumKeyStore>.value(value: aks),
+        ChangeNotifierProvider<UploadQueueModel>.value(
+            value: idleUploadQueue()),
       ],
       child: MaterialApp(
         home: AlbumDetailScreen(
@@ -202,6 +211,8 @@ void main() {
       providers: [
         ChangeNotifierProvider.value(value: appState),
         Provider<AlbumKeyStore>.value(value: aks),
+        ChangeNotifierProvider<UploadQueueModel>.value(
+            value: idleUploadQueue()),
         ListenableProvider<SeenStore>.value(value: seen),
       ],
       child: MaterialApp(

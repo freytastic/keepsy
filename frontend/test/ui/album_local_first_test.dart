@@ -22,6 +22,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'upload_scaffold.dart';
+
 // SQLite futures do not settle under widget-test fake time
 class _FakeCatalog implements MediaCatalog {
   final Map<String, List<MediaRecord>> rows;
@@ -122,6 +125,8 @@ void main() {
         providers: [
           ChangeNotifierProvider(create: (_) => AppState()),
           Provider<AlbumKeyStore>.value(value: aks),
+          ChangeNotifierProvider<UploadQueueModel>.value(
+              value: idleUploadQueue()),
           Provider<MediaCatalog>.value(value: catalog),
           Provider<MediaCacheManager>.value(
             value: MediaCacheManager(

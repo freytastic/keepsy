@@ -14,6 +14,9 @@ import 'package:keepsy/data/api/invite_json_client.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
+import 'package:keepsy/data/upload/upload_adapters.dart';
+import 'package:keepsy/domain/upload/upload_coordinator.dart';
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/storage/cache_root_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
@@ -48,8 +51,7 @@ import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 
-// Top-level so the global error boundary in this file can resolve a
-// messenger and route. Lives in ui/ — the data layer must not see it.
+// Lets the global error handler navigate and show messages
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
@@ -466,6 +468,28 @@ void main() async {
     } catch (_) {}
   });
 
+  // App scoped so uploads survive album navigation
+  late final UploadQueueModel uploadQueue;
+  final uploadCoordinator = UploadCoordinator(
+    sources: PickedSourceStoreImpl(),
+    preparer: MediaPreparerImpl(albumKeyStore),
+    uploader: StagedMediaUploader(mediaApi),
+    sink: UploadCacheSink(
+      mediaCacheManager,
+      (albumId) async {
+        // Uploaders do not receive media_added events
+        try {
+          final fresh = await albumService.getMyAlbums();
+          if (fresh != null) appState.setAlbums(fresh);
+        } catch (_) {}
+      },
+      onPreview: (mediaId, thumb) => uploadQueue.putPreview(mediaId, thumb),
+    ),
+  );
+  uploadQueue = UploadQueueModel(uploadCoordinator);
+  // Resume paused albums only after key installation
+  appState.attachUploadResume(uploadCoordinator.resumeAlbum);
+
   // Reconcile key state and catch up missed epochs after each reconnect.
   realtimeService.connected.listen((_) {
     unawaited(_onReconnect(identityService, epochProcessor, appState));
@@ -494,6 +518,8 @@ void main() async {
         ListenableProvider<ShelfCovers>.value(value: shelfCovers),
         ListenableProvider<SeenStore>.value(value: seenStore),
         Provider<SodiumSumo>.value(value: sodium),
+        Provider<MediaApi>.value(value: mediaApi),
+        ChangeNotifierProvider<UploadQueueModel>.value(value: uploadQueue),
       ],
       child: KeepsyApp(
           mediaCacheManager: mediaCacheManager, shelfCovers: shelfCovers),

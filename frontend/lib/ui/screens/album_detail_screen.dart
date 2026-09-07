@@ -6,11 +6,17 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
+import 'package:keepsy/domain/upload/upload_ports.dart';
+import 'package:keepsy/domain/upload/upload_snapshot.dart';
+import 'package:keepsy/ui/providers/latest_only.dart';
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'package:keepsy/ui/widgets/upload_pill.dart';
+import 'package:keepsy/ui/widgets/upload_sheet.dart';
+import 'package:keepsy/ui/widgets/upload_tile.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
@@ -18,7 +24,6 @@ import 'package:keepsy/crypto/uuid_bytes.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
@@ -62,7 +67,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   List<MediaRecord> _items = [];
   bool _loadingMembers = true;
   AlbumFeedState _feed = AlbumFeedState.loadingNoCache;
-  bool _uploading = false;
   bool _markedOpenSeen = false;
 
   //  track the last (album,media) tuple we acted on so a
@@ -86,7 +90,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _media = widget.mediaApi ?? MediaApi(ApiClient());
+    // The app owns the shared MediaApi so an upload survives this screen
+    _media = widget.mediaApi ?? context.read<MediaApi>();
     Trace.event('album.open', fields: {
       'album': Trace.id(widget.album.id),
       'tid': _openTraceId,
@@ -134,6 +139,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _appState = next;
       _appState!.addListener(_onAppStateChange);
     }
+    final queue = context.read<UploadQueueModel>();
+    if (!identical(_uploads, queue)) {
+      _uploads?.removeListener(_onUploadChange);
+      _uploads?.stopObserving(widget.album.id);
+      _uploads = queue;
+      _uploads!.addListener(_onUploadChange);
+    }
+    queue.observeAlbum(widget.album.id);
     if (!_markedOpenSeen) {
       _markedOpenSeen = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -615,38 +628,69 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   // A failed refresh must not blank cached rows
+  final LatestOnly _feedRefresh = LatestOnly();
+
   Future<void> _loadMedia({int? markSeenThrough}) async {
     if (mounted && _items.isNotEmpty) {
       setState(() => _feed = AlbumFeedState.refreshing);
     }
+    final token = _feedRefresh.begin();
     final span = Trace.start('album.loadMedia',
         traceId: _openTraceId, fields: {'album': Trace.id(widget.album.id)});
     try {
       final items = await Trace.withId(
           _openTraceId, () => _media.listMedia(widget.album.id));
-      span.end(fields: {'n': items.length});
+      final current = _feedRefresh.isCurrent(token);
+      span.end(fields: {'n': items.length, 'stale': !current});
+      if (!current) return;
       // Reconcile only from the complete server listing
       unawaited(_reconcileLocal(items));
-      if (mounted) {
-        final hadRenderableItems = _items.isNotEmpty;
-        setState(() {
-          _items = items;
-          if (!hadRenderableItems && items.isNotEmpty) {
-            _renderSource = 'network';
-          }
-          _feed = items.isEmpty
-              ? AlbumFeedState.confirmedEmpty
-              : AlbumFeedState.showingCached;
-        });
-        if (markSeenThrough != null) {
-          await _seenStore()?.markSeen(widget.album.id, markSeenThrough);
+      if (!mounted) return;
+      final hadRenderableItems = _items.isNotEmpty;
+      setState(() {
+        _items = items;
+        if (!hadRenderableItems && items.isNotEmpty) {
+          _renderSource = 'network';
         }
+        _feed = items.isEmpty
+            ? AlbumFeedState.confirmedEmpty
+            : AlbumFeedState.showingCached;
+      });
+      if (markSeenThrough != null) {
+        await _seenStore()?.markSeen(widget.album.id, markSeenThrough);
       }
+      _uploads?.recordsLanded(widget.album.id, {for (final r in items) r.id});
     } catch (e) {
       span.fail(Trace.reasonOf(e), fields: {'held_items': _items.length});
-      if (!mounted) return;
+      if (!mounted || !_feedRefresh.isCurrent(token)) return;
       setState(() => _feed = AlbumFeedState.staleOffline);
     }
+  }
+
+  UploadQueueModel? _uploads;
+  // Mixed batches can settle again after failed items are retried
+  final Map<String, int> _reconciledThrough = {};
+
+  // Uploaders must refresh because they do not receive media_added events
+  void _onUploadChange() {
+    final queue = _uploads;
+    if (queue == null || !mounted) return;
+    for (final batch in queue.state.batches) {
+      if (batch.albumId != widget.album.id) continue;
+      if (!batch.settled || batch.doneCount == 0) continue;
+      if ((_reconciledThrough[batch.batchId] ?? 0) >= batch.doneCount) continue;
+      _reconciledThrough[batch.batchId] = batch.doneCount;
+      unawaited(_loadMedia(
+          markSeenThrough:
+              batch.mediaGeneration > 0 ? batch.mediaGeneration : null));
+    }
+  }
+
+  // Keep overlays until the refreshed records are visible
+  Future<void> _dismissBatch(String batchId) async {
+    _reconciledThrough.remove(batchId);
+    _uploads?.requestDismiss(batchId);
+    await _loadMedia();
   }
 
   void _onFirstThumbnailPaint() {
@@ -671,86 +715,51 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
+  // Bounds plaintext picker copies held by one batch
+  static const int _maxBatch = 30;
+
   Future<void> _pickAndUpload() async {
-    if (_uploading) return;
-    // Flip the guard BEFORE pickImage so a fast double tap on the FAB cant
-    // race past the if return and open the picker twice (PlatformException
-    // already_active). reset in finally so a cancelled pick doesnt sticky lock
-    setState(() => _uploading = true);
-    final aks = context.read<AlbumKeyStore>();
-    final cache = context.read<MediaCacheManager>();
+    final model = context.read<UploadQueueModel>();
     final messenger = ScaffoldMessenger.of(context);
-    TraceSpan? totalSpan;
+    final picker = ImagePicker();
+    final picked = await picker.pickMultiImage(limit: _maxBatch);
+    if (picked.isEmpty || !mounted) return;
 
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(source: ImageSource.gallery);
-      if (picked == null) return;
-      final uploadTraceId = Trace.newTraceId();
-      totalSpan = Trace.start('media.uploadTotal',
-          traceId: uploadTraceId, fields: {'album': Trace.id(widget.album.id)});
-
-      await Trace.withId(uploadTraceId, () async {
-        final bytes = await Trace.measure<Uint8List>(
-          'media.fileRead',
-          picked.readAsBytes,
-          fields: {'album': Trace.id(widget.album.id)},
-          endFields: (result) => {'bytes': result.length},
-        );
-
-        final albumIdBytes = _uuidStringToBytes(widget.album.id);
-        if (albumIdBytes == null) throw Exception('bad album id');
-        final epoch = await Trace.measure<int>(
-          'media.epochLookup',
-          () => aks.latestEpoch(albumIdBytes),
-          fields: {'album': Trace.id(widget.album.id)},
-          endFields: (result) => {'epoch': result},
-        );
-        if (epoch < 0) {
-          throw Exception('no MK installed for this album yet');
-        }
-
-        final env = await FilePipeline.prepareUpload(
-          aks: aks,
-          albumIdBytes: albumIdBytes,
-          currentEpoch: epoch,
-          plaintext: bytes,
-          mediaType: 'photo',
-          mimeType: picked.mimeType ?? 'image/jpeg',
-        );
-        final result =
-            await _media.upload(albumId: widget.album.id, envelope: env);
-        if (result.mediaGeneration > 0 && mounted) {
-          await _seenStore()?.markSeen(widget.album.id, result.mediaGeneration);
-        }
-        // Seed before reloading so the new grid item hits L1
-        await cache.seedFromUpload(albumId: widget.album.id, env: env);
-        await _loadMedia();
-      });
-      totalSpan.end();
-    } on UnprocessableImageException {
-      totalSpan?.fail('unprocessable_image');
-      messenger.showSnackBar(const SnackBar(
-          content:
-              Text("This photo's format isn't supported yet , try a JPEG.")));
-    } catch (e) {
-      totalSpan?.fail(Trace.reasonOf(e));
-      messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
-    } finally {
-      if (mounted) setState(() => _uploading = false);
+    // Some platforms ignore the picker limit, so delete overflow copies
+    final taking =
+        picked.length > _maxBatch ? picked.sublist(0, _maxBatch) : picked;
+    if (picked.length > taking.length) {
+      unawaited(model
+          .discardUnused([for (final x in picked.skip(_maxBatch)) x.path]));
     }
+    final batchId = model.startBatch(
+      albumId: widget.album.id,
+      sources: [
+        for (final x in taking)
+          PickedSource(path: x.path, mimeType: x.mimeType ?? 'image/jpeg'),
+      ],
+    );
+    if (picked.length > _maxBatch) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('Adding the first $_maxBatch for now.')));
+    }
+    await UploadSheet.show(context,
+        batchId: batchId, onPickMore: _pickAndUpload, onDismiss: _dismissBatch);
   }
 
   @override
   void dispose() {
     _appState?.removeListener(_onAppStateChange);
-    if (widget.mediaApi == null) _media.dispose();
+    _uploads?.removeListener(_onUploadChange);
+    _uploads?.stopObserving(widget.album.id);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final uploads = context.watch<UploadQueueModel>();
+    final overlays = uploads.overlaysFor(widget.album.id);
     final syncing = state.isSyncing(widget.album.id);
     // A block survives failed sync attempts and disables uploads until a
     // successful catch up reaches the refused epoch
@@ -797,17 +806,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed:
-            (syncing || _uploading || keyBlock != null) ? null : _pickAndUpload,
-        backgroundColor: Warm.ctaTop,
-        child: _uploading
-            ? const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white))
-            : const Icon(Icons.add_a_photo_outlined, color: Colors.white),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          const UploadPill(),
+          const SizedBox(height: 14),
+          FloatingActionButton(
+            onPressed: (syncing || keyBlock != null) ? null : _pickAndUpload,
+            backgroundColor: Warm.ctaTop,
+            child: const Icon(Icons.add_a_photo_outlined, color: Colors.white),
+          ),
+        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -839,10 +849,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             _StaleBanner(onRetry: () => _loadMedia()),
           const Divider(height: 1, thickness: 0.5),
           Expanded(
-            child: syncing && _items.isEmpty
+            child: syncing && _items.isEmpty && overlays.isEmpty
                 ? const _SyncingPlaceholder()
                 : _MediaGrid(
                     items: _items,
+                    overlays: overlays,
+                    uploads: uploads,
                     state: _feed,
                     onRetry: _loadMedia,
                     traceId: _openTraceId,
@@ -875,6 +887,8 @@ class _SyncingPlaceholder extends StatelessWidget {
 
 class _MediaGrid extends StatelessWidget {
   final List<MediaRecord> items;
+  final List<UploadItemView> overlays;
+  final UploadQueueModel uploads;
   final AlbumFeedState state;
   final Future<void> Function() onRetry;
   final String traceId;
@@ -882,6 +896,8 @@ class _MediaGrid extends StatelessWidget {
 
   const _MediaGrid({
     required this.items,
+    required this.overlays,
+    required this.uploads,
     required this.state,
     required this.onRetry,
     required this.traceId,
@@ -890,7 +906,7 @@ class _MediaGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
+    if (items.isEmpty && overlays.isEmpty) {
       switch (state) {
         case AlbumFeedState.loadingNoCache:
         case AlbumFeedState.refreshing:
@@ -902,37 +918,53 @@ class _MediaGrid extends StatelessWidget {
           return const _MediaEmpty();
       }
     }
-    final cache = context.read<MediaCacheManager>();
+    // Confirmed records replace matching optimistic tiles
+    final landed = {for (final r in items) r.id};
+    final pending = [
+      for (final o in overlays)
+        if (!landed.contains(o.mediaId.value)) o
+    ];
+
     return GridView.builder(
-      padding: const EdgeInsets.all(8),
+      padding: EdgeInsets.zero,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        mainAxisSpacing: 4,
-        crossAxisSpacing: 4,
+        mainAxisSpacing: 2,
+        crossAxisSpacing: 2,
       ),
-      itemCount: items.length,
-      itemBuilder: (context, i) => ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        //  grid uses thumb cipher (~20 KB) so scroll stays smooth
+      itemCount: pending.length + items.length,
+      itemBuilder: (context, i) {
+        if (i < pending.length) {
+          final item = pending[i];
+          return UploadTile(
+            item: item,
+            model: uploads,
+            onRetry: () => uploads.retry(item.id),
+          );
+        }
+        // Pending-only grids do not require the media cache
+        final cache = context.read<MediaCacheManager>();
+        final record = items[i - pending.length];
+        // Grid uses thumbnail ciphertext to keep scrolling smooth
         // Pre §5.3 rows + videos fall through to EncryptedImage inside
         // the widget
-        child: GestureDetector(
+        return GestureDetector(
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => PhotoViewerScreen(
-                record: items[i],
-                cache: cache,
-              ),
+              builder: (_) => PhotoViewerScreen(record: record, cache: cache),
             ),
           ),
-          child: EncryptedThumbnail(
-            record: items[i],
-            cache: cache,
-            traceId: traceId,
-            onFirstFrame: onFirstThumbnailPaint,
+          child: Container(
+            color: Warm.wellEmpty,
+            child: EncryptedThumbnail(
+              record: record,
+              cache: cache,
+              traceId: traceId,
+              onFirstFrame: onFirstThumbnailPaint,
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

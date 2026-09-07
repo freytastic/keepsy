@@ -6,6 +6,9 @@ import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/shelf/shelf_screen.dart';
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
+
+import '../ui/upload_scaffold.dart';
 
 void main() {
   testWidgets('opening marks the current generation before navigation',
@@ -34,6 +37,8 @@ void main() {
       providers: [
         ChangeNotifierProvider.value(value: state),
         ListenableProvider<SeenStore>.value(value: seen),
+        ChangeNotifierProvider<UploadQueueModel>.value(
+            value: idleUploadQueue()),
       ],
       child: MaterialApp(
         home: ShelfScreen(
