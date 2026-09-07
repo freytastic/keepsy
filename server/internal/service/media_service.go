@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -37,9 +38,9 @@ type MediaStore interface {
 	// re checking (atomically with the insert) that epochTag is still current
 	// and that no rotation is pending
 	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
-	MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) (int64, error)
+	MarkConfirmed(ctx context.Context, mediaID, albumID, reservationID uuid.UUID) (int64, error)
 	MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error)
-	QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (repository.PendingCleanupBatch, error)
+	QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte, reservationID uuid.UUID) (repository.PendingCleanupBatch, error)
 	QueueStalePendingCleanup(ctx context.Context, before time.Time, limit int) (repository.PendingCleanupBatch, error)
 	ListObjectCleanupKeys(ctx context.Context, limit int) ([]string, error)
 	DeleteObjectCleanupKey(ctx context.Context, key string) error
@@ -275,13 +276,17 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 // ConfirmUpload validates the S3 object against the claimed size + sha256
 // On match : flips confirmed=TRUE. On mismatch : DELETEs the S3 object +
 // pending row. The client gets a typed error so it can retry the whole flow
-func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID) (int64, error) {
+func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID, uploaderToken []byte) (int64, error) {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
 			return 0, apierr.NotFound("media not found")
 		}
 		return 0, apierr.Internal("failed to read media row").WithCause(err)
+	}
+	// Album membership does not prove reservation ownership
+	if !bytes.Equal(row.UploaderToken, uploaderToken) {
+		return 0, apierr.Forbidden("media was reserved by another uploader")
 	}
 	if row.Confirmed {
 		// Return this row's generation so retries cannot mark newer media as seen
@@ -329,7 +334,8 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 		}
 	}
 
-	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID)
+	// Commit only the reservation whose objects were checked
+	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID, row.ReservationID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
 			// Only an already confirmed row makes a repeated confirm successful
@@ -342,7 +348,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 						return g, nil
 					}
 				}
-				return 0, apierr.Conflict("media upload is no longer pending")
+				return 0, apierr.Conflict("media reservation is no longer current ; re-upload")
 			}
 			return 0, apierr.NotFound("media upload was aborted")
 		}
@@ -462,13 +468,17 @@ func (s *MediaService) ListMedia(ctx context.Context, albumID uuid.UUID) ([]mode
 // DeleteMedia drops the S3 object then the row. On S3 failure the row stays
 // (caller can retry) : on row delete failure the S3 object is gone but the
 // row is tombstone since the storage_key now 404s. Acceptable trade off if you ask me
-func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UUID) error {
+func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UUID, callerToken []byte) error {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMediaNotFound) {
 			return apierr.NotFound("media not found")
 		}
 		return apierr.Internal("failed to read media").WithCause(err)
+	}
+	// Album membership does not grant media ownership
+	if !bytes.Equal(row.UploaderToken, callerToken) {
+		return apierr.Forbidden("only the uploader can delete this media")
 	}
 	if err := s.s3.DeleteObject(ctx, row.StorageKey); err != nil {
 		return apierr.Internal("failed to delete s3 object").WithCause(err)
@@ -486,9 +496,16 @@ func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UU
 	return nil
 }
 
-// AbortPendingUpload retires a pending reservation owned by the caller
+// Prevents replacement between lookup and cleanup
 func (s *MediaService) AbortPendingUpload(ctx context.Context, albumID, mediaID uuid.UUID, uploaderToken []byte) error {
-	batch, err := s.repo.QueuePendingCleanup(ctx, mediaID, albumID, uploaderToken)
+	row, err := s.repo.GetByID(ctx, mediaID, albumID)
+	if err != nil {
+		if errors.Is(err, repository.ErrMediaNotFound) {
+			return nil
+		}
+		return apierr.Internal("failed to read pending media").WithCause(err)
+	}
+	batch, err := s.repo.QueuePendingCleanup(ctx, mediaID, albumID, uploaderToken, row.ReservationID)
 	if err != nil {
 		return apierr.Internal("failed to abort pending upload").WithCause(err)
 	}
@@ -606,7 +623,7 @@ func (s *MediaService) dropOrphan(ctx context.Context, row *model.Media) error {
 }
 
 func (s *MediaService) retirePending(ctx context.Context, row *model.Media) error {
-	batch, err := s.repo.QueuePendingCleanup(ctx, row.ID, row.AlbumID, row.UploaderToken)
+	batch, err := s.repo.QueuePendingCleanup(ctx, row.ID, row.AlbumID, row.UploaderToken, row.ReservationID)
 	if err != nil {
 		return err
 	}

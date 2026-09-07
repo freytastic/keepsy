@@ -94,17 +94,19 @@ func (e *summaryEnv) addPhotoID(t *testing.T, albumID uuid.UUID, uploader []byte
 		thumbKey = &k
 	}
 
+	reservationID := uuid.New()
 	if _, err := e.pool.Exec(ctx,
 		`INSERT INTO media (id, album_id, uploader_token, storage_key, thumb_key,
 		   wrap_nonce, wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type,
-		   confirmed, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size, thumb_sha256)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,0,4096,$8,'photo',FALSE,$9,$10,$11,$12)`,
+		   confirmed, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size, thumb_sha256,
+		   reservation_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,0,4096,$8,'photo',FALSE,$9,$10,$11,$12,$13)`,
 		id, albumID, uploader, "blob/"+id.String(), thumbKey,
-		nonce, tag, sha, thumbNonce, thumbTag, thumbSize, thumbSHA,
+		nonce, tag, sha, thumbNonce, thumbTag, thumbSize, thumbSHA, reservationID,
 	); err != nil {
 		t.Fatalf("insert media: %v", err)
 	}
-	gen, err := e.media.MarkConfirmed(ctx, id, albumID)
+	gen, err := e.media.MarkConfirmed(ctx, id, albumID, reservationID)
 	if err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
@@ -272,12 +274,14 @@ func TestMarkConfirmed_ConcurrentDuplicateBumpsOnce(t *testing.T) {
 	})
 
 	mediaID := uuid.New()
+	reservationID := uuid.New()
 	if _, err := env.pool.Exec(ctx,
 		`INSERT INTO media (id, album_id, uploader_token, storage_key, wrap_nonce,
-		   wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, confirmed)
-		 VALUES ($1,$2,$3,'blob',$4,$5,0,1,$6,'photo',FALSE)`,
+		   wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, confirmed,
+		   reservation_id)
+		 VALUES ($1,$2,$3,'blob',$4,$5,0,1,$6,'photo',FALSE,$7)`,
 		mediaID, album.ID, token, make([]byte, 12), make([]byte, 48),
-		make([]byte, 32),
+		make([]byte, 32), reservationID,
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -286,7 +290,7 @@ func TestMarkConfirmed_ConcurrentDuplicateBumpsOnce(t *testing.T) {
 	results := make(chan error, racers)
 	for i := 0; i < racers; i++ {
 		go func() {
-			_, err := env.media.MarkConfirmed(ctx, mediaID, album.ID)
+			_, err := env.media.MarkConfirmed(ctx, mediaID, album.ID, reservationID)
 			results <- err
 		}()
 	}

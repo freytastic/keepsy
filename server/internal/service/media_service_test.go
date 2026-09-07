@@ -63,19 +63,24 @@ func (f *fakeMediaRepo) ReserveUploadRow(_ context.Context, m *model.Media, _ in
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
 	}
+	m.ReservationID = uuid.New()
 	m.CreatedAt = time.Now()
 	cp := *m
 	f.rows[m.ID] = &cp
 	return nil
 }
 
-func (f *fakeMediaRepo) MarkConfirmed(_ context.Context, mediaID, _ uuid.UUID) (int64, error) {
+func (f *fakeMediaRepo) MarkConfirmed(_ context.Context, mediaID, _, reservationID uuid.UUID) (int64, error) {
 	f.confirmCalls++
 	if f.confirmErr != nil {
 		return 0, f.confirmErr
 	}
 	row, ok := f.rows[mediaID]
 	if !ok {
+		return 0, repository.ErrMediaNotFound
+	}
+	// Match repository reservation binding
+	if row.ReservationID != reservationID {
 		return 0, repository.ErrMediaNotFound
 	}
 	if row.Confirmed {
@@ -90,9 +95,11 @@ func (f *fakeMediaRepo) MediaGeneration(_ context.Context, _ uuid.UUID) (int64, 
 	return f.generation, nil
 }
 
-func (f *fakeMediaRepo) QueuePendingCleanup(_ context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (repository.PendingCleanupBatch, error) {
+func (f *fakeMediaRepo) QueuePendingCleanup(_ context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte, reservationID uuid.UUID) (repository.PendingCleanupBatch, error) {
 	row, ok := f.rows[mediaID]
-	if !ok || row.AlbumID != albumID || row.Confirmed || !bytes.Equal(row.UploaderToken, uploaderToken) {
+	if !ok || row.AlbumID != albumID || row.Confirmed ||
+		!bytes.Equal(row.UploaderToken, uploaderToken) ||
+		row.ReservationID != reservationID {
 		return repository.PendingCleanupBatch{}, nil
 	}
 	delete(f.rows, mediaID)
@@ -217,12 +224,13 @@ func TestDeleteMedia_DeletesBlobAndThumb(t *testing.T) {
 	albumID := uuid.New()
 	mediaID := uuid.New()
 	thumb := "thumbkey1"
+	uploader := []byte{0xAA}
 	repo.rows[mediaID] = &model.Media{
 		ID: mediaID, AlbumID: albumID, StorageKey: "blob1", ThumbKey: &thumb,
-		Confirmed: true,
+		Confirmed: true, UploaderToken: uploader,
 	}
 
-	if err := svc.DeleteMedia(context.Background(), albumID, mediaID); err != nil {
+	if err := svc.DeleteMedia(context.Background(), albumID, mediaID, uploader); err != nil {
 		t.Fatalf("DeleteMedia: %v", err)
 	}
 	want := map[string]bool{"blob1": true, "thumbkey1": true}
@@ -653,7 +661,7 @@ func TestConfirmUpload_HappyPath(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
 
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	row := repo.rows[res.MediaID]
@@ -670,7 +678,7 @@ func TestConfirmUpload_SizeMismatchDropsRow(t *testing.T) {
 	s3.headSize = in.BlobSize - 1 // S3 stored fewer bytes than promised
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -690,7 +698,7 @@ func TestConfirmUpload_SHA256MismatchDropsRow(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 32))
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -710,7 +718,7 @@ func TestConfirmUpload_SHA256AbsentTrustsPutEnforcement(t *testing.T) {
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = "" // server didnt echo
 
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("err = %v ; expected pass through (PUT-time enforcement)", err)
 	}
 }
@@ -722,7 +730,7 @@ func TestConfirmUpload_HeadFailureReturnsValidation(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headErr = errors.New("404 NoSuchKey")
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -735,18 +743,18 @@ func TestConfirmUpload_IsIdempotent(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	// Second confirm on already confirmed row is a no op
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("second confirm: %v ; expected nil (idempotent)", err)
 	}
 }
 
 func TestConfirmUpload_UnknownMediaIs404(t *testing.T) {
 	svc, _, _ := newSvc(&fakeEpochs{cur: 3, exists: true})
-	_, err := svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New(), uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), uuid.New(), uuid.New(), uuid.Nil, nil)
 	if !apierr.IsCode(err, "E_NOT_FOUND") {
 		t.Fatalf("err = %v, want E_NOT_FOUND", err)
 	}
@@ -764,7 +772,7 @@ func confirmedRow(t *testing.T, svc *MediaService, repo *fakeMediaRepo, s3 *fake
 	}
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 	return albumID, res.MediaID, repo.rows[res.MediaID].StorageKey
@@ -922,7 +930,7 @@ func TestConfirmUpload_ThumbHappyPath(t *testing.T) {
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if !repo.rows[res.MediaID].Confirmed {
@@ -943,7 +951,7 @@ func TestConfirmUpload_ThumbMissingDropsRow(t *testing.T) {
 		thumbKey: {err: errors.New("404 NoSuchKey")},
 	}
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -965,7 +973,7 @@ func TestConfirmUpload_ThumbSizeMismatchDropsRow(t *testing.T) {
 		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -987,7 +995,7 @@ func TestConfirmUpload_ThumbSHA256MismatchDropsRow(t *testing.T) {
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xFF}, 32))},
 	}
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -1011,7 +1019,7 @@ func TestConfirmUpload_ThumbMismatchDeletesBothObjects(t *testing.T) {
 		thumbKey: {size: in.ThumbSize - 1, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
 
-	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil)
+	_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
 	if !apierr.IsCode(err, "E_VALIDATION") {
 		t.Fatalf("err = %v, want E_VALIDATION", err)
 	}
@@ -1041,7 +1049,7 @@ func TestRequestDownloadURL_ThumbAssetUsesThumbKey(t *testing.T) {
 		fileKey:  {size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)},
 		thumbKey: {size: in.ThumbSize, sha256B64: base64.StdEncoding.EncodeToString(in.ThumbSHA256)},
 	}
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 
@@ -1127,7 +1135,7 @@ func TestConfirmUpload_FanoutEmitsMediaAdded(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	_ = repo
@@ -1179,7 +1187,7 @@ func TestConfirmUpload_FanoutSkipsWhenUploaderIsOnlyMember(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uploader, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -1197,7 +1205,7 @@ func TestConfirmUpload_FanoutLookupFailDoesNotBubble(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm bubbled lookup failure: %v", err)
 	}
 	// fanout swallowed : no emits and no caller visible error
@@ -1216,7 +1224,7 @@ func TestConfirmUpload_FanoutEmitFailDoesNotBubble(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm bubbled emit failure: %v", err)
 	}
 }
@@ -1230,11 +1238,92 @@ func TestConfirmUpload_EmptyMembersSkipsEmit(t *testing.T) {
 	res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
 	s3.headSize = in.BlobSize
 	s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
-	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil); err != nil {
+	if _, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC}); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	if got := notif.snapshot(); len(got) != 0 {
 		t.Errorf("emits = %d, want 0 (empty member list)", len(got))
+	}
+}
+
+func TestConfirmUpload_RejectsAnotherUploader(t *testing.T) {
+	repo := newFakeMediaRepo()
+	epochs := &fakeEpochs{cur: 3, exists: true}
+	s3 := &fakeS3{headByKey: map[string]headResult{}}
+	svc := NewMediaService(repo, epochs, s3, nil, nil)
+	ctx := context.Background()
+	albumID := uuid.New()
+
+	owner := bytes.Repeat([]byte{0x01}, 32)
+	in := validInput()
+	if _, err := svc.RequestUploadURL(ctx, albumID, owner, in); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	row := repo.rows[in.MediaID]
+	s3.headByKey[row.StorageKey] = headResult{
+		size: in.BlobSize, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)}
+
+	stranger := bytes.Repeat([]byte{0x02}, 32)
+	_, err := svc.ConfirmUpload(ctx, albumID, in.MediaID, uuid.New(), stranger)
+	if err == nil {
+		t.Fatal("a different member confirmed someone else's upload")
+	}
+	if repo.rows[in.MediaID].Confirmed {
+		t.Fatal("row was confirmed by a member that does not own it")
+	}
+}
+
+func TestConfirmUpload_ForeignMemberCannotDropThePendingRow(t *testing.T) {
+	repo := newFakeMediaRepo()
+	epochs := &fakeEpochs{cur: 3, exists: true}
+	s3 := &fakeS3{headByKey: map[string]headResult{}}
+	svc := NewMediaService(repo, epochs, s3, nil, nil)
+	ctx := context.Background()
+	albumID := uuid.New()
+
+	owner := bytes.Repeat([]byte{0x01}, 32)
+	in := validInput()
+	if _, err := svc.RequestUploadURL(ctx, albumID, owner, in); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	// Exercise the destructive mismatch path
+	row := repo.rows[in.MediaID]
+	s3.headByKey[row.StorageKey] = headResult{
+		size: in.BlobSize + 1, sha256B64: base64.StdEncoding.EncodeToString(in.BlobSHA256)}
+
+	stranger := bytes.Repeat([]byte{0x02}, 32)
+	if _, err := svc.ConfirmUpload(ctx, albumID, in.MediaID, uuid.New(), stranger); err == nil {
+		t.Fatal("expected rejection")
+	}
+	if _, ok := repo.rows[in.MediaID]; !ok {
+		t.Fatal("a stranger triggered cleanup of someone else's reservation")
+	}
+}
+
+func TestDeleteMedia_RejectsAnotherUploader(t *testing.T) {
+	repo := newFakeMediaRepo()
+	s3 := &fakeS3{headByKey: map[string]headResult{}}
+	svc := NewMediaService(repo, &fakeEpochs{cur: 3, exists: true}, s3, nil, nil)
+	ctx := context.Background()
+	albumID := uuid.New()
+	mediaID := uuid.New()
+
+	owner := bytes.Repeat([]byte{0x01}, 32)
+	repo.rows[mediaID] = &model.Media{
+		ID: mediaID, AlbumID: albumID, UploaderToken: owner,
+		StorageKey: "key-a", Confirmed: true, ReservationID: uuid.New(),
+	}
+	s3.headByKey["key-a"] = headResult{size: 10}
+
+	stranger := bytes.Repeat([]byte{0x02}, 32)
+	if err := svc.DeleteMedia(ctx, albumID, mediaID, stranger); err == nil {
+		t.Fatal("any member could delete another member's photo")
+	}
+	if _, ok := repo.rows[mediaID]; !ok {
+		t.Fatal("row was deleted by a member that does not own it")
+	}
+	if len(s3.deleteKeys) != 0 {
+		t.Fatalf("object was deleted by a member that does not own it: %v", s3.deleteKeys)
 	}
 }
