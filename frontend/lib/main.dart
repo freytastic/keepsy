@@ -16,6 +16,7 @@ import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/upload/upload_adapters.dart';
 import 'package:keepsy/domain/upload/upload_coordinator.dart';
+import 'package:keepsy/ui/providers/album_summary_refresher.dart';
 import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/storage/cache_root_key.dart';
@@ -470,23 +471,25 @@ void main() async {
 
   // App scoped so uploads survive album navigation
   late final UploadQueueModel uploadQueue;
+  // Uploaders need a summary refresh because they do not receive media_added
+  final summaryRefresher = AlbumSummaryRefresher(
+    fetch: albumService.getMyAlbums,
+    apply: appState.setAlbums,
+  );
+  final pickedSources = PickedSourceStoreImpl();
   final uploadCoordinator = UploadCoordinator(
-    sources: PickedSourceStoreImpl(),
+    sources: pickedSources,
     preparer: MediaPreparerImpl(albumKeyStore),
     uploader: StagedMediaUploader(mediaApi),
     sink: UploadCacheSink(
       mediaCacheManager,
-      (albumId) async {
-        // Uploaders do not receive media_added events
-        try {
-          final fresh = await albumService.getMyAlbums();
-          if (fresh != null) appState.setAlbums(fresh);
-        } catch (_) {}
-      },
+      (albumId) => summaryRefresher.refresh(),
       onPreview: (mediaId, thumb) => uploadQueue.putPreview(mediaId, thumb),
     ),
   );
   uploadQueue = UploadQueueModel(uploadCoordinator);
+  // Clear plaintext picks left by a previous run before accepting new ones
+  unawaited(pickedSources.sweepStaleStaging());
   // Resume paused albums only after key installation
   appState.attachUploadResume(uploadCoordinator.resumeAlbum);
 

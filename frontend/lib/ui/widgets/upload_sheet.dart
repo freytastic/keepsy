@@ -12,7 +12,7 @@ import 'upload_copy.dart';
 import 'warm_button.dart';
 
 // Closing the sheet does not cancel its app scoped queue
-class UploadSheet extends StatelessWidget {
+class UploadSheet extends StatefulWidget {
   final String batchId;
   final VoidCallback? onPickMore;
   // Lets the screen refresh before overlays are dismissed
@@ -30,23 +30,92 @@ class UploadSheet extends StatelessWidget {
     required String batchId,
     VoidCallback? onPickMore,
     Future<void> Function(String batchId)? onDismiss,
-  }) =>
-      showModalBottomSheet<void>(
-        context: context,
-        backgroundColor: Warm.paper,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-        ),
-        builder: (_) => UploadSheet(
-            batchId: batchId, onPickMore: onPickMore, onDismiss: onDismiss),
-      );
+  }) {
+    // Claim before pushing so settlement cannot sweep the batch first
+    final model = context.read<UploadQueueModel>();
+    model.beginPresenting(batchId);
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Warm.paper,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => UploadSheet(
+          batchId: batchId, onPickMore: onPickMore, onDismiss: onDismiss),
+    ).whenComplete(() => model.endPresenting(batchId));
+  }
+
+  @override
+  State<UploadSheet> createState() => _UploadSheetState();
+}
+
+class _UploadSheetState extends State<UploadSheet> {
+  UploadQueueModel? _model;
+  bool _busy = false;
+  bool _closing = false;
+  bool _closeArmed = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = context.read<UploadQueueModel>();
+    if (identical(_model, next)) return;
+    _model?.endPresenting(widget.batchId);
+    _model = next;
+    next.beginPresenting(widget.batchId);
+  }
+
+  @override
+  void dispose() {
+    _model?.endPresenting(widget.batchId);
+    super.dispose();
+  }
+
+  // Close only this sheet after it becomes the current route
+  void _close() {
+    if (_closing) return;
+    final route = ModalRoute.of(context);
+    if (route == null) return;
+    if (!route.isCurrent) {
+      _armClose();
+      return;
+    }
+    _closing = true;
+    Navigator.of(context).pop();
+  }
+
+  // Re-arm on a future frame without scheduling a loop
+  void _armClose() {
+    if (_closing || _closeArmed) return;
+    _closeArmed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _closeArmed = false;
+      if (mounted) _close();
+    });
+  }
+
+  Future<void> _guarded(Future<void> Function() body) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await body();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final model = context.watch<UploadQueueModel>();
+    final batchId = widget.batchId;
+    final onPickMore = widget.onPickMore;
     final batch = model.state.batch(batchId);
-    if (batch == null) return const SizedBox.shrink();
+    // Close when the batch was removed elsewhere
+    if (batch == null) {
+      _armClose();
+      return const SizedBox.shrink();
+    }
     final albumName = context.watch<AppState>().albumDisplayName(batch.albumId);
 
     final unprocessable = batch.unprocessableCount;
@@ -92,7 +161,7 @@ class UploadSheet extends StatelessWidget {
                 actionLabel:
                     onPickMore == null ? null : 'Pick different photos',
                 onAction: () {
-                  Navigator.of(context).pop();
+                  _close();
                   onPickMore?.call();
                 },
               ),
@@ -103,14 +172,12 @@ class UploadSheet extends StatelessWidget {
                 headline: failureHeadline(retryable),
                 body: failureBody(retryable),
                 actionLabel: 'Try again',
-                onAction: () => model.retryFailed(batchId),
-                // Removing failures also deletes their picked files
+                onAction: _busy ? null : () => model.retryFailed(batchId),
+                // Removing the final item closes through the build guard
                 secondaryLabel: 'Remove them',
-                onSecondary: () async {
-                  final nav = Navigator.of(context);
-                  await model.removeFailed(batchId);
-                  if (model.state.batch(batchId) == null) nav.pop();
-                },
+                onSecondary: _busy
+                    ? null
+                    : () => _guarded(() => model.removeFailed(batchId)),
               ),
             ],
             // Done would discard sources still needed for retry
@@ -120,14 +187,12 @@ class UploadSheet extends StatelessWidget {
                 width: double.infinity,
                 child: WarmButton(
                   label: 'Done',
+                  // Keep overlays until the album listing replaces them
                   onTap: () {
-                    final dismiss = onDismiss;
-                    if (dismiss == null) {
-                      unawaited(model.dismissBatch(batchId));
-                    } else {
-                      unawaited(dismiss(batchId));
-                    }
-                    Navigator.of(context).pop();
+                    model.requestDismiss(batchId);
+                    final refresh = widget.onDismiss;
+                    if (refresh != null) unawaited(refresh(batchId));
+                    _close();
                   },
                 ),
               ),
@@ -269,7 +334,7 @@ class _Notice extends StatelessWidget {
   final String headline;
   final String body;
   final String? actionLabel;
-  final VoidCallback onAction;
+  final VoidCallback? onAction;
   final String? secondaryLabel;
   final VoidCallback? onSecondary;
 

@@ -15,6 +15,10 @@ import 'package:keepsy/e2ee/file_pipeline.dart';
 // Restricts deletion to resolved app cache roots
 class PickedSourceStoreImpl implements PickedSourceStore {
   List<String>? _roots;
+  final PickerStaging _staging = PickerStaging(pickerStagingDir);
+
+  // Clears picks left by a previous run before adoption
+  Future<void> sweepStaleStaging() => _staging.sweep();
 
   @override
   Future<Uint8List> read(String path) async {
@@ -25,6 +29,9 @@ class PickedSourceStoreImpl implements PickedSourceStore {
     }
     return file.readAsBytes();
   }
+
+  @override
+  Future<String> adopt(String path) => _staging.adopt(path);
 
   @override
   Future<void> discard(String path) async {

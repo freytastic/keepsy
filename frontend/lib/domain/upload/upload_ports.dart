@@ -26,6 +26,10 @@ class UploadStageException implements Exception {
 // Keeps domain code independent of path_provider
 abstract class PickedSourceStore {
   Future<Uint8List> read(String path);
+
+  // Moves a picked file into managed staging and returns its new path
+  Future<String> adopt(String path);
+
   Future<void> discard(String path);
 }
 

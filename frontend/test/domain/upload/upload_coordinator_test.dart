@@ -130,6 +130,35 @@ void main() {
     });
   });
 
+  group('source ownership at enqueue', () {
+    test('staged picks are what the queue uploads', () async {
+      final staged = await co.stage(pick(2));
+
+      expect(staged.map((s) => s.path), everyElement(startsWith('/staging/')));
+      expect(sources.adopted, hasLength(2));
+
+      final id = co.enqueue(albumId: _album, sources: staged);
+      await drain();
+      expect(snap(id).doneCount, 2);
+    });
+
+    test('staging preserves the mime type the picker reported', () async {
+      sources.add('/cache/pick/x.heic');
+      final staged = await co.stage([
+        const PickedSource(path: '/cache/pick/x.heic', mimeType: 'image/heic')
+      ]);
+
+      expect(staged.single.mimeType, 'image/heic');
+    });
+
+    test('a pick that cannot be staged keeps its original path', () async {
+      final staged =
+          await co.stage([const PickedSource(path: '/cache/pick/gone.jpg')]);
+
+      expect(staged.single.path, '/cache/pick/gone.jpg');
+    });
+  });
+
   group('byte accounting', () {
     test('counts file and thumbnail ciphertext, and never exceeds the payload',
         () async {
@@ -186,6 +215,55 @@ void main() {
       await sub.cancel();
 
       expect(sawRateWhileSending, isTrue);
+    });
+
+    test('a waiting batch does not borrow the running one\'s speed', () async {
+      preparer.blob = 4 * 1024 * 1024;
+      uploader.onChunk = () => clock.advance(const Duration(milliseconds: 200));
+      String? waiting;
+      var checked = false;
+      final sub = co.stream.listen((state) {
+        final id = waiting;
+        if (id == null || checked) return;
+        final other = state.batch(id);
+        if (other == null) return;
+        final running = state.batches.firstWhere((b) => b.batchId != id);
+        if ((running.bytesPerSecond ?? 0) <= 0) return;
+        checked = true;
+        expect(other.bytesPerSecond, isNull,
+            reason: 'album-2 has nothing on the wire');
+      });
+      co.enqueue(albumId: _album, sources: pick(1));
+      waiting = co.enqueue(albumId: _other, sources: pick(1));
+      await drain();
+      await sub.cancel();
+
+      expect(checked, isTrue, reason: 'the scenario never arose');
+    });
+
+    test('a preparing photo does not show the last one\'s speed', () async {
+      preparer.blob = 4 * 1024 * 1024;
+      uploader.onChunk = () => clock.advance(const Duration(milliseconds: 200));
+      // Hold the second photo after the first establishes a speed sample
+      preparer.holdPrepare = null;
+      var prepares = 0;
+      final gate = Completer<void>();
+      final origin = preparer;
+      origin.onPrepared = () {
+        if (++prepares == 2) origin.holdPrepare = gate;
+      };
+      final id = co.enqueue(albumId: _album, sources: pick(2));
+      await drain();
+
+      final snapshot = snap(id);
+      final preparing =
+          snapshot.items.any((i) => i.phase == UploadPhase.preparing);
+      expect(preparing, isTrue, reason: 'the scenario never arose');
+      expect(snapshot.bytesPerSecond, isNull,
+          reason: 'nothing is on the wire while a photo is being locked');
+
+      gate.complete();
+      await drain();
     });
 
     test('a stalled transfer reads as unknown rather than zero', () async {
@@ -396,6 +474,26 @@ void main() {
       expect(snap(id).doneCount, 0);
     });
 
+    test('a paused album shows no countdown', () async {
+      // Complete one photo before pausing to establish an ETA sample
+      var reserves = 0;
+      uploader.onReserve = () {
+        if (++reserves == 2) {
+          uploader.failStage(
+              'reserve',
+              const UploadStageException(
+                  UploadFailureKind.rotationPending, 'rotation'));
+        }
+      };
+      final id = co.enqueue(albumId: _album, sources: pick(3));
+      await drain();
+
+      expect(snap(id).paused, isNotNull);
+      expect(snap(id).doneCount, 1);
+      expect(snap(id).eta, isNull,
+          reason: 'nothing is running, so no time can be predicted');
+    });
+
     test('other albums keep uploading while one is paused', () async {
       uploader.failStage(
           'reserve',
@@ -532,6 +630,60 @@ void main() {
       await drain();
       co.dismissBatch(id);
       expect(co.state.batch(id), isNotNull);
+    });
+  });
+
+  group('cancellation leaves nothing behind', () {
+    test('a preview prepared after a cancel is not announced', () async {
+      // Preparation cannot be interrupted
+      preparer.holdPrepare = Completer<void>();
+      final id = co.enqueue(albumId: _album, sources: pick(1));
+      await drain();
+
+      await co.cancelBatch(id);
+      preparer.holdPrepare!.complete();
+      await drain();
+
+      expect(sink.previewed, isEmpty,
+          reason: 'the item was gone before preparation finished');
+    });
+
+    test('a cancel during confirmation waits instead of racing the commit',
+        () async {
+      uploader.holdConfirm = Completer<void>();
+      final id = co.enqueue(albumId: _album, sources: pick(1));
+      await drain();
+
+      final cancelled = co.cancelBatch(id);
+      await drain();
+      uploader.holdConfirm!.complete();
+      await cancelled;
+
+      expect(uploader.aborted, isEmpty,
+          reason: 'the row was committed, so deleting it would be wrong');
+      expect(co.state.batches, isEmpty);
+    });
+
+    test('an album pause does not outlive the batch that caused it', () async {
+      uploader.failStage(
+          'reserve',
+          const UploadStageException(
+              UploadFailureKind.rotationPending, 'rotation'));
+      final first = co.enqueue(albumId: _album, sources: pick(1));
+      await drain();
+      expect(snap(first).paused, PauseReason.rotationPending);
+
+      await co.cancelBatch(first);
+      await drain();
+
+      sources.add('/cache/pick/later.jpg');
+      final second = co.enqueue(
+          albumId: _album,
+          sources: [const PickedSource(path: '/cache/pick/later.jpg')]);
+      await drain();
+
+      expect(snap(second).doneCount, 1,
+          reason: 'no queued item is left to justify holding the album');
     });
   });
 

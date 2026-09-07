@@ -36,6 +36,9 @@ import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
 
+Future<List<XFile>> _systemPicker({int limit = 0}) =>
+    ImagePicker().pickMultiImage(limit: limit);
+
 // Distinguishes a confirmed-empty album from an unavailable one
 enum AlbumFeedState {
   loadingNoCache,
@@ -45,16 +48,20 @@ enum AlbumFeedState {
   confirmedEmpty,
 }
 
+typedef MultiImagePicker = Future<List<XFile>> Function({int limit});
+
 class AlbumDetailScreen extends StatefulWidget {
   final AlbumModel album;
   final AlbumService albumService;
   final MediaApi? mediaApi;
+  final MultiImagePicker? pickImages;
 
   AlbumDetailScreen({
     super.key,
     required this.album,
     AlbumService? albumService,
     this.mediaApi,
+    this.pickImages,
   }) : albumService = albumService ?? AlbumService();
 
   @override
@@ -140,20 +147,19 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _appState!.addListener(_onAppStateChange);
     }
     final queue = context.read<UploadQueueModel>();
+    // Claim observation once per queue instance
     if (!identical(_uploads, queue)) {
       _uploads?.removeListener(_onUploadChange);
       _uploads?.stopObserving(widget.album.id);
       _uploads = queue;
-      _uploads!.addListener(_onUploadChange);
+      queue.addListener(_onUploadChange);
+      queue.observeAlbum(widget.album.id);
     }
-    queue.observeAlbum(widget.album.id);
     if (!_markedOpenSeen) {
       _markedOpenSeen = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(_seenStore()
-                ?.markSeen(widget.album.id, _currentMediaGeneration()) ??
-            Future<void>.value());
+        unawaited(_markSeen(_currentMediaGeneration()));
       });
     }
   }
@@ -242,6 +248,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // memberToken -> roster trust shown by chips and the key change banner
   // Epoch signing authority and install blocks are tracked separately
   Map<String, TrustState> _trust = {};
+
+  // Seen persistence must not fail a successful listing
+  Future<void> _markSeen(int generation) async {
+    try {
+      await _seenStore()?.markSeen(widget.album.id, generation);
+    } catch (_) {}
+  }
 
   SeenStore? _seenStore() {
     try {
@@ -640,7 +653,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     try {
       final items = await Trace.withId(
           _openTraceId, () => _media.listMedia(widget.album.id));
-      final current = _feedRefresh.isCurrent(token);
+      // A failed newer request must not discard this successful listing
+      final current = _feedRefresh.commit(token);
       span.end(fields: {'n': items.length, 'stale': !current});
       if (!current) return;
       // Reconcile only from the complete server listing
@@ -656,10 +670,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             ? AlbumFeedState.confirmedEmpty
             : AlbumFeedState.showingCached;
       });
-      if (markSeenThrough != null) {
-        await _seenStore()?.markSeen(widget.album.id, markSeenThrough);
-      }
+      // Release overlays before the best effort seen write
       _uploads?.recordsLanded(widget.album.id, {for (final r in items) r.id});
+      if (markSeenThrough != null) {
+        await _markSeen(markSeenThrough);
+      }
     } catch (e) {
       span.fail(Trace.reasonOf(e), fields: {'held_items': _items.length});
       if (!mounted || !_feedRefresh.isCurrent(token)) return;
@@ -718,12 +733,31 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // Bounds plaintext picker copies held by one batch
   static const int _maxBatch = 30;
 
+  bool _picking = false;
+
   Future<void> _pickAndUpload() async {
+    final List<XFile> picked;
+    // Guard only the system picker so the sheet can open it again
+    if (_picking) return;
+    _picking = true;
+    try {
+      picked = await (widget.pickImages ?? _systemPicker)(limit: _maxBatch);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Couldn't open your photos.")));
+      }
+      return;
+    } finally {
+      _picking = false;
+    }
+    if (picked.isEmpty || !mounted) return;
+    await _enqueuePicked(picked);
+  }
+
+  Future<void> _enqueuePicked(List<XFile> picked) async {
     final model = context.read<UploadQueueModel>();
     final messenger = ScaffoldMessenger.of(context);
-    final picker = ImagePicker();
-    final picked = await picker.pickMultiImage(limit: _maxBatch);
-    if (picked.isEmpty || !mounted) return;
 
     // Some platforms ignore the picker limit, so delete overflow copies
     final taking =
@@ -732,12 +766,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       unawaited(model
           .discardUnused([for (final x in picked.skip(_maxBatch)) x.path]));
     }
+    final staged = await model.stage([
+      for (final x in taking)
+        PickedSource(path: x.path, mimeType: x.mimeType ?? 'image/jpeg'),
+    ]);
+    // Discard staged plaintext if the screen closed
+    if (!mounted) {
+      unawaited(model.discardUnused([for (final s in staged) s.path]));
+      return;
+    }
     final batchId = model.startBatch(
       albumId: widget.album.id,
-      sources: [
-        for (final x in taking)
-          PickedSource(path: x.path, mimeType: x.mimeType ?? 'image/jpeg'),
-      ],
+      sources: staged,
     );
     if (picked.length > _maxBatch) {
       messenger.showSnackBar(

@@ -35,6 +35,13 @@ void main() {
     expect(gate.isEmpty, isTrue);
   });
 
+  test('a batch left out of the report stays held', () {
+    gate.hold('b1');
+    final ready = gate.release(landedMediaIds: const {}, doneByBatch: const {});
+    expect(ready, isEmpty);
+    expect(gate.isHolding('b1'), isTrue);
+  });
+
   test('tracks batches independently', () {
     gate.hold('b1');
     gate.hold('b2');

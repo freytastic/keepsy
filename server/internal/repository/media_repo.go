@@ -156,16 +156,20 @@ func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, 
 		return err
 	}
 
+	// Always mint a new ID when object keys are reused
+	m.ReservationID = uuid.New()
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO media (
 			id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
-			thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size, thumb_sha256
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size, thumb_sha256,
+			reservation_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING created_at`,
 		m.ID, m.AlbumID, m.UploaderToken, m.StorageKey, m.ThumbKey, m.WrapNonce,
 		m.WrapTagCT, m.EpochTag, m.BlobSize, m.BlobSHA256, m.MediaType, m.MimeType,
 		m.ThumbWrapNonce, m.ThumbWrapTagCT, m.ThumbSize, m.ThumbSHA256,
+		m.ReservationID,
 	).Scan(&m.CreatedAt); err != nil {
 		return err
 	}
@@ -173,17 +177,29 @@ func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, 
 }
 
 // MarkConfirmed atomically assigns the album generation and activity order
-// The conditional update is the concurrency guard for duplicate confirms
-func (r *MediaRepository) MarkConfirmed(ctx context.Context, mediaID, albumID uuid.UUID) (int64, error) {
+// reservationID prevents stale confirmation of a replacement
+func (r *MediaRepository) MarkConfirmed(ctx context.Context, mediaID, albumID, reservationID uuid.UUID) (int64, error) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
 
+	// Match ReserveUploadRow lock order to prevent deadlocks
+	var locked uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM albums WHERE id = $1 FOR UPDATE`, albumID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrAlbumNotFound
+		}
+		return 0, err
+	}
+
 	tag, err := tx.Exec(ctx,
-		`UPDATE media SET confirmed = TRUE WHERE id = $1 AND album_id = $2 AND confirmed = FALSE`,
-		mediaID, albumID,
+		`UPDATE media SET confirmed = TRUE
+		 WHERE id = $1 AND album_id = $2 AND confirmed = FALSE
+		   AND reservation_id = $3`,
+		mediaID, albumID, reservationID,
 	)
 	if err != nil {
 		return 0, err
@@ -224,22 +240,23 @@ func (r *MediaRepository) MediaGeneration(ctx context.Context, albumID uuid.UUID
 }
 
 // QueuePendingCleanup atomically retires an owned row and preserves its keys
-func (r *MediaRepository) QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte) (PendingCleanupBatch, error) {
+// reservationID prevents late cleanup from deleting a replacement
+func (r *MediaRepository) QueuePendingCleanup(ctx context.Context, mediaID, albumID uuid.UUID, uploaderToken []byte, reservationID uuid.UUID) (PendingCleanupBatch, error) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
 		return PendingCleanupBatch{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	var storageKey string
+	var deletedKey string
 	var thumbKey *string
 	err = tx.QueryRow(ctx, `
 		DELETE FROM media
 		WHERE id = $1 AND album_id = $2 AND uploader_token = $3
-		  AND confirmed = FALSE
+		  AND confirmed = FALSE AND reservation_id = $4
 		RETURNING storage_key, thumb_key`,
-		mediaID, albumID, uploaderToken,
-	).Scan(&storageKey, &thumbKey)
+		mediaID, albumID, uploaderToken, reservationID,
+	).Scan(&deletedKey, &thumbKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PendingCleanupBatch{}, tx.Commit(ctx)
 	}
@@ -247,7 +264,7 @@ func (r *MediaRepository) QueuePendingCleanup(ctx context.Context, mediaID, albu
 		return PendingCleanupBatch{}, err
 	}
 
-	keys := cleanupKeys(storageKey, thumbKey)
+	keys := cleanupKeys(deletedKey, thumbKey)
 	if err := enqueueObjectCleanup(ctx, tx, keys); err != nil {
 		return PendingCleanupBatch{}, err
 	}
@@ -390,7 +407,7 @@ func (r *MediaRepository) GetByID(ctx context.Context, mediaID, albumID uuid.UUI
 		SELECT id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
 			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
-			thumb_sha256, album_seq
+			thumb_sha256, album_seq, reservation_id
 		FROM media WHERE id = $1 AND album_id = $2`,
 		mediaID, albumID,
 	).Scan(
@@ -398,7 +415,7 @@ func (r *MediaRepository) GetByID(ctx context.Context, mediaID, albumID uuid.UUI
 		&m.WrapNonce, &m.WrapTagCT, &m.EpochTag, &m.BlobSize, &m.BlobSHA256,
 		&m.MediaType, &m.MimeType, &m.Confirmed, &m.CreatedAt,
 		&m.ThumbWrapNonce, &m.ThumbWrapTagCT, &m.ThumbSize, &m.ThumbSHA256,
-		&m.AlbumSeq,
+		&m.AlbumSeq, &m.ReservationID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrMediaNotFound

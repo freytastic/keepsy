@@ -149,6 +149,11 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	memberToken, ok := middleware.MustGetMemberToken(r)
+	if !ok {
+		apierr.Write(w, r, apierr.Auth("member token missing in context"))
+		return
+	}
 	var req confirmUploadReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		apierr.Write(w, r, apierr.Validation("invalid request body").WithCause(err))
@@ -159,7 +164,7 @@ func (h *MediaHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.Validation("invalid media_id").WithCause(err))
 		return
 	}
-	generation, err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID, uploaderUserID)
+	generation, err := h.svc.ConfirmUpload(r.Context(), albumID, mediaID, uploaderUserID, memberToken)
 	if err != nil {
 		apierr.Write(w, r, err)
 		return
@@ -267,12 +272,17 @@ func (h *MediaHandler) DeleteMedia(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	memberToken, ok := middleware.MustGetMemberToken(r)
+	if !ok {
+		apierr.Write(w, r, apierr.Auth("member token missing in context"))
+		return
+	}
 	mediaID, err := uuid.Parse(mux.Vars(r)["mid"])
 	if err != nil {
 		apierr.Write(w, r, apierr.Validation("invalid media id").WithCause(err))
 		return
 	}
-	if err := h.svc.DeleteMedia(r.Context(), albumID, mediaID); err != nil {
+	if err := h.svc.DeleteMedia(r.Context(), albumID, mediaID, memberToken); err != nil {
 		apierr.Write(w, r, err)
 		return
 	}

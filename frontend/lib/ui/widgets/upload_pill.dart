@@ -50,7 +50,8 @@ class UploadPill extends StatelessWidget {
             Text(
               failed
                   ? '${batch.failedCount} didn’t send'
-                  : 'Adding ${batch.doneCount + 1} of ${batch.totalCount}',
+                  : 'Adding ${batch.doneCount + batch.failedCount + 1}'
+                      ' of ${batch.totalCount}',
               style: const TextStyle(
                   fontSize: 12.5, fontWeight: FontWeight.w600, color: Warm.ink),
             ),

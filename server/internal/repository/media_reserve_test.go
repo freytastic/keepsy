@@ -22,6 +22,10 @@ func reserveEnv(t *testing.T) (*summaryEnv, uuid.UUID, []byte) {
 		t.Fatalf("create album: %v", err)
 	}
 	t.Cleanup(func() {
+		// Remove shared cleanup rows from replaced reservations
+		_, _ = env.pool.Exec(ctx,
+			`DELETE FROM media_object_cleanup
+			 WHERE storage_key LIKE 'key-%' OR storage_key LIKE 'thumb-%'`)
 		_, _ = env.pool.Exec(ctx, `DELETE FROM albums WHERE id = $1`, album.ID)
 	})
 	if _, err := env.pool.Exec(ctx,
@@ -172,7 +176,7 @@ func TestReserveUploadRow_RefusesReplayOfConfirmedMedia(t *testing.T) {
 	if err := env.media.ReserveUploadRow(ctx, row, 0); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if _, err := env.media.MarkConfirmed(ctx, mediaID, albumID); err != nil {
+	if _, err := env.media.MarkConfirmed(ctx, mediaID, albumID, row.ReservationID); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 
@@ -205,5 +209,127 @@ func TestReserveUploadRow_RefusesAnotherUploadersReservation(t *testing.T) {
 	}
 	if row.StorageKey != "key-mine" {
 		t.Errorf("storage_key = %q, the original reservation must survive", row.StorageKey)
+	}
+}
+
+func TestMarkConfirmed_RefusesAReplacedReservation(t *testing.T) {
+	env, albumID, token := reserveEnv(t)
+	ctx := context.Background()
+	mediaID := uuid.New()
+
+	first := pendingRow(albumID, mediaID, token, "key-a", "thumb-a")
+	if err := env.media.ReserveUploadRow(ctx, first, 0); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+
+	second := pendingRow(albumID, mediaID, token, "key-b", "thumb-b")
+	second.BlobSHA256 = bytes.Repeat([]byte{0x9}, 32)
+	if err := env.media.ReserveUploadRow(ctx, second, 0); err != nil {
+		t.Fatalf("second reserve: %v", err)
+	}
+
+	_, err := env.media.MarkConfirmed(ctx, mediaID, albumID, first.ReservationID)
+	if !errors.Is(err, repository.ErrMediaNotFound) {
+		t.Fatalf("stale confirm err = %v, want ErrMediaNotFound", err)
+	}
+
+	var confirmed bool
+	if err := env.pool.QueryRow(ctx,
+		`SELECT confirmed FROM media WHERE id = $1`, mediaID).Scan(&confirmed); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if confirmed {
+		t.Fatal("a confirm for objects that are no longer this row's committed it")
+	}
+}
+
+func TestQueuePendingCleanup_LeavesANewerReservationAlone(t *testing.T) {
+	env, albumID, token := reserveEnv(t)
+	ctx := context.Background()
+	mediaID := uuid.New()
+
+	first := pendingRow(albumID, mediaID, token, "key-a", "thumb-a")
+	if err := env.media.ReserveUploadRow(ctx, first, 0); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	second := pendingRow(albumID, mediaID, token, "key-b", "thumb-b")
+	second.BlobSHA256 = bytes.Repeat([]byte{0x9}, 32)
+	if err := env.media.ReserveUploadRow(ctx, second, 0); err != nil {
+		t.Fatalf("second reserve: %v", err)
+	}
+
+	batch, err := env.media.QueuePendingCleanup(ctx, mediaID, albumID, token, first.ReservationID)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if batch.MediaCount != 0 {
+		t.Fatalf("retired %d rows, want 0", batch.MediaCount)
+	}
+
+	var live string
+	if err := env.pool.QueryRow(ctx,
+		`SELECT storage_key FROM media WHERE id = $1`, mediaID).Scan(&live); err != nil {
+		t.Fatalf("newer reservation was deleted by a stale cleanup: %v", err)
+	}
+	if live != "key-b" {
+		t.Fatalf("storage key = %q, want key-b", live)
+	}
+}
+
+func TestQueuePendingCleanup_LeavesAnIdenticalReReservationAlone(t *testing.T) {
+	env, albumID, token := reserveEnv(t)
+	ctx := context.Background()
+	mediaID := uuid.New()
+
+	first := pendingRow(albumID, mediaID, token, "key-a", "thumb-a")
+	if err := env.media.ReserveUploadRow(ctx, first, 0); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	staleReservation := first.ReservationID
+
+	second := pendingRow(albumID, mediaID, token, "key-ignored", "thumb-ignored")
+	if err := env.media.ReserveUploadRow(ctx, second, 0); err != nil {
+		t.Fatalf("second reserve: %v", err)
+	}
+	if second.StorageKey != first.StorageKey {
+		t.Fatalf("expected the key to be retained, got %q", second.StorageKey)
+	}
+	if second.ReservationID == staleReservation {
+		t.Fatal("a replacement reservation reused the previous reservation id")
+	}
+
+	batch, err := env.media.QueuePendingCleanup(ctx, mediaID, albumID, token, staleReservation)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if batch.MediaCount != 0 {
+		t.Fatalf("a stale cleanup retired %d rows, want 0", batch.MediaCount)
+	}
+	if _, err := env.media.GetByID(ctx, mediaID, albumID); err != nil {
+		t.Fatalf("the live reservation was deleted: %v", err)
+	}
+}
+
+func TestMarkConfirmed_RefusesAnIdenticalReReservation(t *testing.T) {
+	env, albumID, token := reserveEnv(t)
+	ctx := context.Background()
+	mediaID := uuid.New()
+
+	first := pendingRow(albumID, mediaID, token, "key-a", "thumb-a")
+	if err := env.media.ReserveUploadRow(ctx, first, 0); err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	staleReservation := first.ReservationID
+
+	second := pendingRow(albumID, mediaID, token, "key-ignored", "thumb-ignored")
+	if err := env.media.ReserveUploadRow(ctx, second, 0); err != nil {
+		t.Fatalf("second reserve: %v", err)
+	}
+
+	if _, err := env.media.MarkConfirmed(ctx, mediaID, albumID, staleReservation); !errors.Is(err, repository.ErrMediaNotFound) {
+		t.Fatalf("stale confirm err = %v, want ErrMediaNotFound", err)
+	}
+	if _, err := env.media.MarkConfirmed(ctx, mediaID, albumID, second.ReservationID); err != nil {
+		t.Fatalf("current confirm: %v", err)
 	}
 }
