@@ -14,7 +14,9 @@ class UploadQueueModel extends ChangeNotifier {
   // Batches can settle after their album screen closes
   final DismissalGate _dismissals = DismissalGate();
   final Map<String, Set<String>> _landed = {};
-  final Set<String> _observed = {};
+  // Screens and sheets may share ownership
+  final Map<String, int> _observed = {};
+  final Map<String, int> _presented = {};
   bool _sweeping = false;
   UploadState _state;
   StreamSubscription<UploadState>? _sub;
@@ -28,12 +30,34 @@ class UploadQueueModel extends ChangeNotifier {
     });
   }
 
-  void observeAlbum(String albumId) => _observed.add(albumId);
+  // Keeps a sheet's batch alive while it is visible
+  void beginPresenting(String batchId) => _retain(_presented, batchId);
+
+  void endPresenting(String batchId) {
+    if (_release(_presented, batchId)) _sweep();
+  }
+
+  void observeAlbum(String albumId) => _retain(_observed, albumId);
 
   void stopObserving(String albumId) {
-    _observed.remove(albumId);
+    if (!_release(_observed, albumId)) return;
     _landed.remove(albumId);
     _sweep();
+  }
+
+  void _retain(Map<String, int> counts, String key) =>
+      counts[key] = (counts[key] ?? 0) + 1;
+
+  // Returns true when the final holder releases
+  bool _release(Map<String, int> counts, String key) {
+    final n = counts[key];
+    if (n == null) return false;
+    if (n > 1) {
+      counts[key] = n - 1;
+      return false;
+    }
+    counts.remove(key);
+    return true;
   }
 
   // Releases held overlays after confirmed records are rendered
@@ -63,13 +87,15 @@ class UploadQueueModel extends ChangeNotifier {
       final landed = <String>{};
       final doneByBatch = <String, List<String>?>{};
       for (final batchId in _dismissals.held) {
+        // Omitted entries stay held while their sheet is visible
+        if (_presented.containsKey(batchId)) continue;
         final batch = _state.batch(batchId);
         if (batch == null) {
           doneByBatch[batchId] = null;
           continue;
         }
         // No visible overlays need protection
-        if (!_observed.contains(batch.albumId)) {
+        if (!_observed.containsKey(batch.albumId)) {
           doneByBatch[batchId] = const [];
           continue;
         }
@@ -97,10 +123,18 @@ class UploadQueueModel extends ChangeNotifier {
 
   Uint8List? preview(MediaId id) => _previews[id.value];
 
+  // Refuse plaintext previews the queue no longer owns
   void putPreview(MediaId id, Uint8List bytes) {
+    if (!_owns(id)) return;
     _previews[id.value] = bytes;
     notifyListeners();
   }
+
+  bool _owns(MediaId id) => _co.state.batches
+      .any((b) => b.items.any((i) => i.mediaId.value == id.value));
+
+  Future<List<PickedSource>> stage(List<PickedSource> sources) =>
+      _co.stage(sources);
 
   String startBatch({
     required String albumId,
@@ -117,17 +151,26 @@ class UploadQueueModel extends ChangeNotifier {
   Future<void> removeFailed(String batchId) async {
     _forgetPreviewsOf(batchId, onlyFailed: true);
     await _co.removeFailed(batchId);
+    _syncState();
   }
 
   void resumeAlbum(String albumId) => _co.resumeAlbum(albumId);
   Future<void> cancelBatch(String batchId) async {
     _forgetPreviews(batchId);
     await _co.cancelBatch(batchId);
+    _syncState();
   }
 
   Future<void> dismissBatch(String batchId) async {
     _forgetPreviews(batchId);
     await _co.dismissBatch(batchId);
+    _syncState();
+  }
+
+  // Awaited mutations must expose their final state
+  void _syncState() {
+    _state = _co.state;
+    notifyListeners();
   }
 
   void _forgetPreviews(String batchId) =>

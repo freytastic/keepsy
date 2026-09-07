@@ -7,22 +7,18 @@ class DismissalGate {
   bool isHolding(String batchId) => _held.contains(batchId);
   List<String> get held => List.unmodifiable(_held);
 
-  // Null means the queue no longer owns the batch
+  // Entries omitted from doneByBatch stay held
   List<String> release({
     required Set<String> landedMediaIds,
     required Map<String, List<String>?> doneByBatch,
   }) {
     final ready = <String>[];
-    for (final batchId in _held.toList()) {
-      final done = doneByBatch[batchId];
-      if (done == null) {
-        _held.remove(batchId);
-        ready.add(batchId);
-        continue;
-      }
-      if (!done.every(landedMediaIds.contains)) continue;
-      _held.remove(batchId);
-      ready.add(batchId);
+    for (final entry in doneByBatch.entries) {
+      if (!_held.contains(entry.key)) continue;
+      final done = entry.value;
+      if (done != null && !done.every(landedMediaIds.contains)) continue;
+      _held.remove(entry.key);
+      ready.add(entry.key);
     }
     return ready;
   }

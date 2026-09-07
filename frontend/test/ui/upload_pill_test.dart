@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/domain/upload/upload_coordinator.dart';
@@ -77,6 +79,24 @@ void main() {
     await tester.pump();
 
     expect(model.state.batch(batchId), isNull);
+  });
+
+  testWidgets('counts a failed photo as a position already passed',
+      (tester) async {
+    uploader.failStage('putFile',
+        const UploadStageException(UploadFailureKind.transport, 'reset'),
+        times: 3);
+    var reserves = 0;
+    uploader.onReserve = () {
+      if (++reserves == 2) uploader.holdReserve = Completer<void>();
+    };
+    model.startBatch(albumId: _album, sources: pick(3));
+    await pump(tester);
+    await tester.pump(Duration.zero);
+    await tester.pump();
+
+    expect(find.text('Adding 2 of 3'), findsOneWidget);
+    uploader.holdReserve!.complete();
   });
 
   testWidgets('stays reachable after a batch settles with losses',

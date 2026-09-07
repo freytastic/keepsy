@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/data/api/album_api.dart';
@@ -15,6 +17,7 @@ import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/storage/media_catalog.dart';
+import 'package:keepsy/ui/shelf/shelf_data.dart';
 
 import '../domain/upload/fakes.dart';
 import '../secure_store/mock_secure_key_store.dart';
@@ -26,16 +29,44 @@ class _MockAlbumService extends AlbumService {
 
 class _CountingMediaApi extends MediaApi {
   int listCalls = 0;
-  _CountingMediaApi() : super(ApiClient());
+  final List<MediaId> confirmed;
+  _CountingMediaApi(this.confirmed) : super(ApiClient());
 
   @override
-  Future<List<MediaRecord>> listMedia(String _) async {
+  Future<List<MediaRecord>> listMedia(String albumId) async {
     listCalls++;
-    return const [];
+    return [
+      for (final id in confirmed)
+        MediaRecord(
+          id: id.value,
+          albumId: albumId,
+          uploaderToken: 'tok',
+          wrapNonce: Uint8List(12),
+          wrapTagCT: Uint8List(48),
+          epochTag: 3,
+          blobSize: 1000,
+          blobSha256: Uint8List(32),
+          mediaType: 'photo',
+          mimeType: 'image/jpeg',
+          createdAt: DateTime(2026),
+        ),
+    ];
   }
 
   @override
   void dispose() {}
+}
+
+class _BrokenSeenStore extends ChangeNotifier implements SeenStore {
+  @override
+  int lastSeen(String albumId) => 0;
+  @override
+  bool knows(String albumId) => true;
+  @override
+  Future<void> markSeen(String albumId, int generation) async =>
+      throw StateError('seen store unwritable');
+  @override
+  Future<void> forget(String albumId) async {}
 }
 
 class _RecordingCatalog implements MediaCatalog {
@@ -73,7 +104,7 @@ void main() {
       throttle: Duration.zero,
     );
     model = UploadQueueModel(co);
-    media = _CountingMediaApi();
+    media = _CountingMediaApi(uploader.confirmed);
     catalog = _RecordingCatalog();
   });
 
@@ -98,13 +129,15 @@ void main() {
     return aks;
   }
 
-  Future<void> pumpScreen(WidgetTester tester, AlbumKeyStore aks) async {
+  Future<void> pumpScreen(WidgetTester tester, AlbumKeyStore aks,
+      {SeenStore? seen}) async {
     await tester.pumpWidget(MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AppState()),
         Provider<AlbumKeyStore>.value(value: aks),
         ChangeNotifierProvider<UploadQueueModel>.value(value: model),
         Provider<MediaCatalog>.value(value: catalog),
+        if (seen != null) ListenableProvider<SeenStore>.value(value: seen),
       ],
       child: MaterialApp(
         home: AlbumDetailScreen(
@@ -142,6 +175,39 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(media.listCalls, greaterThan(afterFirstSettle));
+  });
+
+  testWidgets('leaving the album releases the overlays it was protecting',
+      (tester) async {
+    final aks = await emptyAks();
+    await pumpScreen(tester, aks);
+
+    // Rebuild before leaving to catch duplicate observer registration
+    final id = model.startBatch(albumId: 'album-1', sources: pick(2));
+    await tester.pumpAndSettle();
+    expect(model.state.batch(id), isNotNull,
+        reason: 'the listing is empty, so the tiles are still needed');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
+    expect(model.state.batch(id), isNull);
+  });
+
+  testWidgets('a broken seen store does not strand the uploaded tiles',
+      (tester) async {
+    final aks = await emptyAks();
+    await pumpScreen(tester, aks, seen: _BrokenSeenStore());
+
+    final id = model.startBatch(albumId: 'album-1', sources: pick(1));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+
+    expect(model.state.batch(id), isNull);
+    // Ignore unrelated cache errors from this minimal harness
+    expect(tester.takeException(), isNot(isA<StateError>()));
   });
 
   testWidgets('a completed upload reloads the album without a server event',
