@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/pressable_scale.dart';
 import 'package:provider/provider.dart';
 
 import 'upload_copy.dart';
@@ -21,7 +22,7 @@ class UploadPill extends StatelessWidget {
     final batch = live.last;
     final failed = batch.settled;
 
-    return GestureDetector(
+    return PressableScale(
       onTap: () => UploadSheet.show(context, batchId: batch.batchId),
       child: Container(
         padding: const EdgeInsets.fromLTRB(12, 8, 14, 8),
