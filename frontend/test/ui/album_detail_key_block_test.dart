@@ -16,6 +16,9 @@ import 'package:keepsy/ui/screens/album_detail_screen.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
+import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'upload_scaffold.dart';
+
 const _albumId = 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1';
 
 class _MockAlbumService extends AlbumService {
@@ -70,6 +73,7 @@ Future<AppState> _pumpScreen(WidgetTester tester, {EpochBlocked? block}) async {
     providers: [
       ChangeNotifierProvider<AppState>.value(value: app),
       Provider<AlbumKeyStore>.value(value: aks),
+      ChangeNotifierProvider<UploadQueueModel>.value(value: idleUploadQueue()),
     ],
     child: MaterialApp(
       home: AlbumDetailScreen(

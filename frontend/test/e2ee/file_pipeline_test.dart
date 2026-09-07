@@ -32,6 +32,22 @@ Uint8List _bytes(int n, [int seed = 0]) {
 // A real JPEG that carries EXIF. package:image does not round trip a
 // self authored GPS sub IFD, so we tag Make/Model : the strip asserts the WHOLE
 // exif container is empty afterward, which subsumes GPS (itself a gps sub-IFD)
+// Reads the luma sampling factor from baseline or progressive JPEG
+int _lumaSampling(Uint8List jpeg) {
+  var i = 2;
+  while (i + 12 < jpeg.length) {
+    if (jpeg[i] != 0xFF) {
+      i++;
+      continue;
+    }
+    final marker = jpeg[i + 1];
+    final len = (jpeg[i + 2] << 8) | jpeg[i + 3];
+    if (marker == 0xC0 || marker == 0xC2) return jpeg[i + 11];
+    i += 2 + len;
+  }
+  throw StateError('no SOF marker in JPEG');
+}
+
 Uint8List _jpegWithExif() {
   final src = img.Image(width: 16, height: 16);
   img.fill(src, color: img.ColorRgb8(120, 200, 40));
@@ -282,6 +298,26 @@ void main() {
       expect(env.thumbPlaintext, isNotNull);
       expect(img.decodeImage(env.thumbPlaintext!)!.exif.isEmpty, isTrue,
           reason: 'thumbnail must carry no EXIF');
+    });
+
+    test('full size is 4:2:0, thumbnail keeps full 4:4:4 chroma', () async {
+      final aks = await _newAks(_albumId(), 0, _mk());
+      final env = await FilePipeline.prepareUpload(
+        aks: aks,
+        albumIdBytes: _albumId(),
+        currentEpoch: 0,
+        plaintext: _jpegWithExif(),
+        mediaType: 'photo',
+        mimeType: 'image/jpeg',
+      );
+
+      final clean =
+          await _decryptEnvelope(aks: aks, albumId: _albumId(), env: env);
+      expect(_lumaSampling(clean), 0x22,
+          reason: 'uploaded photo must be 4:2:0, the chroma cameras produce');
+      expect(env.thumbPlaintext, isNotNull);
+      expect(_lumaSampling(env.thumbPlaintext!), 0x11,
+          reason: 'thumbnail must stay 4:4:4');
     });
 
     test('output photo keeps correct orientation (portrait stays upright)',

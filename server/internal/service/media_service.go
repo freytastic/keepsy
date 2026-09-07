@@ -230,11 +230,17 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 			return nil, apierr.EpochPendingRotation("album has a pending epoch rotation ; uploads are frozen until it completes")
 		case errors.Is(err, repository.ErrAlbumNotFound):
 			return nil, apierr.NotFound("album not found")
+		case errors.Is(err, repository.ErrMediaConfirmed):
+			return nil, apierr.Validation("media_id is already confirmed")
+		case errors.Is(err, repository.ErrMediaNotOwned):
+			return nil, apierr.Forbidden("media_id is reserved by another uploader")
 		default:
 			return nil, apierr.Internal("failed to write pending media").WithCause(err)
 		}
 	}
 
+	// Presign the keys selected by ReserveUploadRow
+	storageKey = row.StorageKey
 	sha256B64 := base64.StdEncoding.EncodeToString(in.BlobSHA256)
 	pre, err := s.s3.GetPresignedUploadURLWithChecksum(ctx, storageKey, contentType, in.BlobSize, sha256B64, PresignTTL)
 	if err != nil {
@@ -248,6 +254,9 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		StorageKey:     storageKey,
 	}
 	if hasThumb {
+		if row.ThumbKey != nil {
+			thumbKey = *row.ThumbKey
+		}
 		thumbSHA256B64 := base64.StdEncoding.EncodeToString(in.ThumbSHA256)
 		// Thumb is always image/webp client choice. Hardcoded here
 		// instead of taking from the request so a bad client cant claim a
@@ -393,7 +402,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 			}
 		}()
 	} else {
-		slog.Warn("media_added: notifier or lookup is nil — fanout skipped", "album_id", albumID)
+		slog.Warn("media_added: notifier or lookup is nil, fanout skipped", "album_id", albumID)
 	}
 	return generation, nil
 }

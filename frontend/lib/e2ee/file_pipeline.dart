@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
@@ -28,11 +29,13 @@ const int _wrapWireLen = 1 + _wrapNonceLen + _wrapTagCTLen; // 61
 const int _dekLen = 32;
 const int _mediaIdLen = 16;
 
-//  thumb is max 400px long edge, JPEG q=70 (i thought of WebP but
-// package:image 4.8 has no encodeWebP : JPEG hits the ~20KB target close
-// enough). Encoded as image/webp on the wire would be nice future swap
-const int _thumbMaxDim = 400;
-const int _thumbJpegQuality = 70;
+// Sized for a three column grid while staying below the server limit
+const int _thumbMaxDim = 640;
+const int _thumbJpegQuality = 82;
+// Leaves headroom below the 500 KB thumbnail limit
+const int _thumbByteBudget = 420 * 1024;
+const int _thumbMinQuality = 60;
+const int _thumbMinDim = 320;
 // "thumb" suffix bound into thumb cipher AAD so it cant be swapped with a
 // file blob from the same media_id
 final Uint8List _kThumbAadSuffix = Uint8List.fromList('thumb'.codeUnits);
@@ -110,6 +113,8 @@ abstract class FilePipeline {
     required Uint8List plaintext,
     required String mediaType,
     String? mimeType,
+    // Stable across retries because media ID is AEAD AAD
+    Uint8List? mediaId,
   }) async {
     if (albumIdBytes.length != _mediaIdLen) {
       throw ArgumentError(
@@ -120,10 +125,13 @@ abstract class FilePipeline {
           "mediaType must be 'photo' or 'video', got $mediaType");
     }
 
-    final mediaId = _newUuidBytes();
+    if (mediaId != null && mediaId.length != _mediaIdLen) {
+      throw ArgumentError('mediaId must be 16 bytes, got ${mediaId.length}');
+    }
+    final id = mediaId ?? _newUuidBytes();
     final dek = Csprng.bytes(_dekLen);
     final traceFields = <String, Object?>{
-      'media': Trace.id(_uuidStringFromBytes(mediaId)),
+      'media': Trace.id(_uuidStringFromBytes(id)),
       'kind': mediaType,
       'input_bytes': plaintext.length,
       'epoch': currentEpoch,
@@ -131,18 +139,20 @@ abstract class FilePipeline {
     final prepareSpan = Trace.start('media.prepareUpload', fields: traceFields);
 
     try {
-      // for photos, decode + re encode as a fresh JPEG with EXIF explicitly
-      // cleared (see _stripExifAndThumb : decoding alone does NOT drop it), and
-      // pull a 400px thumbnail off the same decoded image so we dont decode
-      // twice. A photo we cant decode fails closed below (we wont upload raw
-      // bytes with metadata intact). Videos keep the raw path : no image codec
+      // Photos are re-encoded without metadata and reuse one thumbnail decode
+      // Undecodable photos fail closed while videos keep their original bytes
       Uint8List bytesToEncrypt = plaintext;
       Uint8List? thumbPlaintext;
       if (mediaType == 'photo') {
-        final stripped = _stripExifAndThumb(plaintext, traceFields);
-        // Fail closed : if we couldnt decode the photo we cant guarantee its
-        // metadata was stripped, so we refuse rather than upload the original
-        // bytes with EXIF/GPS intact (video keeps the raw path : no image codec)
+        final stripped = await Trace.measure<_StrippedAndThumb?>(
+          'media.imageWork',
+          () => _stripExifAndThumb(plaintext),
+          fields: {...traceFields, 'bytes': plaintext.length},
+          endFields: (result) => {'decoded': result != null},
+        );
+        if (stripped != null) {
+          _emitImageSpans(stripped, plaintext.length, traceFields);
+        }
         if (stripped == null) {
           throw const UnprocessableImageException(
               'photo could not be decoded to strip metadata');
@@ -161,12 +171,12 @@ abstract class FilePipeline {
                 version: kVerAesGcm,
                 key: dek,
                 plaintext: bytesToEncrypt,
-                aad: mediaId,
+                aad: id,
               )
             : AeadStream.encryptBytes(
                 dek: dek,
                 plaintext: bytesToEncrypt,
-                mediaId: mediaId,
+                mediaId: id,
               ),
         fields: {
           ...traceFields,
@@ -206,7 +216,7 @@ abstract class FilePipeline {
             version: kVerAesGcm,
             key: dekThumb,
             plaintext: thumbPlaintext!,
-            aad: _thumbAad(mediaId),
+            aad: _thumbAad(id),
           );
           thumbSha256 = await _sha256(thumbCipher);
         }
@@ -250,7 +260,7 @@ abstract class FilePipeline {
       }
 
       final envelope = UploadEnvelope(
-        mediaId: mediaId,
+        mediaId: id,
         cipherBytes: cipher,
         wrapNonce: wrapNonce,
         wrapTagCT: wrapTagCT,
@@ -304,63 +314,141 @@ Uint8List _thumbAad(Uint8List mediaId) {
 class _StrippedAndThumb {
   final Uint8List cleanJpeg;
   final Uint8List thumb;
-  const _StrippedAndThumb(this.cleanJpeg, this.thumb);
+  final int decodeMs;
+  final int encodeMs;
+  final int resizeMs;
+  final int thumbEncodeMs;
+  final int width;
+  final int height;
+  final int thumbWidth;
+  final int thumbHeight;
+  final int thumbQuality;
+
+  const _StrippedAndThumb({
+    required this.cleanJpeg,
+    required this.thumb,
+    required this.decodeMs,
+    required this.encodeMs,
+    required this.resizeMs,
+    required this.thumbEncodeMs,
+    required this.width,
+    required this.height,
+    required this.thumbWidth,
+    required this.thumbHeight,
+    required this.thumbQuality,
+  });
 }
 
-// _stripExifAndThumb : decode the picked photo (img.decodeImage auto applies
-// EXIF orientation, so pixels come back upright), CLEAR the remaining EXIF, then
-// re encode as a clean JPEG + pull a 400px long-edge thumbnail off the same
-// Image. Returns null if the bytes arent a decodable image : the caller fails
-// closed rather than upload unstripped bytes
-_StrippedAndThumb? _stripExifAndThumb(
-    Uint8List bytes, Map<String, Object?> traceFields) {
-  final decoded = Trace.measureSync<img.Image?>(
-    'media.imageDecode',
-    () => img.decodeImage(bytes),
-    fields: {...traceFields, 'bytes': bytes.length},
-    endFields: (result) => {
-      'decoded': result != null,
-      if (result != null) 'width': result.width,
-      if (result != null) 'height': result.height,
-    },
-  );
+// Runs image codecs off the Flutter UI isolate
+Future<_StrippedAndThumb?> _stripExifAndThumb(Uint8List bytes) =>
+    Isolate.run(() => _stripExifAndThumbSync(bytes));
+
+// Returns a cleaned JPEG and thumbnail or null when decoding fails
+_StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
+  final watch = Stopwatch()..start();
+  final decoded = img.decodeImage(bytes);
+  final decodeMs = watch.elapsedMilliseconds;
   if (decoded == null) return null;
+
   // Drop EXIF (GPS, camera, capture time) + any XMP/IPTC BEFORE re encoding :
   // package:image parses EXIF into decoded.exif and encodeJpg writes it back
   // out, so decoding alone does NOT strip it. Clearing here means both the
   // clean JPEG and the thumbnail (derived below from the same Image) are
   // metadata free. ICC colour profile is left alone (not privacy sensitive)
   decoded.exif = img.ExifData();
-  final cleanJpeg = Trace.measureSync<Uint8List>(
-    'media.imageEncode',
-    () => img.encodeJpg(decoded, quality: 90),
-    fields: traceFields,
-    endFields: (result) => {'bytes': result.length, 'quality': 90},
-  );
+
+  watch.reset();
+  // Use 4:2:0 for smaller full size images
+  final cleanJpeg =
+      img.encodeJpg(decoded, quality: 90, chroma: img.JpegChroma.yuv420);
+  final encodeMs = watch.elapsedMilliseconds;
+
   // Resize the LONG edge to _thumbMaxDim. copyResize preserves aspect ratio
   // when only one of width/height is given
-  final thumbImg = Trace.measureSync<img.Image>(
-    'media.thumbResize',
-    () => decoded.width >= decoded.height
-        ? img.copyResize(decoded, width: _thumbMaxDim)
-        : img.copyResize(decoded, height: _thumbMaxDim),
-    fields: traceFields,
-    endFields: (result) => {
-      'width': result.width,
-      'height': result.height,
-    },
-  );
+  watch.reset();
+  final thumbImg = _resizeLongEdge(decoded, _thumbMaxDim);
+  final resizeMs = watch.elapsedMilliseconds;
 
-  final thumb = Trace.measureSync<Uint8List>(
-    'media.thumbEncode',
-    () => img.encodeJpg(thumbImg, quality: _thumbJpegQuality),
-    fields: traceFields,
-    endFields: (result) => {
-      'bytes': result.length,
-      'quality': _thumbJpegQuality,
-    },
+  // Preserve edge color in small thumbnails
+  watch.reset();
+  final thumb = _encodeThumbUnderBudget(thumbImg);
+  final thumbEncodeMs = watch.elapsedMilliseconds;
+
+  return _StrippedAndThumb(
+    cleanJpeg: cleanJpeg,
+    thumb: thumb.bytes,
+    decodeMs: decodeMs,
+    encodeMs: encodeMs,
+    resizeMs: resizeMs,
+    thumbEncodeMs: thumbEncodeMs,
+    width: decoded.width,
+    height: decoded.height,
+    thumbWidth: thumb.width,
+    thumbHeight: thumb.height,
+    thumbQuality: thumb.quality,
   );
-  return _StrippedAndThumb(cleanJpeg, thumb);
+}
+
+// Average interpolation avoids jagged downscale edges
+img.Image _resizeLongEdge(img.Image src, int maxDim) {
+  final longEdge = src.width >= src.height ? src.width : src.height;
+  if (longEdge <= maxDim) return src;
+  return src.width >= src.height
+      ? img.copyResize(src,
+          width: maxDim, interpolation: img.Interpolation.average)
+      : img.copyResize(src,
+          height: maxDim, interpolation: img.Interpolation.average);
+}
+
+class _Thumb {
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int quality;
+  const _Thumb(this.bytes, this.width, this.height, this.quality);
+}
+
+// Lowers quality before dimensions to preserve thumbnail detail
+_Thumb _encodeThumbUnderBudget(img.Image src) {
+  var image = src;
+  var quality = _thumbJpegQuality;
+  while (true) {
+    final bytes = img.encodeJpg(image, quality: quality);
+    if (bytes.length <= _thumbByteBudget) {
+      return _Thumb(bytes, image.width, image.height, quality);
+    }
+    if (quality > _thumbMinQuality) {
+      quality -= 8;
+      if (quality < _thumbMinQuality) {
+        quality = _thumbMinQuality;
+      }
+      continue;
+    }
+    final longEdge = image.width >= image.height ? image.width : image.height;
+    if (longEdge <= _thumbMinDim) {
+      return _Thumb(bytes, image.width, image.height, quality);
+    }
+    image = _resizeLongEdge(image, (longEdge * 3) ~/ 4);
+    quality = _thumbJpegQuality;
+  }
+}
+
+// Replays isolate timings on the caller trace
+void _emitImageSpans(
+    _StrippedAndThumb work, int inputBytes, Map<String, Object?> fields) {
+  if (!Trace.enabled) return;
+  Trace.replay('media.imageDecode', work.decodeMs,
+      fields: {...fields, 'bytes': inputBytes},
+      endFields: {'decoded': true, 'width': work.width, 'height': work.height});
+  Trace.replay('media.imageEncode', work.encodeMs,
+      fields: fields,
+      endFields: {'bytes': work.cleanJpeg.length, 'quality': 90});
+  Trace.replay('media.thumbResize', work.resizeMs,
+      fields: fields,
+      endFields: {'width': work.thumbWidth, 'height': work.thumbHeight});
+  Trace.replay('media.thumbEncode', work.thumbEncodeMs,
+      fields: fields,
+      endFields: {'bytes': work.thumb.length, 'quality': work.thumbQuality});
 }
 
 Future<Uint8List> _sha256(Uint8List bytes) async {

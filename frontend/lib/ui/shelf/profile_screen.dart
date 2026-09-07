@@ -14,7 +14,6 @@ import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/ui/shelf/safety_summary.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/paper_grain.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
 
 const _docsUrl = 'https://keepsy-web.vercel.app';
@@ -199,7 +198,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ],
               ),
             ),
-            const Positioned.fill(child: PaperGrain()),
           ],
         ),
       ),

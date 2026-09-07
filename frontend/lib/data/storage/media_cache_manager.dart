@@ -222,9 +222,11 @@ class MediaCacheManager {
   // memory. Seal it into L2 + put in L1 so the grid rebuild hits cache (~0ms)
   // instead of paying L3 + decrypt for content the uploader just produced. No
   // useMk : we already hold the plaintext
+  // Skip full size L1 inserts during batches to avoid evicting visible media
   Future<void> seedFromUpload({
     required String albumId,
     required UploadEnvelope env,
+    bool fullToL1 = true,
   }) async {
     final mid = env.mediaIdString;
     await Trace.measure<void>(
@@ -236,7 +238,7 @@ class MediaCacheManager {
           epochTag: env.epoch,
           asset: CacheAsset.file,
         );
-        _l1.put(fileK, env.filePlaintext);
+        if (fullToL1) _l1.put(fileK, env.filePlaintext);
         await _l2.writeBlob(fileK, env.filePlaintext);
         if (env.hasThumb && env.thumbPlaintext != null) {
           final thumbK = MediaCacheKey(

@@ -11,8 +11,8 @@ import 'package:keepsy/ui/shelf/shelf_copy.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/shelf/shelf_layout.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/paper_grain.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
+import 'package:keepsy/ui/widgets/upload_pill.dart';
 
 class ShelfScreen extends StatefulWidget {
   final VoidCallback? onOpenProfile;
@@ -124,7 +124,12 @@ class _ShelfScreenState extends State<ShelfScreen>
               onCreate: widget.onCreateAlbum,
               onActivity: widget.onOpenActivity,
             ),
-            const Positioned.fill(child: PaperGrain()),
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 132,
+              child: Center(child: UploadPill()),
+            ),
           ],
         ),
       ),

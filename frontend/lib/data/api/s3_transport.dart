@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -6,8 +7,21 @@ import 'package:keepsy/diagnostics/trace.dart';
 
 typedef ClientFactory = http.Client Function();
 
+// Reports bytes accepted by the request stream, not acknowledged by storage
+typedef UploadProgress = void Function(int bytesSoFar);
+
+const int kUploadChunkBytes = 64 * 1024;
+
 // Keep in sync with MaxBlobBytes in the media service
 const int kMaxMediaBytes = 64 * 1024 * 1024;
+
+// Keeps storage status errors distinct from transport failures
+class S3StatusException implements Exception {
+  final int statusCode;
+  const S3StatusException(this.statusCode);
+  @override
+  String toString() => 'S3StatusException($statusCode)';
+}
 
 class S3TransportException implements Exception {
   final String reason;
@@ -25,6 +39,7 @@ class S3Transport {
   final Duration baseDeadline;
   final int maxMediaBytes;
   final int bytesPerSecondFloor;
+  final int uploadChunkBytes;
   final Duration Function(int attempt) backoff;
 
   http.Client? _client;
@@ -36,9 +51,11 @@ class S3Transport {
     // Values above the server limit indicate corrupt metadata
     this.maxMediaBytes = kMaxMediaBytes,
     this.bytesPerSecondFloor = 64 * 1024,
+    this.uploadChunkBytes = kUploadChunkBytes,
     Duration Function(int)? backoff,
   })  : assert(maxDownloadAttempts > 0),
         assert(bytesPerSecondFloor > 0),
+        assert(uploadChunkBytes > 0),
         assert(maxMediaBytes > 0),
         _newClient = clientFactory ?? (() => http.Client()),
         backoff = backoff ?? _defaultBackoff;
@@ -63,6 +80,8 @@ class S3Transport {
     Uint8List body,
     Map<String, String> headers, {
     Map<String, Object?> traceFields = const {},
+    UploadProgress? onBytes,
+    Future<void>? abortTrigger,
   }) async {
     final uploadDeadline = deadlineFor(body.length);
     final span = Trace.start('media.upload', fields: {
@@ -73,7 +92,11 @@ class S3Transport {
     });
     final abort = Completer<void>();
     final timeout = Completer<http.Response>();
-    final request = _AbortableRequest('PUT', url, abort.future, body: body)
+    final trigger = abortTrigger == null
+        ? abort.future
+        : Future.any([abort.future, abortTrigger]);
+    final request = _ProgressRequest('PUT', url, body, trigger,
+        onBytes: onBytes, chunkSize: uploadChunkBytes)
       ..headers.addAll(headers);
     final timer = Timer(uploadDeadline, () {
       timeout.completeError(
@@ -217,6 +240,45 @@ class _AbortableRequest extends http.Request with http.Abortable {
   _AbortableRequest(super.method, super.url, this.abortTrigger,
       {Uint8List? body}) {
     if (body != null) bodyBytes = body;
+  }
+}
+
+// Uses zero-copy chunks and the signed content length for upload progress
+class _ProgressRequest extends http.BaseRequest with http.Abortable {
+  final Uint8List _body;
+  final UploadProgress? _onBytes;
+  final int _chunkSize;
+
+  @override
+  final Future<void>? abortTrigger;
+
+  _ProgressRequest(
+    super.method,
+    super.url,
+    this._body,
+    this.abortTrigger, {
+    UploadProgress? onBytes,
+    int chunkSize = kUploadChunkBytes,
+  })  : _onBytes = onBytes,
+        _chunkSize = chunkSize {
+    contentLength = _body.length;
+  }
+
+  @override
+  http.ByteStream finalize() {
+    super.finalize();
+    return http.ByteStream(_chunks());
+  }
+
+  Stream<List<int>> _chunks() async* {
+    var offset = 0;
+    if (_body.isEmpty) return;
+    while (offset < _body.length) {
+      final end = math.min(offset + _chunkSize, _body.length);
+      yield Uint8List.sublistView(_body, offset, end);
+      offset = end;
+      _onBytes?.call(offset);
+    }
   }
 }
 

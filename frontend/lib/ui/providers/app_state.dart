@@ -363,6 +363,13 @@ class AppState extends ChangeNotifier {
     _selfTokens[albumId] = memberTokenB64;
   }
 
+  // Successful key installation is the only safe upload resume signal
+  void Function(String albumId)? _onAlbumKeysReady;
+  void attachUploadResume(void Function(String albumId) resume) =>
+      _onAlbumKeysReady = resume;
+
+  void _releaseUploads(String albumId) => _onAlbumKeysReady?.call(albumId);
+
   // Durable per album key sync failures. Unlike in-flight _syncing state, a
   // block persists until a manual or background catch up reaches its epoch
   final Map<String, EpochBlocked> _keyBlocks = {};
@@ -380,7 +387,11 @@ class AppState extends ChangeNotifier {
   // overwhelmingly common call has nothing to announce
   void clearKeyBlock(String albumId, int reachedEpoch) {
     final block = _keyBlocks[albumId];
-    if (block == null || reachedEpoch < block.epoch) return;
+    // Never resume a queue still blocked on a newer epoch
+    if (block != null && reachedEpoch < block.epoch) return;
+    // Pauses without key blocks also resume after a successful sync
+    _releaseUploads(albumId);
+    if (block == null) return;
     _keyBlocks.remove(albumId);
     notifyListeners();
   }

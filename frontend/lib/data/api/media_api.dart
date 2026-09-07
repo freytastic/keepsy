@@ -51,7 +51,7 @@ class MediaApi implements MediaApiInterface {
 
   // RequestUploadResponse mirrors the server's response shape. Thumb URL +
   // headers are populated only when the request carried thumb_* fields
-  Future<_RequestUploadResponse> _requestUploadURL({
+  Future<UploadReservation> _requestUploadURL({
     required String albumId,
     required UploadEnvelope env,
   }) async {
@@ -80,7 +80,7 @@ class MediaApi implements MediaApiInterface {
     final thumbHeaders =
         (json['thumb_required_header'] as Map<String, dynamic>? ?? {})
             .map((k, v) => MapEntry(k, v.toString()));
-    return _RequestUploadResponse(
+    return UploadReservation(
       mediaId: json['media_id'] as String,
       uploadURL: json['upload_url'] as String,
       requiredHeader: headers,
@@ -94,12 +94,14 @@ class MediaApi implements MediaApiInterface {
   // hash gets rejected here before we ever call ConfirmUpload
   Future<void> _putToS3(
       String url, Uint8List bytes, Map<String, String> headers,
-      {required Map<String, Object?> traceFields}) async {
-    final resp =
-        await _s3.put(Uri.parse(url), bytes, headers, traceFields: traceFields);
+      {required Map<String, Object?> traceFields,
+      UploadProgress? onBytes,
+      Future<void>? abortTrigger}) async {
+    final resp = await _s3.put(Uri.parse(url), bytes, headers,
+        traceFields: traceFields, onBytes: onBytes, abortTrigger: abortTrigger);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      // Object-store errors may echo the signed URL
-      throw Exception('s3 PUT rejected with ${resp.statusCode}');
+      // Object-store errors may echo the signed URL, so carry only the status
+      throw S3StatusException(resp.statusCode);
     }
   }
 
@@ -154,7 +156,7 @@ class MediaApi implements MediaApiInterface {
   }
 
   // The server sweeper handles cleanup if this best-effort request fails
-  Future<void> _abortPendingUpload(String albumId, String mediaId) async {
+  Future<bool> _abortPendingUpload(String albumId, String mediaId) async {
     final span = Trace.start('media.abortPending', fields: {
       'album': Trace.id(albumId),
       'media': Trace.id(mediaId),
@@ -164,10 +166,60 @@ class MediaApi implements MediaApiInterface {
           .delete('/albums/$albumId/media/$mediaId/pending')
           .timeout(const Duration(seconds: 5));
       span.end();
+      return true;
     } catch (error) {
       span.fail(Trace.reasonOf(error));
+      return false;
     }
   }
+
+  // Reserve also refreshes URLs for pending media
+  Future<UploadReservation> reserveUpload({
+    required String albumId,
+    required UploadEnvelope env,
+  }) =>
+      _requestUploadURL(albumId: albumId, env: env);
+
+  Future<void> putFile(
+    UploadReservation reservation,
+    UploadEnvelope env, {
+    required String albumId,
+    UploadProgress? onBytes,
+    Future<void>? abortTrigger,
+  }) =>
+      _putToS3(
+          reservation.uploadURL, env.cipherBytes, reservation.requiredHeader,
+          traceFields: {
+            'album': Trace.id(albumId),
+            'media': Trace.id(env.mediaIdString),
+            'asset': 'file',
+          },
+          onBytes: onBytes,
+          abortTrigger: abortTrigger);
+
+  Future<void> putThumb(
+    UploadReservation reservation,
+    UploadEnvelope env, {
+    required String albumId,
+    UploadProgress? onBytes,
+    Future<void>? abortTrigger,
+  }) =>
+      _putToS3(reservation.thumbUploadURL!, env.thumbCipherBytes!,
+          reservation.thumbRequiredHeader,
+          traceFields: {
+            'album': Trace.id(albumId),
+            'media': Trace.id(env.mediaIdString),
+            'asset': 'thumb',
+          },
+          onBytes: onBytes,
+          abortTrigger: abortTrigger);
+
+  Future<int> confirmUpload(String albumId, String mediaId) =>
+      _confirmUpload(albumId, mediaId);
+
+  // The server sweeper handles unacknowledged aborts
+  Future<bool> abortPendingUpload(String albumId, String mediaId) =>
+      _abortPendingUpload(albumId, mediaId);
 
   Future<UploadResult> upload({
     required String albumId,
@@ -179,26 +231,15 @@ class MediaApi implements MediaApiInterface {
       'bytes': envelope.blobSize,
       'thumb': envelope.hasThumb,
     });
-    _RequestUploadResponse? pre;
+    UploadReservation? pre;
     // After confirmation starts, its outcome is ambiguous; let the server
     // sweeper handle any remaining pending row
     var confirmAttempted = false;
     try {
-      pre = await _requestUploadURL(albumId: albumId, env: envelope);
-      await _putToS3(pre.uploadURL, envelope.cipherBytes, pre.requiredHeader,
-          traceFields: {
-            'album': Trace.id(albumId),
-            'media': Trace.id(envelope.mediaIdString),
-            'asset': 'file',
-          });
+      pre = await reserveUpload(albumId: albumId, env: envelope);
+      await putFile(pre, envelope, albumId: albumId);
       if (envelope.hasThumb && pre.thumbUploadURL != null) {
-        await _putToS3(pre.thumbUploadURL!, envelope.thumbCipherBytes!,
-            pre.thumbRequiredHeader,
-            traceFields: {
-              'album': Trace.id(albumId),
-              'media': Trace.id(envelope.mediaIdString),
-              'asset': 'thumb',
-            });
+        await putThumb(pre, envelope, albumId: albumId);
       }
       confirmAttempted = true;
       final generation = await _confirmUpload(albumId, pre.mediaId);
@@ -261,13 +302,13 @@ class MediaApi implements MediaApiInterface {
   void dispose() => _s3.close();
 }
 
-class _RequestUploadResponse {
+class UploadReservation {
   final String mediaId;
   final String uploadURL;
   final Map<String, String> requiredHeader;
   final String? thumbUploadURL;
   final Map<String, String> thumbRequiredHeader;
-  const _RequestUploadResponse({
+  const UploadReservation({
     required this.mediaId,
     required this.uploadURL,
     required this.requiredHeader,
