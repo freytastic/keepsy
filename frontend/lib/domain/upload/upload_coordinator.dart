@@ -43,6 +43,7 @@ class UploadCoordinator {
 
   CancelToken? _activeCancel;
   String? _activeItemId;
+  Future<void>? _activeRun;
   bool _pumping = false;
   Timer? _throttleTimer;
   bool _closed = false;
@@ -93,6 +94,12 @@ class UploadCoordinator {
     unawaited(_pump());
     return batchId;
   }
+
+  // Moves picks into managed staging before enqueue
+  Future<List<PickedSource>> stage(List<PickedSource> sources) async => [
+        for (final s in sources)
+          PickedSource(path: await _sources.adopt(s.path), mimeType: s.mimeType)
+      ];
 
   // Removes plaintext picker copies that were not enqueued
   Future<void> discardUnused(Iterable<String> paths) async {
@@ -181,10 +188,14 @@ class UploadCoordinator {
 
   Future<void> _removeItem(UploadItem item, {required bool emit}) async {
     if (item.id == _activeItemId) {
-      _set(item.id, phase: UploadPhase.canceling);
-      _activeCancel?.cancel();
-      // Abort a reservation created before cancellation
-      _beginAbort(item);
+      if (_byId(item.id)?.phase == UploadPhase.confirming) {
+        // Confirmation cannot be canceled, so wait before removal
+        await _activeRun;
+      } else {
+        _set(item.id, phase: UploadPhase.canceling);
+        _activeCancel?.cancel();
+        _beginAbort(item);
+      }
     }
     // Wait before forgetting the media ID
     await _settleAbort(item.id);
@@ -193,6 +204,7 @@ class UploadCoordinator {
     }
     _items.removeWhere((i) => i.id == item.id);
     _forgetEmptyBatch(item.batchId);
+    _releaseEmptyAlbum(item.albumId);
     if (emit) _emitNow();
   }
 
@@ -201,6 +213,12 @@ class UploadCoordinator {
     _batchEta.remove(batchId);
     _batchGeneration.remove(batchId);
     _mimeTypes.remove(batchId);
+  }
+
+  // Clear pauses after the album queue empties
+  void _releaseEmptyAlbum(String albumId) {
+    if (_items.any((i) => i.albumId == albumId)) return;
+    _paused.remove(albumId);
   }
 
   int _indexOf(String itemId) => _items.indexWhere((i) => i.id == itemId);
@@ -251,7 +269,13 @@ class UploadCoordinator {
       while (!_closed) {
         final item = _nextRunnable();
         if (item == null) break;
-        await _runItem(item);
+        final run = _runItem(item);
+        _activeRun = run;
+        try {
+          await run;
+        } finally {
+          _activeRun = null;
+        }
         _settleBatchIfDone(item.batchId, item.albumId);
       }
     } finally {
@@ -307,11 +331,12 @@ class UploadCoordinator {
         plaintext: plaintext,
         mimeType: mime,
       );
+      // Preparation cannot be canceled
+      if (cancel.isCancelled || _byId(start.id) == null) return;
       _sink.onPrepared(start.albumId, start.mediaId, env.thumbPlaintext);
       final payload = env.blobSize + env.thumbSize;
       _set(start.id, phase: UploadPhase.reserving, payloadByteLength: payload);
       _emitNow();
-      if (cancel.isCancelled) return;
 
       await _settleAbort(start.id);
       var reservation = await _uploader.reserve(start.albumId, env);
@@ -551,9 +576,14 @@ class UploadCoordinator {
       final items = byBatch[batchId]!;
       final albumId = items.first.albumId;
       final active = items.where((i) => !i.isFinished).toList();
-      final activeElapsed = _activeItemId == null
-          ? Duration.zero
-          : now.difference(_startedAt[_activeItemId!] ?? now);
+      // Only the running batch owns speed and ETA
+      final running = items.any((i) => i.id == _activeItemId);
+      // Hide retained speed outside active transfers
+      final onWire = items.any((i) => i.id == _activeItemId && i.isSending);
+      final activeElapsed = running
+          ? now.difference(_startedAt[_activeItemId!] ?? now)
+          : Duration.zero;
+      final paused = _paused[albumId];
       snapshots.add(UploadBatchSnapshot(
         batchId: batchId,
         albumId: albumId,
@@ -564,20 +594,23 @@ class UploadCoordinator {
             .where((i) => i.failure?.kind == UploadFailureKind.unprocessable)
             .length,
         logicalBytesSent: _sentBytes(items),
-        bytesPerSecond: _rate.bytesPerSecond(now),
-        eta: _batchEta[batchId]?.estimate(
-          remaining: active.length,
-          activeElapsed: activeElapsed,
-        ),
-        paused: _paused[albumId],
+        bytesPerSecond: onWire ? _rate.bytesPerSecond(now) : null,
+        eta: running
+            ? _batchEta[batchId]?.estimate(
+                remaining: active.length,
+                activeElapsed: activeElapsed,
+              )
+            : null,
+        paused: paused,
         mediaGeneration: _batchGeneration[batchId] ?? 0,
       ));
     }
     return UploadState(snapshots);
   }
 
-  // Highest confirmed generation marks the uploader's batch as seen
+  // Ignore confirmations for batches removed while awaiting the server
   void _recordGeneration(String batchId, int generation) {
+    if (!_items.any((i) => i.batchId == batchId)) return;
     final seen = _batchGeneration[batchId] ?? 0;
     if (generation > seen) _batchGeneration[batchId] = generation;
   }

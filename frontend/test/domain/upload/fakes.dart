@@ -33,8 +33,23 @@ class FakeSources implements PickedSourceStore {
   final List<String> discarded = [];
   final Set<String> unreadable = {};
   void Function(String)? onDiscard;
+  Completer<void>? holdDiscard;
+  Completer<void>? holdAdopt;
+
+  final List<String> adopted = [];
 
   void add(String path) => existing.add(path);
+
+  @override
+  Future<String> adopt(String path) async {
+    if (holdAdopt != null) await holdAdopt!.future;
+    if (!existing.contains(path)) return path;
+    final staged = '/staging/${path.split('/').last}';
+    existing.remove(path);
+    existing.add(staged);
+    adopted.add(staged);
+    return staged;
+  }
 
   @override
   Future<Uint8List> read(String path) async {
@@ -48,6 +63,7 @@ class FakeSources implements PickedSourceStore {
   @override
   Future<void> discard(String path) async {
     onDiscard?.call(path);
+    if (holdDiscard != null) await holdDiscard!.future;
     existing.remove(path);
     discarded.add(path);
   }
@@ -59,6 +75,8 @@ class FakePreparer implements MediaPreparer {
   int thumb = 100;
   final List<MediaId> prepared = [];
   UploadStageException? failWith;
+  Completer<void>? holdPrepare;
+  void Function()? onPrepared;
 
   @override
   Future<int> latestEpoch(String albumId) async => epoch;
@@ -70,6 +88,8 @@ class FakePreparer implements MediaPreparer {
     required Uint8List plaintext,
     required String mimeType,
   }) async {
+    onPrepared?.call();
+    if (holdPrepare != null) await holdPrepare!.future;
     final f = failWith;
     if (f != null) {
       failWith = null;
@@ -91,6 +111,7 @@ class FakeUploader implements StagedUploader {
   void Function()? onReserve;
   Completer<void>? holdFile;
   Completer<void>? holdReserve;
+  Completer<void>? holdConfirm;
   void Function()? onChunk;
 
   final Map<String, List<UploadStageException>> failures = {};
@@ -146,6 +167,7 @@ class FakeUploader implements StagedUploader {
   @override
   Future<int> confirm(String albumId, MediaId mediaId) async {
     calls.add('confirm');
+    if (holdConfirm != null) await holdConfirm!.future;
     _maybeFail('confirm');
     confirmed.add(mediaId);
     return generation;

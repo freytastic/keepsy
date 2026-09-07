@@ -11,6 +11,8 @@ class _NoSources implements PickedSourceStore {
   @override
   Future<Uint8List> read(String path) async => Uint8List(0);
   @override
+  Future<String> adopt(String path) async => path;
+  @override
   Future<void> discard(String path) async {}
 }
 
