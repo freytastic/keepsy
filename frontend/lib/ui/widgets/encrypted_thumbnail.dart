@@ -7,10 +7,9 @@ import 'package:keepsy/e2ee/file_decryptor.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/widgets/encrypted_image.dart';
 
-// EncryptedThumbnail : routes through MediaCacheManager for the thumb cipher
-// Falls through to the full EncryptedImage when the row has no thumb (legacy
-// rows or videos). Same rule : full decrypt before any pixel
-// hits screen
+import 'decrypted_image_preview.dart';
+
+// Uses the encrypted full file only when no thumbnail exists
 
 class EncryptedThumbnail extends StatefulWidget {
   final MediaRecord record;
@@ -18,6 +17,7 @@ class EncryptedThumbnail extends StatefulWidget {
   final BoxFit fit;
   final String? traceId;
   final VoidCallback? onFirstFrame;
+  final ValueChanged<DecryptedImagePreview>? onReady;
 
   const EncryptedThumbnail({
     super.key,
@@ -26,6 +26,7 @@ class EncryptedThumbnail extends StatefulWidget {
     this.fit = BoxFit.cover,
     this.traceId,
     this.onFirstFrame,
+    this.onReady,
   });
 
   @override
@@ -39,6 +40,7 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
   TraceSpan? _toFrameSpan;
   bool _frameReported = false;
   late String _resolvedTraceId;
+  DecryptedImagePreview? _preview;
 
   @override
   void initState() {
@@ -61,12 +63,16 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
       _error = null;
       _loading = widget.record.hasThumb;
       _frameReported = false;
+      _preview = null;
       _resolvedTraceId = widget.traceId ?? Trace.newTraceId();
       if (widget.record.hasThumb) _decrypt();
+    } else if (old.onReady != widget.onReady && _preview != null) {
+      widget.onReady?.call(_preview!);
     }
   }
 
   Future<void> _decrypt() async {
+    final requestedId = widget.record.id;
     _toFrameSpan = Trace.start('media.thumbnailToFrame',
         traceId: _resolvedTraceId,
         fields: {
@@ -77,12 +83,22 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
     try {
       final pt = await Trace.withId(_resolvedTraceId,
           () => widget.cache.getDecrypted(widget.record, thumb: true));
-      if (!mounted) return;
+      DecryptedImagePreview? preview;
+      try {
+        preview = await DecryptedImagePreview.inspect(pt);
+      } catch (_) {}
+      if (!mounted || widget.record.id != requestedId) return;
       setState(() {
         _bytes = pt;
         _loading = false;
       });
+      if (preview != null) {
+        _preview = preview;
+        widget.onReady?.call(preview);
+      }
     } on FileDecryptError catch (e) {
+      // A tile rebound to another record owns _toFrameSpan now
+      if (widget.record.id != requestedId) return;
       _toFrameSpan?.fail(e.reason);
       _toFrameSpan = null;
       if (!mounted) return;
@@ -91,6 +107,7 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
         _loading = false;
       });
     } catch (_) {
+      if (widget.record.id != requestedId) return;
       _toFrameSpan?.fail('unexpected');
       _toFrameSpan = null;
       if (!mounted) return;
@@ -122,13 +139,14 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
   @override
   Widget build(BuildContext context) {
     if (!widget.record.hasThumb) {
-      // row or video : fall back to full file render (cache path is identical)
+      // Legacy rows and videos use the full encrypted file
       return EncryptedImage(
         record: widget.record,
         cache: widget.cache,
         fit: widget.fit,
         traceId: _resolvedTraceId,
         onFirstFrame: widget.onFirstFrame,
+        onReady: widget.onReady,
       );
     }
     if (_loading) {
