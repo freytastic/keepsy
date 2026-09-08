@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:keepsy/ui/widgets/foot_bar.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
@@ -153,17 +154,15 @@ void main() {
   testWidgets('uploads are disabled while an album is blocked', (tester) async {
     await _pumpScreen(tester, block: _block(EpochBlockReason.signerMismatch));
 
-    final fab =
-        tester.widget<FloatingActionButton>(find.byType(FloatingActionButton));
-    expect(fab.onPressed, isNull,
+    final add = tester.widget<MakeButton>(find.byType(MakeButton));
+    expect(add.onTap, isNull,
         reason: 'a photo sealed now could go under a key we refused to trust');
   });
 
   testWidgets('an unblocked album keeps uploading', (tester) async {
     await _pumpScreen(tester);
 
-    final fab =
-        tester.widget<FloatingActionButton>(find.byType(FloatingActionButton));
-    expect(fab.onPressed, isNotNull);
+    final add = tester.widget<MakeButton>(find.byType(MakeButton));
+    expect(add.onTap, isNotNull);
   });
 }

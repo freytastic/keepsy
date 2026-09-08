@@ -11,6 +11,7 @@ import 'package:keepsy/ui/shelf/shelf_copy.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/shelf/shelf_layout.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/foot_bar.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
 import 'package:keepsy/ui/widgets/upload_pill.dart';
 
@@ -658,25 +659,7 @@ class _BarScrim extends StatelessWidget {
         left: 0,
         right: 0,
         bottom: 0,
-        height: 190,
-        child: IgnorePointer(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0x00F6F3EE),
-                  Color(0x80F6F3EE),
-                  Color(0xE6F6F3EE),
-                  Warm.ground,
-                  Warm.ground,
-                ],
-                stops: [0, 0.26, 0.5, 0.66, 1],
-              ),
-            ),
-          ),
-        ),
+        child: FootScrim(height: 190),
       );
 }
 
@@ -702,7 +685,7 @@ class _Bar extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text('Albums', style: Warm.tab.copyWith(color: Warm.ink)),
-            _MakeButton(onTap: onCreate),
+            MakeButton(onTap: onCreate),
             GestureDetector(
               onTap: onActivity,
               behavior: HitTestBehavior.opaque,
@@ -733,92 +716,4 @@ class _Bar extends StatelessWidget {
       ),
     );
   }
-}
-
-class _MakeButton extends StatefulWidget {
-  final VoidCallback? onTap;
-
-  const _MakeButton({required this.onTap});
-
-  @override
-  State<_MakeButton> createState() => _MakeButtonState();
-}
-
-class _MakeButtonState extends State<_MakeButton> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) {
-        setState(() => _pressed = false);
-        widget.onTap?.call();
-      },
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedScale(
-        scale: _pressed ? 0.96 : 1,
-        duration: Warm.quick,
-        curve: Warm.easeOut,
-        child: SizedBox(
-          width: 58,
-          height: 58,
-          child: Stack(
-            alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              Positioned.fill(
-                child: AnimatedOpacity(
-                  opacity: _pressed ? 1 : 0.45,
-                  duration: Warm.quick,
-                  child: const _MakeGlow(),
-                ),
-              ),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: Warm.ctaFill,
-                  shape: BoxShape.circle,
-                  boxShadow: Warm.ctaShadow,
-                ),
-                child: const SizedBox(
-                  width: 58,
-                  height: 58,
-                  child: Icon(Icons.add_rounded, size: 21, color: Warm.ctaInk),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MakeGlow extends StatelessWidget {
-  const _MakeGlow();
-
-  @override
-  Widget build(BuildContext context) => CustomPaint(painter: _GlowPainter());
-}
-
-class _GlowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final centre = size.center(Offset.zero);
-    final radius = size.width * 0.84;
-    final paint = Paint()
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
-      ..shader = RadialGradient(
-        colors: [
-          Warm.orbPeach.withValues(alpha: 0.6),
-          Warm.orbBlush.withValues(alpha: 0.3),
-          Warm.orbPeach.withValues(alpha: 0),
-        ],
-        stops: const [0, 0.45, 0.72],
-      ).createShader(Rect.fromCircle(center: centre, radius: radius));
-    canvas.drawCircle(centre, radius, paint);
-  }
-
-  @override
-  bool shouldRepaint(_GlowPainter old) => false;
 }
