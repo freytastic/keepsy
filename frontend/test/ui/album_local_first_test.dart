@@ -156,7 +156,7 @@ void main() {
     await tester.pump(); // local read completes
     await tester.pump();
 
-    expect(find.byType(GridView), findsOneWidget,
+    expect(find.byType(SliverGrid), findsOneWidget,
         reason: 'grid must render from the catalog while listMedia is pending');
     expect(api.calls, 1, reason: 'the refresh is in flight, not yet answered');
 
@@ -172,7 +172,7 @@ void main() {
     await tester.pumpWidget(wrap(api));
     await settle(tester);
 
-    expect(find.byType(GridView), findsOneWidget);
+    expect(find.byType(SliverGrid), findsOneWidget);
     expect(find.textContaining('No media yet'), findsNothing);
     expect(find.text('Retry'), findsOneWidget,
         reason: 'stale content should offer an explicit refresh');
@@ -185,7 +185,7 @@ void main() {
     await tester.pumpWidget(wrap(api));
     await settle(tester);
 
-    expect(find.byType(GridView), findsNothing);
+    expect(find.byType(SliverGrid), findsNothing);
     expect(find.textContaining('No media yet'), findsOneWidget);
   });
 

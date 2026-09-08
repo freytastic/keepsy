@@ -299,6 +299,16 @@ abstract class Warm {
     systemNavigationBarIconBrightness: Brightness.dark,
   );
 
+  static const SystemUiOverlayStyle overlayOnPeek = SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    statusBarBrightness: Brightness.dark,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarContrastEnforced: false,
+  );
+
   // Motion
   // Wash exponents shape the linear develop progress
   static const Duration develop = Duration(milliseconds: 1300);
@@ -327,4 +337,20 @@ abstract class Warm {
   static const Color glassHairlineStrong = Color(0x38FFFFFF);
   // Raised warning color for the dark glass scrim
   static const Color warnGlass = Color(0xFFFFB4A6);
+
+  static const double peekBlur = 18;
+  static const double peekSaturation = 0.9;
+  static const Color peekScrim = Color(0x85181410);
+
+  // Luminance preserving saturation matrix
+  static List<double> saturation(double s) {
+    const rw = 0.213, gw = 0.715, bw = 0.072;
+    final sr = (1 - s) * rw, sg = (1 - s) * gw, sb = (1 - s) * bw;
+    return <double>[
+      sr + s, sg, sb, 0, 0, //
+      sr, sg + s, sb, 0, 0, //
+      sr, sg, sb + s, 0, 0, //
+      0, 0, 0, 1, 0,
+    ];
+  }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:keepsy/ui/widgets/foot_bar.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/api_client.dart';
 import 'package:keepsy/data/api/media_api.dart';
@@ -111,9 +112,9 @@ void main() {
       return gate.future;
     });
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pump();
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pump();
 
     expect(opened, 1);
@@ -130,12 +131,13 @@ void main() {
       return const [];
     });
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pumpAndSettle();
 
-    expect(opened, 2, reason: 'a cancelled pick must not sticky-lock the FAB');
+    expect(opened, 2,
+        reason: 'a cancelled pick must not sticky-lock the add button');
   });
 
   testWidgets('a picker failure is surfaced instead of going unhandled',
@@ -144,7 +146,7 @@ void main() {
       throw PlatformException(code: 'already_active');
     });
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -160,13 +162,12 @@ void main() {
     });
     uploader.holdReserve = Completer<void>();
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(opened, 1);
     expect(find.byType(UploadSheet), findsOneWidget);
 
-    // The first call still awaits the sheet
     final state = tester.state<State>(find.byType(UploadSheet));
     (state.widget as UploadSheet).onPickMore!();
     await tester.pump();
@@ -185,7 +186,7 @@ void main() {
     });
     sources.holdAdopt = Completer<void>();
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pump();
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -196,16 +197,17 @@ void main() {
         reason: 'staged picks with no batch are unreferenced plaintext');
   });
 
-  testWidgets('the FAB works again after a picker failure', (tester) async {
+  testWidgets('the add button works again after a picker failure',
+      (tester) async {
     var opened = 0;
     await pumpScreen(tester, ({int limit = 0}) async {
       opened++;
       throw PlatformException(code: 'already_active');
     });
 
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(FloatingActionButton));
+    await tester.tap(find.byType(MakeButton));
     await tester.pumpAndSettle();
 
     expect(opened, 2);

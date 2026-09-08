@@ -9,6 +9,8 @@ import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/album/album_copy.dart';
+import 'package:keepsy/ui/album/member_avatars.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 
@@ -72,10 +74,9 @@ Widget _wrap(Widget child, AlbumKeyStore aks) => MultiProvider(
     );
 
 void main() {
-  testWidgets('AlbumDetailScreen shows member chips', (tester) async {
+  testWidgets('AlbumDetailScreen shows members as avatars, never as tokens',
+      (tester) async {
     final aks = await _emptyAks();
-    // Members with no published name_ct render the neutral "Member" label
-    // (never the raw pseudonymous token slice)
     await tester.pumpWidget(_wrap(
       AlbumDetailScreen(
         album: _fakeAlbum(),
@@ -89,12 +90,34 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // No token slices are shown
     expect(find.text('alicetok'), findsNothing);
     expect(find.text('bobtoken'), findsNothing);
-    // Both unnamed members fall back to the neutral label
+    expect(find.byType(MemberAvatars), findsOneWidget);
+    expect(find.text('·'), findsNWidgets(2));
+  });
+
+  testWidgets('roles and safety numbers stay reachable through the menu',
+      (tester) async {
+    final aks = await _emptyAks();
+    await tester.pumpWidget(_wrap(
+      AlbumDetailScreen(
+        album: _fakeAlbum(),
+        albumService: _MockAlbumService([
+          _fakeMember('alicetoken123', 'admin'),
+          _fakeMember('bobtoken456', 'member'),
+        ]),
+        mediaApi: _StubMediaApi(const []),
+      ),
+      aks,
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip(AlbumCopy.more).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(AlbumCopy.peopleAndSafety));
+    await tester.pumpAndSettle();
+
     expect(find.text('Member'), findsNWidgets(2));
-    // Roles still render (lowercase, distinct from the "Member" name label)
     expect(find.text('admin'), findsOneWidget);
     expect(find.text('member'), findsOneWidget);
   });

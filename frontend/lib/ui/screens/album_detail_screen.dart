@@ -12,6 +12,15 @@ import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/domain/upload/upload_ports.dart';
 import 'package:keepsy/domain/upload/upload_snapshot.dart';
+import 'package:keepsy/ui/album/album_copy.dart';
+import 'package:keepsy/ui/album/album_foot.dart';
+import 'package:keepsy/ui/album/album_header.dart';
+import 'package:keepsy/ui/album/album_info_screen.dart';
+import 'package:keepsy/ui/album/album_menu.dart';
+import 'package:keepsy/ui/album/album_stats.dart';
+import 'package:keepsy/ui/album/member_avatars.dart';
+import 'package:keepsy/ui/album/photo_hold.dart';
+import 'package:keepsy/ui/album/photo_peek.dart';
 import 'package:keepsy/ui/providers/latest_only.dart';
 import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/ui/widgets/upload_pill.dart';
@@ -33,6 +42,8 @@ import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/add_member_dialog.dart';
+import 'package:keepsy/ui/widgets/decrypted_image_preview.dart';
+import 'package:keepsy/ui/widgets/encrypted_image.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
 import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
 
@@ -94,6 +105,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   MediaCatalog? _catalog;
 
+  final ScrollController _scroll = ScrollController();
+  bool _collapsed = false;
+  String? _filterToken;
+
   @override
   void initState() {
     super.initState();
@@ -109,8 +124,164 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     } catch (_) {
       _catalog = null;
     }
+    _scroll.addListener(_onScroll);
     _loadMembers();
     _openLocalFirst();
+  }
+
+  void _onScroll() {
+    final past = _scroll.hasClients && _scroll.offset > 96;
+    if (past != _collapsed) setState(() => _collapsed = past);
+  }
+
+  void _toggleFilter(String token) =>
+      setState(() => _filterToken = _filterToken == token ? null : token);
+
+  Future<void> _openMenu() => AlbumMenu.show(
+        context,
+        onSelectPhotos: _notYet,
+        onDownloadAlbum: _notYet,
+        onAlbumInfo: _openAlbumInfo,
+        onPeople: _openPeople,
+      );
+
+  // Keeps safety and removal available until the people screen lands
+  Future<void> _openPeople() async {
+    final names = <String, String>{};
+    for (final m in _members) {
+      final e = _memberNames[m.memberToken];
+      if (e != null && e.ct == m.profile.nameCt) names[m.memberToken] = e.name;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Warm.paper,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (sheet) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 18, 8, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text(AlbumCopy.peopleAndSafety,
+                    style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: Warm.ink)),
+              ),
+              const SizedBox(height: 8),
+              _MemberChipsRow(
+                members: _members,
+                loading: _loadingMembers,
+                resolvedNames: names,
+                trust: _trust,
+                onTapMember: (m) {
+                  Navigator.of(sheet).pop();
+                  _openSafetyNumber(m);
+                },
+                onRemove: _viewerIsAdmin ? _kick : null,
+                myToken: widget.album.memberToken,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(sheet).pop();
+                      _openAddMember();
+                    },
+                    icon: const Icon(Icons.person_add_outlined, size: 18),
+                    label: const Text('Add member'),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(sheet).pop();
+                      _leave();
+                    },
+                    child: const Text('Leave album',
+                        style: TextStyle(color: Warm.warn)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _notYet() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(_note('Coming in a later release.'));
+  }
+
+  Future<void> _openAlbumInfo() async {
+    final names = <String, String>{};
+    for (final m in _members) {
+      final e = _memberNames[m.memberToken];
+      if (e != null && e.ct == m.profile.nameCt) names[m.memberToken] = e.name;
+    }
+    final people = _members.where((m) => !m.revoked).length;
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AlbumInfoScreen(
+        albumName: _appState?.albumDisplayName(widget.album.id) ?? 'Album',
+        createdAt: widget.album.createdAt,
+        stats: AlbumStats.of(_items, peopleCount: people),
+        nameOf: (token) => names[token],
+      ),
+    ));
+  }
+
+  Future<void> _openPeek(
+    MediaRecord record,
+    DecryptedImagePreview preview,
+  ) async {
+    final cache = context.read<MediaCacheManager>();
+    final name = _memberNames[record.uploaderToken];
+    final resolved = _members
+        .where((m) => m.memberToken == record.uploaderToken)
+        .map((m) =>
+            name != null && name.ct == m.profile.nameCt ? name.name : null)
+        .firstOrNull;
+    await PhotoPeek.show(
+      context,
+      record: record,
+      uploaderName: resolved,
+      isOwner: record.uploaderToken == widget.album.memberToken,
+      onDelete: () => _deleteMedia(record),
+      aspectRatio: preview.aspectRatio,
+      previewBuilder: (_) => Image.memory(
+        preview.bytes,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      ),
+      fullImageBuilder: (_, cacheWidth, cacheHeight, onReady) => EncryptedImage(
+          record: record,
+          cache: cache,
+          fit: BoxFit.cover,
+          cacheWidth: cacheWidth,
+          cacheHeight: cacheHeight,
+          onFirstFrame: onReady),
+    );
+  }
+
+  Future<void> _deleteMedia(MediaRecord record) async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _media.deleteMedia(widget.album.id, record.id);
+      if (navigator.canPop()) navigator.pop();
+      await _loadMedia();
+    } catch (_) {
+      messenger.showSnackBar(_note(AlbumCopy.deleteFailed));
+    }
   }
 
   Future<void> _openLocalFirst() async {
@@ -186,8 +357,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final nav = Navigator.of(context);
       final messenger = ScaffoldMessenger.of(context);
       if (nav.canPop()) nav.pop();
-      messenger.showSnackBar(
-          const SnackBar(content: Text('You were removed from this album')));
+      messenger.showSnackBar(_note('You were removed from this album'));
       return;
     }
 
@@ -236,6 +406,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       setState(() {
         _members = members;
         _loadingMembers = false;
+        // Filtering by someone no longer listed empties the grid with no
+        // avatar left to tap to get back
+        if (_filterToken != null &&
+            !members.any((m) => !m.revoked && m.memberToken == _filterToken)) {
+          _filterToken = null;
+        }
       });
       unawaited(_resolveMemberNames(members));
       unawaited(_reconcileTrust(members));
@@ -520,11 +696,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       await coord.kick(albumIdBytes, token);
       if (mounted) {
         await _loadMembers();
-        messenger.showSnackBar(const SnackBar(content: Text('Member removed')));
+        messenger.showSnackBar(_note('Member removed'));
       }
     } catch (_) {
-      messenger.showSnackBar(
-          const SnackBar(content: Text('Could not remove member')));
+      messenger.showSnackBar(_note('Could not remove member'));
     }
   }
 
@@ -577,8 +752,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       if (confirm != true) return;
       final ok = await widget.albumService.deleteAlbum(widget.album.id);
       if (!ok) {
-        messenger.showSnackBar(
-            const SnackBar(content: Text('Could not delete album')));
+        messenger.showSnackBar(_note('Could not delete album'));
         return;
       }
       _accessLost = true; // suppress the removal listener : we pop ourselves
@@ -612,8 +786,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     } catch (_) {
       _accessLost =
           false; // leave failed : stay, and let a real removal exit us
-      messenger
-          .showSnackBar(const SnackBar(content: Text('Could not leave album')));
+      messenger.showSnackBar(_note('Could not leave album'));
     }
   }
 
@@ -636,7 +809,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
     if (added == true && mounted) {
       await _loadMembers();
-      messenger.showSnackBar(const SnackBar(content: Text('Invite sent')));
+      messenger.showSnackBar(_note('Invite sent'));
     }
   }
 
@@ -670,8 +843,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             ? AlbumFeedState.confirmedEmpty
             : AlbumFeedState.showingCached;
       });
+      final landed = {for (final item in items) item.id};
       // Release overlays before the best effort seen write
-      _uploads?.recordsLanded(widget.album.id, {for (final r in items) r.id});
+      _uploads?.recordsLanded(widget.album.id, landed);
       if (markSeenThrough != null) {
         await _markSeen(markSeenThrough);
       }
@@ -744,8 +918,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       picked = await (widget.pickImages ?? _systemPicker)(limit: _maxBatch);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't open your photos.")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(_note("Couldn't open your photos."));
       }
       return;
     } finally {
@@ -780,8 +954,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       sources: staged,
     );
     if (picked.length > _maxBatch) {
-      messenger.showSnackBar(
-          SnackBar(content: Text('Adding the first $_maxBatch for now.')));
+      messenger.showSnackBar(_note('Adding the first $_maxBatch for now.'));
     }
     await UploadSheet.show(context,
         batchId: batchId, onPickMore: _pickAndUpload, onDismiss: _dismissBatch);
@@ -792,6 +965,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     _appState?.removeListener(_onAppStateChange);
     _uploads?.removeListener(_onUploadChange);
     _uploads?.stopObserving(widget.album.id);
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -815,91 +989,139 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       }
     }
 
+    final title = state.albumDisplayName(widget.album.id) ?? 'Album';
+    final avatars = [
+      for (final m in _members)
+        if (!m.revoked)
+          AvatarMember(
+              token: m.memberToken, name: memberDisplayNames[m.memberToken]),
+    ];
+    final shown = _filterToken == null
+        ? _items
+        : _items.where((r) => r.uploaderToken == _filterToken).toList();
+    final stats = AlbumStats.of(_items, peopleCount: avatars.length);
+
     return Scaffold(
       backgroundColor: Warm.ground,
-      appBar: AppBar(
-        backgroundColor: Warm.ground,
-        elevation: 0,
-        title: Text(
-          state.albumDisplayName(widget.album.id) ?? 'Album',
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-              color: Warm.ink, fontSize: 18, fontWeight: FontWeight.w700),
-        ),
-        iconTheme: const IconThemeData(color: Warm.ink),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_add_outlined, color: Warm.inkSoft),
-            onPressed: _openAddMember,
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Warm.inkSoft),
-            onSelected: (v) {
-              if (v == 'leave') _leave();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem<String>(
-                value: 'leave',
-                child: Text('Leave album'),
+      body: Stack(
+        children: [
+          CustomScrollView(
+            controller: _scroll,
+            slivers: [
+              SliverToBoxAdapter(
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _AlbumTopRow(
+                        onBack: () => Navigator.of(context).maybePop(),
+                        onMore: _openMenu,
+                      ),
+                      AlbumHeader(
+                        title: title,
+                        summary: stats.summary(),
+                        members: avatars,
+                        filterToken: _filterToken,
+                        filterName: _filterToken == null
+                            ? null
+                            : memberDisplayNames[_filterToken],
+                        filterCount: shown.length,
+                        onTapMember: _toggleFilter,
+                        onClearFilter: () =>
+                            setState(() => _filterToken = null),
+                      ),
+                    ],
+                  ),
+                ),
               ),
+              if (keyBlock != null)
+                SliverToBoxAdapter(
+                  child: _KeyBlockBanner(
+                    block: keyBlock,
+                    onVerify: () => _verifyBlockingSigner(keyBlock),
+                    onRetry: _retryKeySync,
+                  ),
+                ),
+              if (_changedKeyMembers.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: _KeyChangeBanner(
+                    members: _changedKeyMembers,
+                    nameOf: _memberName,
+                    onTap: _openSafetyNumber,
+                  ),
+                ),
+              if (syncing && _items.isNotEmpty)
+                const SliverToBoxAdapter(child: _SyncingBanner()),
+              if (_feed == AlbumFeedState.staleOffline && _items.isNotEmpty)
+                SliverToBoxAdapter(
+                    child: _StaleBanner(onRetry: () => _loadMedia())),
+              if (syncing && _items.isEmpty && overlays.isEmpty)
+                const SliverFillRemaining(
+                    hasScrollBody: false, child: _SyncingPlaceholder())
+              else
+                _MediaGrid(
+                  items: shown,
+                  overlays: _filterToken == null ? overlays : const [],
+                  uploads: uploads,
+                  state: _feed,
+                  onRetry: _loadMedia,
+                  traceId: _openTraceId,
+                  onFirstThumbnailPaint: _onFirstThumbnailPaint,
+                  onPeek: _openPeek,
+                ),
+              // Keep the final row above the foot bar
+              const SliverToBoxAdapter(
+                  child: SizedBox(height: AlbumFoot.clearance)),
             ],
           ),
-        ],
-      ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          const UploadPill(),
-          const SizedBox(height: 14),
-          FloatingActionButton(
-            onPressed: (syncing || keyBlock != null) ? null : _pickAndUpload,
-            backgroundColor: Warm.ctaTop,
-            child: const Icon(Icons.add_a_photo_outlined, color: Colors.white),
+          AlbumFoot(
+            onSelect: _notYet,
+            onAdd: (syncing || keyBlock != null) ? null : _pickAndUpload,
+            onDownload: _notYet,
+            pill: const UploadPill(),
+          ),
+          AlbumTopBar(
+            title: title,
+            visible: _collapsed,
+            onBack: () => Navigator.of(context).maybePop(),
+            onMore: _openMenu,
           ),
         ],
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+}
+
+// Lift snackbars above the foot bar
+SnackBar _note(String text) => SnackBar(
+      content: Text(text),
+      behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, AlbumFoot.clearance),
+    );
+
+class _AlbumTopRow extends StatelessWidget {
+  final VoidCallback onBack;
+  final VoidCallback onMore;
+
+  const _AlbumTopRow({required this.onBack, required this.onMore});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _MemberChipsRow(
-              members: _members,
-              loading: _loadingMembers,
-              resolvedNames: memberDisplayNames,
-              trust: _trust,
-              onTapMember: _openSafetyNumber,
-              // admins can long press another (non-revoked) member to remove
-              onRemove: _viewerIsAdmin ? _kick : null,
-              myToken: widget.album.memberToken),
-          if (keyBlock != null)
-            _KeyBlockBanner(
-              block: keyBlock,
-              onVerify: () => _verifyBlockingSigner(keyBlock),
-              onRetry: _retryKeySync,
-            ),
-          if (_changedKeyMembers.isNotEmpty)
-            _KeyChangeBanner(
-              members: _changedKeyMembers,
-              nameOf: _memberName,
-              onTap: _openSafetyNumber,
-            ),
-          // Cached media can render while key sync catches up
-          if (syncing && _items.isNotEmpty) const _SyncingBanner(),
-          if (_feed == AlbumFeedState.staleOffline && _items.isNotEmpty)
-            _StaleBanner(onRetry: () => _loadMedia()),
-          const Divider(height: 1, thickness: 0.5),
-          Expanded(
-            child: syncing && _items.isEmpty && overlays.isEmpty
-                ? const _SyncingPlaceholder()
-                : _MediaGrid(
-                    items: _items,
-                    overlays: overlays,
-                    uploads: uploads,
-                    state: _feed,
-                    onRetry: _loadMedia,
-                    traceId: _openTraceId,
-                    onFirstThumbnailPaint: _onFirstThumbnailPaint,
-                  ),
+          AlbumIconButton(
+            icon: Icons.chevron_left_rounded,
+            tooltip: AlbumCopy.back,
+            onTap: onBack,
+          ),
+          AlbumIconButton(
+            icon: Icons.more_horiz_rounded,
+            tooltip: AlbumCopy.more,
+            onTap: onMore,
           ),
         ],
       ),
@@ -933,6 +1155,7 @@ class _MediaGrid extends StatelessWidget {
   final Future<void> Function() onRetry;
   final String traceId;
   final VoidCallback onFirstThumbnailPaint;
+  final void Function(MediaRecord record, DecryptedImagePreview preview) onPeek;
 
   const _MediaGrid({
     required this.items,
@@ -942,21 +1165,24 @@ class _MediaGrid extends StatelessWidget {
     required this.onRetry,
     required this.traceId,
     required this.onFirstThumbnailPaint,
+    required this.onPeek,
   });
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty && overlays.isEmpty) {
-      switch (state) {
-        case AlbumFeedState.loadingNoCache:
-        case AlbumFeedState.refreshing:
-          return const Center(child: CircularProgressIndicator());
-        case AlbumFeedState.staleOffline:
-          return _MediaUnavailable(onRetry: onRetry);
-        case AlbumFeedState.confirmedEmpty:
-        case AlbumFeedState.showingCached:
-          return const _MediaEmpty();
-      }
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: switch (state) {
+          AlbumFeedState.loadingNoCache ||
+          AlbumFeedState.refreshing =>
+            const Center(child: CircularProgressIndicator()),
+          AlbumFeedState.staleOffline => _MediaUnavailable(onRetry: onRetry),
+          AlbumFeedState.confirmedEmpty ||
+          AlbumFeedState.showingCached =>
+            const _MediaEmpty(),
+        },
+      );
     }
     // Confirmed records replace matching optimistic tiles
     final landed = {for (final r in items) r.id};
@@ -965,8 +1191,7 @@ class _MediaGrid extends StatelessWidget {
         if (!landed.contains(o.mediaId.value)) o
     ];
 
-    return GridView.builder(
-      padding: EdgeInsets.zero,
+    return SliverGrid.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         mainAxisSpacing: 2,
@@ -985,26 +1210,79 @@ class _MediaGrid extends StatelessWidget {
         // Pending-only grids do not require the media cache
         final cache = context.read<MediaCacheManager>();
         final record = items[i - pending.length];
-        // Grid uses thumbnail ciphertext to keep scrolling smooth
-        // Pre §5.3 rows + videos fall through to EncryptedImage inside
-        // the widget
-        return GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => PhotoViewerScreen(record: record, cache: cache),
-            ),
-          ),
-          child: Container(
-            color: Warm.wellEmpty,
-            child: EncryptedThumbnail(
-              record: record,
-              cache: cache,
-              traceId: traceId,
-              onFirstFrame: onFirstThumbnailPaint,
-            ),
-          ),
+        return _MediaTile(
+          record: record,
+          cache: cache,
+          traceId: traceId,
+          onFirstThumbnailPaint: onFirstThumbnailPaint,
+          onPeek: onPeek,
         );
       },
+    );
+  }
+}
+
+class _MediaTile extends StatefulWidget {
+  final MediaRecord record;
+  final MediaCacheManager cache;
+  final String traceId;
+  final VoidCallback onFirstThumbnailPaint;
+  final void Function(MediaRecord record, DecryptedImagePreview preview) onPeek;
+
+  const _MediaTile({
+    required this.record,
+    required this.cache,
+    required this.traceId,
+    required this.onFirstThumbnailPaint,
+    required this.onPeek,
+  });
+
+  @override
+  State<_MediaTile> createState() => _MediaTileState();
+}
+
+class _MediaTileState extends State<_MediaTile> {
+  DecryptedImagePreview? _preview;
+
+  @override
+  void didUpdateWidget(covariant _MediaTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.record.id != widget.record.id) _preview = null;
+  }
+
+  void _rememberPreview(DecryptedImagePreview preview) {
+    _preview = preview;
+  }
+
+  void _openPeek(LongPressStartDetails _) {
+    final preview = _preview;
+    if (preview != null) widget.onPeek(widget.record, preview);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PhotoHold(
+      onStart: _openPeek,
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PhotoViewerScreen(
+              record: widget.record,
+              cache: widget.cache,
+            ),
+          ),
+        ),
+        child: ColoredBox(
+          color: Warm.wellEmpty,
+          child: EncryptedThumbnail(
+            record: widget.record,
+            cache: widget.cache,
+            traceId: widget.traceId,
+            onFirstFrame: widget.onFirstThumbnailPaint,
+            onReady: _rememberPreview,
+          ),
+        ),
+      ),
     );
   }
 }
