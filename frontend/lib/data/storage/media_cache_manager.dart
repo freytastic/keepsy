@@ -226,9 +226,29 @@ class MediaCacheManager {
   Future<void> seedFromUpload({
     required String albumId,
     required UploadEnvelope env,
+    required String uploaderToken,
     bool fullToL1 = true,
   }) async {
     final mid = env.mediaIdString;
+    // Persist the record before its blobs so uploads can render offline
+    await _l2.writeRecord(MediaRecord(
+      id: mid,
+      albumId: albumId,
+      uploaderToken: uploaderToken,
+      wrapNonce: env.wrapNonce,
+      wrapTagCT: env.wrapTagCT,
+      epochTag: env.epoch,
+      blobSize: env.blobSize,
+      blobSha256: env.blobSha256,
+      mediaType: env.mediaType,
+      mimeType: env.mimeType,
+      // A later listing reconciles the hour-precise server order
+      createdAt: DateTime.now().toUtc(),
+      thumbWrapNonce: env.thumbWrapNonce,
+      thumbWrapTagCT: env.thumbWrapTagCT,
+      thumbSize: env.hasThumb ? env.thumbSize : null,
+      thumbSha256: env.thumbSha256,
+    ));
     await Trace.measure<void>(
       'media.seedUpload',
       () async {

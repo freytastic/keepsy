@@ -187,10 +187,14 @@ class UploadCacheSink implements UploadSink {
   final MediaCacheManager _cache;
   final Future<void> Function(String albumId) _refresh;
   final void Function(MediaId, Uint8List)? _onPreview;
+  // Resolves this device's uploader token for seeded records
+  final String? Function(String albumId) _selfToken;
 
   UploadCacheSink(this._cache, this._refresh,
-      {void Function(MediaId, Uint8List)? onPreview})
-      : _onPreview = onPreview;
+      {required String? Function(String albumId) selfToken,
+      void Function(MediaId, Uint8List)? onPreview})
+      : _onPreview = onPreview,
+        _selfToken = selfToken;
 
   @override
   void onPrepared(String albumId, MediaId mediaId, Uint8List? thumbPlaintext) {
@@ -199,7 +203,13 @@ class UploadCacheSink implements UploadSink {
 
   @override
   Future<void> seed(String albumId, UploadEnvelope env) =>
-      _cache.seedFromUpload(albumId: albumId, env: env, fullToL1: false);
+      _cache.seedFromUpload(
+        albumId: albumId,
+        env: env,
+        // Keep the offline record if its token is briefly unavailable
+        uploaderToken: _selfToken(albumId) ?? '',
+        fullToL1: false,
+      );
 
   @override
   Future<void> onBatchSettled(String albumId) => _refresh(albumId);

@@ -7,7 +7,8 @@ import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
-import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/shelf_sync.dart';
+import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
@@ -36,21 +37,6 @@ class _LandingPageState extends State<LandingPage> {
     final valid = await storage.isValid();
 
     if (valid) {
-      // Measure the two parallel requests that gate cold start
-      final responses = await Trace.measure<List<dynamic>>(
-        'coldstart.identity_and_albums',
-        () => Future.wait([
-          userService.getMe(),
-          albumService.getMyAlbums(),
-        ]),
-        endFields: (result) => {
-          'albums': (result[1] as List<dynamic>?)?.length ?? -1,
-        },
-      );
-
-      final userData = responses[0] as Map<String, dynamic>?;
-      final userAlbums = responses[1] as List<dynamic>?;
-
       // Server doesnt return email or display name (M8 + M7) : load both from
       // local storage written at login. Null on a brand new install that came
       // straight to landing without going through login : harmless
@@ -58,40 +44,23 @@ class _LandingPageState extends State<LandingPage> {
       final cachedName = await storage.getName();
       if (mounted) {
         final appState = context.read<AppState>();
-        if (userData != null) {
-          appState.setUserData(userData);
-        }
-        if (cachedEmail != null) {
-          appState.setEmail(cachedEmail);
-        }
-        if (cachedName != null) {
-          appState.setProfileName(cachedName);
-        }
-        if (userAlbums != null) {
-          appState.setAlbums(userAlbums.cast());
-        }
+        if (cachedEmail != null) appState.setEmail(cachedEmail);
+        if (cachedName != null) appState.setProfileName(cachedName);
 
-        // Capture providers up front : context isnt valid across the awaits
-        // below, and we want to fire'n'forget the hygiene path so landing
-        // navigates immediately after the cheap auth+user+albums fetches
+        // Capture providers before the background awaits
         final identity = context.read<IdentityService>();
         final epochProcessor = context.read<EpochProcessor>();
+        final catalog = context.read<AlbumCatalog>();
         // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
-
-        // D5 + D9 + §4.2 §9 cold start hygiene : rotate SPK if ≥30d, refill
-        // OPKs up to target, catch up missed epoch_changed events
-        //  all in the background, none of it gates navigation. UI
-        // surfaces that need IK/LK/SPK await identity.cryptoReady (3.1)
-        final List<Uint8List> albumIds = [];
-        if (userAlbums != null) {
-          for (final a in userAlbums) {
-            final b = _uuidStringToBytes((a as AlbumModel).id);
-            if (b != null) albumIds.add(b);
-          }
-        }
-        unawaited(
-            _runCryptoHygiene(identity, epochProcessor, appState, albumIds));
+        unawaited(_warmSession(
+          userService: userService,
+          albumService: albumService,
+          catalog: catalog,
+          appState: appState,
+          identity: identity,
+          epochProcessor: epochProcessor,
+        ));
       }
     }
 
@@ -109,6 +78,36 @@ class _LandingPageState extends State<LandingPage> {
         ),
       ),
     );
+  }
+
+  // Refresh network state after local navigation
+  Future<void> _warmSession({
+    required UserService userService,
+    required AlbumService albumService,
+    required AlbumCatalog catalog,
+    required AppState appState,
+    required IdentityService identity,
+    required EpochProcessor epochProcessor,
+  }) async {
+    final userData = await Trace.measure<Map<String, dynamic>?>(
+      'coldstart.identity',
+      userService.getMe,
+    );
+    if (userData != null) appState.setUserData(userData);
+
+    await loadShelf(
+      catalog: catalog,
+      fetch: albumService.getMyAlbums,
+      apply: appState.setAlbums,
+    );
+
+    // Crypto hygiene uses the best shelf available including offline state
+    final albumIds = <Uint8List>[];
+    for (final a in appState.albums) {
+      final b = _uuidStringToBytes(a.id);
+      if (b != null) albumIds.add(b);
+    }
+    await _runCryptoHygiene(identity, epochProcessor, appState, albumIds);
   }
 
   // Runs cold start crypto hygiene off the navigation critical path. Album

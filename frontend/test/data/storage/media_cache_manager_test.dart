@@ -8,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/storage/media_cache_key.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/upload/upload_adapters.dart';
 import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
@@ -236,7 +237,8 @@ void main() {
   });
 
   test('seedFromUpload seals plaintext into L2', () async {
-    await mgr.seedFromUpload(albumId: record.albumId, env: env);
+    await mgr.seedFromUpload(
+        albumId: record.albumId, env: env, uploaderToken: 'me');
     final mid = env.mediaIdString;
     final k = MediaCacheKey(
         albumId: record.albumId,
@@ -245,6 +247,32 @@ void main() {
         asset: CacheAsset.file);
     expect(l1.get(k), equals(env.filePlaintext));
     expect(await l2.readBlob(k), equals(env.filePlaintext));
+  });
+
+  test('seedFromUpload leaves a record the album can be rebuilt from',
+      () async {
+    await mgr.seedFromUpload(
+        albumId: record.albumId, env: env, uploaderToken: 'me');
+
+    final local = await l2.listRecordsForAlbum(record.albumId);
+    expect(local, hasLength(1));
+    expect(local.single.id, env.mediaIdString);
+    expect(local.single.epochTag, env.epoch);
+    expect(local.single.blobSize, env.blobSize);
+    expect(local.single.uploaderToken, 'me');
+  });
+
+  test('an upload records itself even when the member token is unknown',
+      () async {
+    final sink = UploadCacheSink(mgr, (_) async {}, selfToken: (_) => null);
+
+    await sink.seed(record.albumId, env);
+
+    final local = await l2.listRecordsForAlbum(record.albumId);
+    expect(local, hasLength(1),
+        reason: 'a missing uploader token must not cost the whole record');
+    expect(local.single.id, env.mediaIdString);
+    expect(local.single.blobSize, env.blobSize);
   });
 
   test('invalidate drops both layers', () async {
