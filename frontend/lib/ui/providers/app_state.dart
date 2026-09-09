@@ -155,6 +155,7 @@ class AppState extends ChangeNotifier {
       _albums[i] = _albums[i].copyWith(nameCt: nameCt);
     }
     _albumNames[id] = displayName;
+    _saveShelf();
     notifyListeners();
   }
 
@@ -191,6 +192,7 @@ class AppState extends ChangeNotifier {
       final t = a.memberToken;
       if (t != null) _selfTokens[a.id] = t;
     }
+    _saveShelf();
     // A re invited album reappearing clears the stale "was removed" signal so an
     // AlbumDetailScreen opened for it doesnt trip the kicked-while-viewing exit
     if (_lastRemovedAlbumId != null &&
@@ -246,6 +248,7 @@ class AppState extends ChangeNotifier {
     final t = overlaid.memberToken;
     if (t != null) _selfTokens[overlaid.id] = t;
     _albums = [overlaid, ..._albums];
+    _saveShelf();
     notifyListeners();
     unawaited(_resolveName(overlaid));
   }
@@ -265,6 +268,7 @@ class AppState extends ChangeNotifier {
     _keyBlocks.remove(albumIdStr);
     _selfTokens.remove(albumIdStr);
     _lastRemovedAlbumId = albumIdStr;
+    _saveShelf();
     notifyListeners();
   }
 
@@ -307,7 +311,38 @@ class AppState extends ChangeNotifier {
       previewMedia: nextPreview,
     );
     _albums = [moved, ..._albums]..removeAt(i + 1);
+    _saveShelf();
     notifyListeners();
+  }
+
+  // Serialize writes so stale shelf snapshots cannot land last
+  Future<void> Function(List<AlbumModel>)? _persistShelf;
+  Future<void>? _persistInFlight;
+  bool _persistAgain = false;
+
+  void attachShelfPersistence(Future<void> Function(List<AlbumModel>) p) =>
+      _persistShelf = p;
+
+  void _saveShelf() {
+    if (_persistShelf == null) return;
+    if (_persistInFlight != null) {
+      _persistAgain = true;
+      return;
+    }
+    _persistInFlight = _drainShelf();
+  }
+
+  Future<void> _drainShelf() async {
+    try {
+      do {
+        _persistAgain = false;
+        try {
+          await _persistShelf!(List<AlbumModel>.unmodifiable(_albums));
+        } catch (_) {}
+      } while (_persistAgain);
+    } finally {
+      _persistInFlight = null;
+    }
   }
 
   Future<void> Function()? _summaryRefresh;

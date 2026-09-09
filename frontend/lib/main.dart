@@ -227,6 +227,14 @@ void main() async {
   );
   final mediaSealedCache =
       await MediaSealedCache.open(cacheRootKey: cacheRootKey);
+  // Seed the shelf before the first network request
+  try {
+    final localAlbums = await mediaSealedCache.loadAlbums();
+    if (localAlbums.isNotEmpty) appState.setAlbums(localAlbums);
+  } catch (_) {}
+
+  // Persist every AppState shelf mutation
+  appState.attachShelfPersistence(mediaSealedCache.saveAlbums);
   final mediaPlaintextCache = MediaPlaintextCache();
   // Seen state must survive media cache eviction
   final seenStore = await SealedSeenStore.open(cacheRootKey: cacheRootKey);
@@ -346,6 +354,8 @@ void main() async {
       // _accessLost) and makes in flight resolvers skip re caching, so the
       // durable name wipe below is the last write and stays wiped
       appState.removeAlbum(albumStr);
+      // Prevent the revoked album from returning on restart
+      await mediaSealedCache.dropAlbum(albumStr);
       await nameCache.clearAlbum(albumStr);
       // the roster is gone, so these pins can never be refreshed again
       await identityTrust.forgetAlbum(albumId);
@@ -485,6 +495,7 @@ void main() async {
       mediaCacheManager,
       (albumId) => summaryRefresher.refresh(),
       onPreview: (mediaId, thumb) => uploadQueue.putPreview(mediaId, thumb),
+      selfToken: appState.selfMemberToken,
     ),
   );
   uploadQueue = UploadQueueModel(uploadCoordinator);
@@ -518,6 +529,7 @@ void main() async {
         Provider<MediaCacheManager>.value(value: mediaCacheManager),
         Provider<MediaSealedCache>.value(value: mediaSealedCache),
         Provider<MediaCatalog>.value(value: mediaSealedCache),
+        Provider<AlbumCatalog>.value(value: mediaSealedCache),
         ListenableProvider<ShelfCovers>.value(value: shelfCovers),
         ListenableProvider<SeenStore>.value(value: seenStore),
         Provider<SodiumSumo>.value(value: sodium),

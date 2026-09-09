@@ -18,6 +18,15 @@ class PreviewMedia {
     required this.thumbSha256,
   });
 
+  Map<String, dynamic> toJson() => {
+        'media_id': mediaId,
+        'epoch_tag': epochTag,
+        'thumb_wrap_nonce': base64.encode(thumbWrapNonce),
+        'thumb_wrap_tag_ct': base64.encode(thumbWrapTagCT),
+        'thumb_size': thumbSize,
+        'thumb_sha256': base64.encode(thumbSha256),
+      };
+
   static PreviewMedia? tryFromRecordJson(Map<String, dynamic> json) {
     try {
       if (json['thumb_size'] == null) return null;
@@ -59,6 +68,11 @@ class MemberPreview {
   final String? nameCt;
 
   const MemberPreview({required this.memberToken, this.nameCt});
+
+  Map<String, dynamic> toJson() => {
+        'member_token': memberToken,
+        if (nameCt != null) 'name_ct': nameCt,
+      };
 
   static MemberPreview? tryFromJson(Map<String, dynamic> json) {
     final token = json['member_token'];
