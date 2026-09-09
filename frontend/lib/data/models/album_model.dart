@@ -85,6 +85,21 @@ class AlbumModel {
     );
   }
 
+  // media_generation preserves hasSummary across disk round trips
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name_ct': nameCt,
+        'created_at': createdAt.toIso8601String(),
+        'updated_at': updatedAt.toIso8601String(),
+        'member_token': memberToken,
+        'media_count': mediaCount,
+        'active_member_count': activeMemberCount,
+        'latest_activity_at': latestActivityAt?.toIso8601String(),
+        if (hasSummary) 'media_generation': mediaGeneration,
+        'preview_media': [for (final p in previewMedia) p.toJson()],
+        'member_previews': [for (final m in memberPreviews) m.toJson()],
+      };
+
   // Drop malformed summary rows without failing the album list
   static List<T> _list<T>(
       dynamic raw, T? Function(Map<String, dynamic>) parse) {

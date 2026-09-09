@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
+import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
 import 'media_cache_key.dart';
@@ -19,7 +20,15 @@ import 'media_catalog.dart';
 // AAD = media_id‖asset binds a file to its slot so a swapped blob auth-fails
 // records.db doubles as the LRU access time index (size = sealed footprint)
 
-const String _formatSentinel = 'format_v2';
+const String _formatSentinel = 'format_v3';
+
+const String _createAlbums = '''
+  CREATE TABLE albums (
+    album_id   TEXT PRIMARY KEY,
+    album_json TEXT NOT NULL,
+    sort_index INTEGER NOT NULL
+  )
+''';
 
 // Pins visible shelf thumbnails during eviction
 const String _createCovers = '''
@@ -31,18 +40,25 @@ const String _createCovers = '''
   )
 ''';
 
-class MediaSealedCache implements MediaCatalog {
+class MediaSealedCache implements MediaCatalog, AlbumCatalog {
+  // Full photos are disposable while the database and thumbnails are durable
   final Directory _root;
+  final Directory _durableRoot;
   final Database _db;
   final Uint8List _cacheKey;
+  // Full photos and thumbnails have independent eviction budgets
   final int budgetBytes;
+  final int durableBudgetBytes;
 
-  MediaSealedCache._(this._root, this._db, this._cacheKey, this.budgetBytes);
+  MediaSealedCache._(this._root, this._durableRoot, this._db, this._cacheKey,
+      this.budgetBytes, this.durableBudgetBytes);
 
   static Future<MediaSealedCache> open({
     Directory? rootDir,
+    Directory? durableDir,
     required Uint8List cacheRootKey,
     int budgetBytes = 1024 * 1024 * 1024,
+    int durableBudgetBytes = 512 * 1024 * 1024,
   }) async {
     // getApplicationCacheDirectory : Android app cache dir (covered by
     // allowBackup="false" in the manifest) / iOS Library/Caches (excluded from
@@ -51,9 +67,16 @@ class MediaSealedCache implements MediaCatalog {
         Directory(p.join(
             (await getApplicationCacheDirectory()).path, 'keepsy_media'));
     if (!root.existsSync()) root.createSync(recursive: true);
+    // iOS must exclude this durable tree from backup before release
+    // Tests passing only rootDir keep the legacy single-root layout
+    final durable = durableDir ??
+        (rootDir ??
+            Directory(p.join((await getApplicationSupportDirectory()).path,
+                'keepsy_vault')));
+    if (!durable.existsSync()) durable.createSync(recursive: true);
     final db = await openDatabase(
-      p.join(root.path, 'records.db'),
-      version: 3,
+      p.join(durable.path, 'records.db'),
+      version: 4,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE media_records (
@@ -71,6 +94,7 @@ class MediaSealedCache implements MediaCatalog {
         await db.execute(
             'CREATE INDEX idx_records_access ON media_records(last_access)');
         await db.execute(_createCovers);
+        await db.execute(_createAlbums);
       },
       onUpgrade: (db, from, to) async {
         if (from < 2) await db.execute(_createCovers);
@@ -79,27 +103,68 @@ class MediaSealedCache implements MediaCatalog {
           await db.execute('ALTER TABLE media_records '
               'ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0');
         }
+        if (from < 4) await db.execute(_createAlbums);
       },
     );
-    final cache = MediaSealedCache._(root, db, cacheRootKey, budgetBytes);
+    final cache = MediaSealedCache._(
+        root, durable, db, cacheRootKey, budgetBytes, durableBudgetBytes);
     await cache._migrateIfNeeded();
     return cache;
   }
 
   Future<void> close() => _db.close();
 
+  @override
+  Future<List<AlbumModel>> loadAlbums() async {
+    final rows = await _db.query('albums',
+        columns: ['album_json'], orderBy: 'sort_index ASC');
+    final out = <AlbumModel>[];
+    for (final row in rows) {
+      try {
+        out.add(AlbumModel.fromJson(
+            jsonDecode(row['album_json'] as String) as Map<String, dynamic>));
+      } catch (_) {
+        // One unreadable row must not cost the whole shelf
+      }
+    }
+    return out;
+  }
+
+  @override
+  Future<void> dropAlbum(String albumId) async {
+    await _db.delete('albums', where: 'album_id = ?', whereArgs: [albumId]);
+  }
+
+  @override
+  Future<void> saveAlbums(List<AlbumModel> albums) async {
+    await _db.transaction((txn) async {
+      await txn.delete('albums');
+      for (var i = 0; i < albums.length; i++) {
+        await txn.insert('albums', {
+          'album_id': albums[i].id,
+          'album_json': jsonEncode(albums[i].toJson()),
+          'sort_index': i,
+        });
+      }
+    });
+  }
+
   // First boot on the sealed format : wipe any prior-layout blobs + index
   // rows (D9′ : zero prod users, no dual format read path). Also self heals a
   // wholesale key mismatch (sentinel lost) by starting clean
   Future<void> _migrateIfNeeded() async {
-    final sentinel = File(p.join(_root.path, _formatSentinel));
+    final sentinel = File(p.join(_durableRoot.path, _formatSentinel));
     if (sentinel.existsSync()) return;
     await _db.delete('media_records');
     await _db.delete('album_covers');
-    for (final e in _root.listSync()) {
-      if (e is File && _isBlobFile(e.path)) e.deleteSync();
+    for (final dir in {_root.path, _durableRoot.path}) {
+      final d = Directory(dir);
+      if (!d.existsSync()) continue;
+      for (final e in d.listSync()) {
+        if (e is File && _isBlobFile(e.path)) e.deleteSync();
+      }
     }
-    sentinel.writeAsStringSync('2');
+    sentinel.writeAsStringSync('3');
   }
 
   static bool _isBlobFile(String path) =>
@@ -110,7 +175,12 @@ class MediaSealedCache implements MediaCatalog {
             utf8.encode(k.asset == CacheAsset.thumb ? 'thumb' : 'file'),
       );
 
-  File _blobFile(MediaCacheKey k) => File(p.join(_root.path, k.diskFilename));
+  // Thumbnails stay durable for offline rendering
+  Directory _rootFor(CacheAsset asset) =>
+      asset == CacheAsset.thumb ? _durableRoot : _root;
+
+  File _blobFile(MediaCacheKey k) =>
+      File(p.join(_rootFor(k.asset).path, k.diskFilename));
 
   Future<MediaRecord?> readRecord(String mediaId) async {
     final rows = await _db.query('media_records',
@@ -279,15 +349,21 @@ class MediaSealedCache implements MediaCatalog {
     await _evictIfOverBudget();
   }
 
-  // Evict assets separately so pinned thumbnails do not pin full files
+  // Photo pressure must not evict thumbnails
   Future<void> _evictIfOverBudget() async {
-    var total = await totalBytes();
-    if (total <= budgetBytes) return;
-    final pinned = await _pinnedMediaIds();
-    final rows = await _db.query('media_records',
-        columns: ['media_id', 'blob_bytes', 'thumb_bytes'],
-        orderBy: 'last_access ASC');
+    await _evictDisposable();
+    await _evictDurable();
+    // Keep metadata-only rows so albums remain available offline
+    await _db.delete('media_records',
+        where:
+            'blob_bytes = 0 AND thumb_bytes = 0 AND length(record_json) <= 2');
+  }
 
+  Future<void> _evictDisposable() async {
+    var total = await _sumOf('blob_bytes');
+    if (total <= budgetBytes) return;
+    final rows = await _db.query('media_records',
+        columns: ['media_id', 'blob_bytes'], orderBy: 'last_access ASC');
     for (final row in rows) {
       if (total <= budgetBytes) break;
       final bytes = row['blob_bytes'] as int;
@@ -295,8 +371,16 @@ class MediaSealedCache implements MediaCatalog {
       await _dropAsset(row['media_id'] as String, CacheAsset.file);
       total -= bytes;
     }
+  }
+
+  Future<void> _evictDurable() async {
+    var total = await _sumOf('thumb_bytes');
+    if (total <= durableBudgetBytes) return;
+    final pinned = await _pinnedMediaIds();
+    final rows = await _db.query('media_records',
+        columns: ['media_id', 'thumb_bytes'], orderBy: 'last_access ASC');
     for (final row in rows) {
-      if (total <= budgetBytes) break;
+      if (total <= durableBudgetBytes) break;
       final id = row['media_id'] as String;
       if (pinned.contains(id)) continue;
       final bytes = row['thumb_bytes'] as int;
@@ -304,10 +388,12 @@ class MediaSealedCache implements MediaCatalog {
       await _dropAsset(id, CacheAsset.thumb);
       total -= bytes;
     }
-    // Keep metadata-only rows so albums remain available offline
-    await _db.delete('media_records',
-        where:
-            'blob_bytes = 0 AND thumb_bytes = 0 AND length(record_json) <= 2');
+  }
+
+  Future<int> _sumOf(String column) async {
+    final rows = await _db
+        .rawQuery('SELECT COALESCE(SUM($column), 0) AS t FROM media_records');
+    return rows.first['t'] as int;
   }
 
   Future<Set<String>> _pinnedMediaIds() async {
@@ -318,7 +404,7 @@ class MediaSealedCache implements MediaCatalog {
   Future<void> _dropAsset(String mediaId, CacheAsset asset) async {
     final name =
         asset == CacheAsset.thumb ? '$mediaId.thumb.kec' : '$mediaId.kec';
-    final f = File(p.join(_root.path, name));
+    final f = File(p.join(_rootFor(asset).path, name));
     if (f.existsSync()) f.deleteSync();
     final col = asset == CacheAsset.thumb ? 'thumb_bytes' : 'blob_bytes';
     await _db.update('media_records', {col: 0},
@@ -360,7 +446,7 @@ class MediaSealedCache implements MediaCatalog {
     for (final asset in CacheAsset.values) {
       final name =
           asset == CacheAsset.thumb ? '$mediaId.thumb.kec' : '$mediaId.kec';
-      final f = File(p.join(_root.path, name));
+      final f = File(p.join(_rootFor(asset).path, name));
       if (f.existsSync()) f.deleteSync();
     }
   }
@@ -378,8 +464,13 @@ class MediaSealedCache implements MediaCatalog {
   Future<void> clearAll() async {
     await _db.delete('media_records');
     await _db.delete('album_covers');
-    for (final e in _root.listSync()) {
-      if (e is File && e.path.endsWith('.kec')) e.deleteSync();
+    // Clear both roots so durable thumbnails cannot survive deletion
+    for (final dir in {_root.path, _durableRoot.path}) {
+      final d = Directory(dir);
+      if (!d.existsSync()) continue;
+      for (final e in d.listSync()) {
+        if (e is File && e.path.endsWith('.kec')) e.deleteSync();
+      }
     }
   }
 

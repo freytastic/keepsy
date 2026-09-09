@@ -46,7 +46,10 @@ void main() {
   setUp(() async {
     tmp = Directory.systemTemp.createTempSync('msc_');
     cache = await MediaSealedCache.open(
-        rootDir: tmp, cacheRootKey: _key(), budgetBytes: 1000);
+        rootDir: tmp,
+        cacheRootKey: _key(),
+        budgetBytes: 1000,
+        durableBudgetBytes: 1000);
   });
 
   tearDown(() async {
@@ -82,7 +85,10 @@ void main() {
     await other.close();
     // reopen with the original key : the auth-failed file was purged
     cache = await MediaSealedCache.open(
-        rootDir: tmp, cacheRootKey: _key(), budgetBytes: 1000);
+        rootDir: tmp,
+        cacheRootKey: _key(),
+        budgetBytes: 1000,
+        durableBudgetBytes: 1000);
     expect(await cache.readBlob(_fileK('m1')), isNull);
   });
 
@@ -226,6 +232,147 @@ void main() {
       await cache.writeRecordIfAbsent(_rec('m1'));
       expect((await cache.readRecord('m1'))?.id, 'm1');
       expect(await cache.readBlob(thumbK('m1')), isNotNull);
+    });
+  });
+
+  group('durable split', () {
+    MediaCacheKey thumbK(String id, {String album = 'A'}) => MediaCacheKey(
+        albumId: album, mediaId: id, epochTag: 0, asset: CacheAsset.thumb);
+
+    test('records and thumbnails survive a cache-directory wipe', () async {
+      final durable = Directory.systemTemp.createTempSync('msc_dur_');
+      final disposable = Directory.systemTemp.createTempSync('msc_cache_');
+      addTearDown(() {
+        if (durable.existsSync()) durable.deleteSync(recursive: true);
+        if (disposable.existsSync()) disposable.deleteSync(recursive: true);
+      });
+
+      var c = await MediaSealedCache.open(
+          rootDir: disposable, durableDir: durable, cacheRootKey: _key());
+      await c.writeRecord(_rec('m1'));
+      await c.writeBlob(thumbK('m1'), _bytes(50));
+      await c.writeBlob(_fileK('m1'), _bytes(200));
+      await c.close();
+
+      // Simulate OS cache reclamation
+      disposable.deleteSync(recursive: true);
+
+      c = await MediaSealedCache.open(
+          rootDir: disposable, durableDir: durable, cacheRootKey: _key());
+      addTearDown(c.close);
+
+      expect(await c.listRecordsForAlbum('A'), hasLength(1),
+          reason: 'the catalog must outlive cache eviction');
+      expect(await c.readBlob(thumbK('m1')), isNotNull,
+          reason: 'thumbnails are durable');
+      expect(await c.readBlob(_fileK('m1')), isNull,
+          reason: 'full photos are disposable');
+    });
+
+    test('budget pressure evicts full photos but never thumbnails', () async {
+      final durable = Directory.systemTemp.createTempSync('msc_dur_');
+      final disposable = Directory.systemTemp.createTempSync('msc_cache_');
+      final c = await MediaSealedCache.open(
+          rootDir: disposable,
+          durableDir: durable,
+          cacheRootKey: _key(),
+          budgetBytes: 500);
+      addTearDown(() async {
+        await c.close();
+        if (durable.existsSync()) durable.deleteSync(recursive: true);
+        if (disposable.existsSync()) disposable.deleteSync(recursive: true);
+      });
+
+      for (final id in ['m1', 'm2', 'm3', 'm4']) {
+        await c.writeRecord(_rec(id));
+        await c.writeBlob(thumbK(id), _bytes(200));
+        await c.writeBlob(_fileK(id), _bytes(400));
+      }
+
+      // Thumbnail bytes exceed the disposable photo budget
+      for (final id in ['m1', 'm2', 'm3', 'm4']) {
+        expect(await c.readBlob(thumbK(id)), isNotNull,
+            reason: 'thumbnail \$id is durable and must outlive eviction');
+      }
+      expect(await c.readBlob(_fileK('m1')), isNull,
+          reason: 'the oldest full photo is disposable');
+    });
+
+    test('invalidate removes the durable thumbnail too', () async {
+      final durable = Directory.systemTemp.createTempSync('msc_dur_');
+      final disposable = Directory.systemTemp.createTempSync('msc_cache_');
+      final c = await MediaSealedCache.open(
+          rootDir: disposable, durableDir: durable, cacheRootKey: _key());
+      addTearDown(() async {
+        await c.close();
+        if (durable.existsSync()) durable.deleteSync(recursive: true);
+        if (disposable.existsSync()) disposable.deleteSync(recursive: true);
+      });
+
+      await c.writeRecord(_rec('m1'));
+      await c.writeBlob(thumbK('m1'), _bytes(50));
+      await c.writeBlob(_fileK('m1'), _bytes(60));
+
+      await c.invalidate('m1');
+
+      expect(await c.readBlob(thumbK('m1')), isNull);
+      expect(await c.readBlob(_fileK('m1')), isNull);
+      expect(
+          durable
+              .listSync()
+              .whereType<File>()
+              .where((f) => f.path.endsWith('.kec')),
+          isEmpty,
+          reason: 'a deleted photo must leave no sealed thumbnail behind');
+    });
+
+    test('clearAll empties the durable root as well', () async {
+      final durable = Directory.systemTemp.createTempSync('msc_dur_');
+      final disposable = Directory.systemTemp.createTempSync('msc_cache_');
+      final c = await MediaSealedCache.open(
+          rootDir: disposable, durableDir: durable, cacheRootKey: _key());
+      addTearDown(() async {
+        await c.close();
+        if (durable.existsSync()) durable.deleteSync(recursive: true);
+        if (disposable.existsSync()) disposable.deleteSync(recursive: true);
+      });
+
+      await c.writeRecord(_rec('m1'));
+      await c.writeBlob(thumbK('m1'), _bytes(50));
+      await c.writeBlob(_fileK('m1'), _bytes(60));
+
+      await c.clearAll();
+
+      expect(await c.readBlob(thumbK('m1')), isNull);
+      expect(
+          durable
+              .listSync()
+              .whereType<File>()
+              .where((f) => f.path.endsWith('.kec')),
+          isEmpty);
+    });
+
+    test('clearAlbum takes that album durable thumbnails with it', () async {
+      final durable = Directory.systemTemp.createTempSync('msc_dur_');
+      final disposable = Directory.systemTemp.createTempSync('msc_cache_');
+      final c = await MediaSealedCache.open(
+          rootDir: disposable, durableDir: durable, cacheRootKey: _key());
+      addTearDown(() async {
+        await c.close();
+        if (durable.existsSync()) durable.deleteSync(recursive: true);
+        if (disposable.existsSync()) disposable.deleteSync(recursive: true);
+      });
+
+      await c.writeRecord(_rec('m1', album: 'A'));
+      await c.writeBlob(thumbK('m1'), _bytes(50));
+      await c.writeRecord(_rec('m2', album: 'B'));
+      await c.writeBlob(thumbK('m2', album: 'B'), _bytes(50));
+
+      await c.clearAlbum('A');
+
+      expect(await c.readBlob(thumbK('m1')), isNull);
+      expect(await c.readBlob(thumbK('m2', album: 'B')), isNotNull,
+          reason: 'the other album keeps its thumbnails');
     });
   });
 }
