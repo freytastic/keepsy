@@ -35,16 +35,7 @@ func NewMediaRepository(db *pgxpool.Pool) *MediaRepository {
 	return &MediaRepository{DB: db}
 }
 
-// ReserveUploadRow inserts a pending (confirmed=FALSE) media row, but only
-// after re verifying, atomically under the albums row FOR UPDATE lock, that the
-// upload is still valid: the album's current epoch equals epochTag and no
-// rotation is pending. Because revoke (RevokeMemberTx) and rotation
-// (InsertEpoch) take the same lock, a member removed concurrently with this
-// upload cannot slip a new object in under the stale MK : whichever commits
-// first wins, and if the revoke wins this returns ErrPendingRotation
-
-// The current epoch and pending rotation SQL mirror epoch.Repo.PendingRotation
-// CurrentEpoch and must stay in lockstep with them
+// Rechecks epoch and rotation debt under the lock shared with revoke and rotation
 func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
@@ -79,23 +70,8 @@ func (r *MediaRepository) ReserveUploadRow(ctx context.Context, m *model.Media, 
 	}
 
 	var pending bool
-	if err := tx.QueryRow(ctx, `
-		SELECT
-		  EXISTS (
-		    SELECT 1 FROM album_members mm
-		    WHERE mm.album_id = $1 AND mm.revoked_at IS NULL
-		      AND NOT EXISTS (
-		        SELECT 1 FROM album_epoch_wraps w
-		        WHERE w.album_id = $1 AND w.epoch = $2 AND w.recipient_token = mm.member_token)
-		  )
-		  OR EXISTS (
-		    SELECT 1 FROM album_epoch_wraps w
-		    WHERE w.album_id = $1 AND w.epoch = $2
-		      AND NOT EXISTS (
-		        SELECT 1 FROM album_members mm
-		        WHERE mm.album_id = $1 AND mm.revoked_at IS NULL AND mm.member_token = w.recipient_token)
-		  )`,
-		m.AlbumID, cur,
+	if err := tx.QueryRow(ctx,
+		`SELECT `+RotationRequiredExpr("$1"), m.AlbumID,
 	).Scan(&pending); err != nil {
 		return err
 	}
@@ -193,6 +169,43 @@ func (r *MediaRepository) MarkConfirmed(ctx context.Context, mediaID, albumID, r
 			return 0, ErrAlbumNotFound
 		}
 		return 0, err
+	}
+
+	// Recheck because revoke or rotation may commit after reservation
+	// Publishing under the old key would expose new content to a departed member
+	var epochTag int
+	err = tx.QueryRow(ctx,
+		`SELECT epoch_tag FROM media
+		 WHERE id = $1 AND album_id = $2 AND confirmed = FALSE
+		   AND reservation_id = $3`,
+		mediaID, albumID, reservationID,
+	).Scan(&epochTag)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrMediaNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	var required bool
+	if err := tx.QueryRow(ctx,
+		`SELECT `+RotationRequiredExpr("$1"), albumID,
+	).Scan(&required); err != nil {
+		return 0, err
+	}
+	if required {
+		return 0, ErrPendingRotation
+	}
+
+	var cur int
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(MAX(epoch), -1) FROM album_epochs WHERE album_id = $1`,
+		albumID,
+	).Scan(&cur); err != nil {
+		return 0, err
+	}
+	if epochTag != cur {
+		return 0, ErrEpochMismatch
 	}
 
 	tag, err := tx.Exec(ctx,

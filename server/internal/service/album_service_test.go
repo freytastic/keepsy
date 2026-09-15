@@ -110,6 +110,29 @@ func TestRemoveMember_PlainMemberCannotKickOther(t *testing.T) {
 	}
 }
 
+// The dormant co-admin string grants no removal or rename authority
+func TestCoAdmin_HasNoAdminAuthority(t *testing.T) {
+	store := &removeMemberStore{
+		lookupFn: func(context.Context, uuid.UUID, uuid.UUID) ([]byte, string, error) {
+			return []byte("callercallercallercallercaller32"), "co-admin", nil
+		},
+		revokeTxFn: func(context.Context, uuid.UUID, []byte, []byte) (string, bool, error) {
+			t.Fatal("RevokeMemberTx must not be called for a co-admin")
+			return "", false, nil
+		},
+	}
+	svc := NewAlbumService(store)
+
+	_, err := svc.RemoveMember(context.Background(), uuid.New(), uuid.New(),
+		[]byte("targettargettargettargettarget32"))
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("remove: err = %v, want ErrUnauthorized", err)
+	}
+	if err := svc.UpdateAlbum(context.Background(), uuid.New(), uuid.New(), []byte("name")); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("rename: err = %v, want ErrUnauthorized", err)
+	}
+}
+
 // authz is evaluated BEFORE the already revoked no op. A non admin
 // removing an already revoked member must get unauthorized, not a 204 : the
 // revoke tx must not even be reached

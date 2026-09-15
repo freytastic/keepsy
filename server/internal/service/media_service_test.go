@@ -457,7 +457,7 @@ func (f *fakeEpochs) CurrentEpoch(_ context.Context, _ uuid.UUID) (int, bool, ti
 	return f.cur, f.exists, time.Time{}, f.err
 }
 
-func (f *fakeEpochs) PendingRotation(_ context.Context, _ uuid.UUID) (bool, error) {
+func (f *fakeEpochs) RotationRequired(_ context.Context, _ uuid.UUID) (bool, error) {
 	return f.pending, f.pendingErr
 }
 
@@ -572,10 +572,7 @@ func TestRequestUploadURL_RejectsStaleEpoch(t *testing.T) {
 }
 
 func TestRequestUploadURL_RejectsPendingRotation(t *testing.T) {
-	// A member was revoked but the admin's rotation hasn't landed yet: the live
-	// active set differs from the current epoch's recipient set. Uploading here
-	// would seal a new photo under MK_current, which the removed member still
-	// holds : the freeze blocks it until rotation completes
+	// The removed member still holds MK_current until rotation completes
 	svc, repo, _ := newSvc(&fakeEpochs{cur: 2, exists: true, pending: true})
 	in := validInput()
 	in.EpochTag = 2 // matches current epoch : passes the stale-epoch gate
@@ -588,10 +585,7 @@ func TestRequestUploadURL_RejectsPendingRotation(t *testing.T) {
 	}
 }
 
-// The pre checks pass (epoch current, not pending), but a revoke commits
-// between the pre check and the insert. The atomic ReserveUploadRow, under the
-// album lock, catches it and still freezes the upload : this is the exact TOCTOU
-// race the album row lock closes
+// The locked reservation must catch a revoke after the earlier service check
 func TestRequestUploadURL_AtomicReserveCatchesRace(t *testing.T) {
 	svc, repo, _ := newSvc(&fakeEpochs{cur: 3, exists: true, pending: false})
 	repo.reserveErr = repository.ErrPendingRotation
@@ -667,6 +661,36 @@ func TestConfirmUpload_HappyPath(t *testing.T) {
 	row := repo.rows[res.MediaID]
 	if !row.Confirmed {
 		t.Errorf("row not flipped to confirmed")
+	}
+}
+
+// A revoke or a rotation can land between the reservation and this confirm
+func TestConfirmUpload_TranslatesAFrozenOrStaleAlbum(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		repoErr error
+		code    string
+	}{
+		{"a revoke landed first", repository.ErrPendingRotation, "E_EPOCH_PENDING_ROTATION"},
+		{"a rotation landed first", repository.ErrEpochMismatch, "E_EPOCH_REPLAY"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, s3 := newSvc(&fakeEpochs{cur: 3, exists: true})
+			in := validInput()
+			albumID := uuid.New()
+			res, _ := svc.RequestUploadURL(context.Background(), albumID, []byte{0xCC}, in)
+			s3.headSize = in.BlobSize
+			s3.headSHA256B64 = base64.StdEncoding.EncodeToString(in.BlobSHA256)
+			repo.confirmErr = tc.repoErr
+
+			_, err := svc.ConfirmUpload(context.Background(), albumID, res.MediaID, uuid.Nil, []byte{0xCC})
+			if !apierr.IsCode(err, tc.code) {
+				t.Fatalf("err = %v, want %s", err, tc.code)
+			}
+			if _, ok := repo.rows[res.MediaID]; !ok {
+				t.Errorf("the sealed photo must keep its row so it can rewrap and retry")
+			}
+		})
 	}
 }
 

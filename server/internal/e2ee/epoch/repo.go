@@ -19,6 +19,8 @@ var (
 	ErrMemberSetDrift = errors.New("epoch: active member set differs from request")
 	ErrWrapNotFound   = errors.New("epoch: wrap not found for this recipient")
 	ErrAdminNotFound  = errors.New("epoch: caller has no IK_pub on file")
+	ErrCallerRevoked  = errors.New("epoch: caller is no longer an active member")
+	ErrCallerNotAdmin = errors.New("epoch: caller is not the album admin")
 )
 
 type Repo struct {
@@ -54,10 +56,7 @@ func (r *Repo) CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, bool, 
 	return epoch, true, startedAt, nil
 }
 
-// AdminIKByMemberToken resolves a member_token to its owner's IK_pub. Used to
-// verify the envelope_sig on a set_epoch request. Two queries bcs the
-// user_id is now sealed in amid.user_id_enc (M bridge) : recover it via
-// linker.Open then lookup the IK
+// Opens the sealed user link before loading the epoch signer's identity key
 func (r *Repo) AdminIKByMemberToken(ctx context.Context, memberToken []byte) ([]byte, error) {
 	var sealed []byte
 	err := r.db.QueryRow(ctx,
@@ -104,15 +103,7 @@ type InsertEpochInput struct {
 	ExpectedMemberSetHash []byte
 }
 
-// InsertEpoch atomically validates and writes one epoch transition
-
-// .. Locks the album row (FOR UPDATE) to serialize concurrent rotators
-// .. Re checks epoch == max(epoch)+1 inside the tx → ErrEpochReplay otherwise
-// .. Re computes member_set_hash from album_members WHERE NOT revoked and
-//
-//	compares to ExpectedMemberSetHash → ErrMemberSetDrift otherwise
-
-// .. Writes album_epochs row + per-recipient album_epoch_wraps rows
+// Rechecks signer, sequence and recipient set under the shared album lock
 func (r *Repo) InsertEpoch(ctx context.Context, in InsertEpochInput) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -127,6 +118,25 @@ func (r *Repo) InsertEpoch(ctx context.Context, in InsertEpochInput) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	// The role gate ran before this lock, so a signer removed in between would
+	// otherwise mint a key it is no longer entitled to know
+	var role string
+	var revoked bool
+	err = tx.QueryRow(ctx,
+		`SELECT role, revoked_at IS NOT NULL FROM album_members
+		 WHERE album_id = $1 AND member_token = $2`,
+		in.AlbumID, in.SenderToken,
+	).Scan(&role, &revoked)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && revoked) {
+		return ErrCallerRevoked
+	}
+	if err != nil {
+		return err
+	}
+	if role != "admin" {
+		return ErrCallerNotAdmin
 	}
 
 	var maxEpoch int
@@ -193,10 +203,16 @@ func (r *Repo) InsertEpoch(ctx context.Context, in InsertEpochInput) error {
 		}
 	}
 
+	// The wraps cover the exact active set, which settles any owed rotation
+	if _, err := tx.Exec(ctx,
+		`UPDATE albums SET rotation_required = FALSE WHERE id = $1`, in.AlbumID,
+	); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
-// Wrap is the read shape returned by GetWrap to the cold start client
 type Wrap struct {
 	Epoch       int
 	EkPub       []byte
@@ -208,8 +224,7 @@ type Wrap struct {
 	DeliveredAt time.Time
 }
 
-// GetWrap returns the wrap row for (album, epoch, recipient). The caller is
-// trusted to have already enforced "recipient_token == self" upstream
+// The caller must already have enforced recipient_token == self
 func (r *Repo) GetWrap(ctx context.Context, albumID uuid.UUID, epochN int, recipient []byte) (*Wrap, error) {
 	var (
 		w   Wrap
@@ -232,41 +247,16 @@ func (r *Repo) GetWrap(ctx context.Context, albumID uuid.UUID, epochN int, recip
 	return &w, nil
 }
 
-// reports whether the album is in the transient window bw
-// a member revoke and the admin's rotation : the live active member set differs
-// from the current (max) epoch's recipient set. True when either an active
-// member has no wrap at the current epoch (set shrank / member without keys) or
-// a current epoch recipient is no longer an active member (a revoked member the
-// rotation hasn't dropped yet). Backs the media upload freeze
-func (r *Repo) PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error) {
-	var pending bool
-	err := r.db.QueryRow(ctx, `
-WITH cur AS (
-  SELECT COALESCE(MAX(epoch), -1) AS e FROM album_epochs WHERE album_id = $1
-)
-SELECT
-  EXISTS (
-    SELECT 1 FROM album_members m, cur
-    WHERE m.album_id = $1 AND m.revoked_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM album_epoch_wraps w
-        WHERE w.album_id = $1 AND w.epoch = cur.e AND w.recipient_token = m.member_token)
-  )
-  OR EXISTS (
-    SELECT 1 FROM album_epoch_wraps w, cur
-    WHERE w.album_id = $1 AND w.epoch = cur.e
-      AND NOT EXISTS (
-        SELECT 1 FROM album_members m
-        WHERE m.album_id = $1 AND m.revoked_at IS NULL AND m.member_token = w.recipient_token)
-  )`, albumID).Scan(&pending)
-	return pending, err
+// Shared by the upload freeze and client recovery
+func (r *Repo) RotationRequired(ctx context.Context, albumID uuid.UUID) (bool, error) {
+	var required bool
+	err := r.db.QueryRow(ctx,
+		`SELECT `+repository.RotationRequiredExpr("$1"), albumID,
+	).Scan(&required)
+	return required, err
 }
 
-// resolves a single member_token to its user_id,
-// scoped to one album so a token that belongs to a different album is treated
-// as not found. Backs the by nickname prekey bundle fetch : the seal is Opened
-// with the token itself (M bridge nonce). repository.ErrMemberNotFound when the
-// row is absent or the seal cannot be opened
+// Album scoping prevents a token from another album resolving here
 func (r *Repo) UserIDByAlbumMemberToken(ctx context.Context, albumID uuid.UUID, token []byte) (uuid.UUID, error) {
 	var sealed []byte
 	err := r.db.QueryRow(ctx,
@@ -286,11 +276,7 @@ func (r *Repo) UserIDByAlbumMemberToken(ctx context.Context, albumID uuid.UUID, 
 	return u, nil
 }
 
-// UserIDsByMemberTokens resolves a set of member_tokens to their user_ids
-// Each row's user_id is sealed in user_id_enc (M-bridge) : we fetch
-// (member_token, user_id_enc) and Open each blob with its own member_token
-// since the AEAD nonce is derived from member_token. Tokens that dont
-// resolve (missing row or invalid seal) are silently skipped
+// Opens each user link with its own member token and skips invalid seals
 func (r *Repo) UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uuid.UUID, error) {
 	if len(tokens) == 0 {
 		return nil, nil
@@ -318,12 +304,7 @@ func (r *Repo) UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uu
 	return out, rows.Err()
 }
 
-// PendingMembers returns the member_tokens of non revoked members who have not
-// proven (via join_complete) that they installed recent epochs and whose last
-// acknowledgement (if any) is more than 24h old. newEpoch is the epoch just
-// committed : a member is current if they acked >= newEpoch-1
-
-// drives an admin "these members are behind" surface
+// Finds active members whose acknowledged epoch is stale by over 24 hours
 func (r *Repo) PendingMembers(ctx context.Context, albumID uuid.UUID, newEpoch int) ([][]byte, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT am.member_token

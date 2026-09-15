@@ -32,6 +32,7 @@ type AlbumSummary struct {
 	ActiveMemberCount int
 	LatestActivityAt  *time.Time
 	MediaGeneration   int64
+	RotationRequired  bool
 	PreviewMedia      []PreviewMedia
 	MemberPreviews    []MemberPreview
 }

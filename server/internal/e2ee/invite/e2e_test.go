@@ -27,11 +27,7 @@ func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
-// TestInviteE2E drives the real router → real Service → real Repo → DB for the
-// full §6.1/§6.3 sequence: deliver an existing user, verify the rows + OPK
-// consume, post a genuine join_complete receipt, and reject a reinvite. The
-// deliver path only length checks the wraps, so correctly sized dummy bytes
-// suffice : the join receipt is a real Ed25519 signature by the invitee's IK
+// Covers delivery, OPK consumption, signed join receipt and reinvite rejection
 func TestInviteE2E(t *testing.T) {
 	repo, linker, pool := testRepo(t)
 	ctx := context.Background()
@@ -71,6 +67,12 @@ func TestInviteE2E(t *testing.T) {
 		adminToken, linker.Hash(adminID), adminSealed, albumID)
 	mustExec(t, pool, `INSERT INTO album_members (album_id, member_token, role) VALUES ($1, $2, 'admin')`,
 		albumID, adminToken)
+	// The admin's own wraps, so the album owes no rotation
+	mustExec(t, pool,
+		`INSERT INTO album_epoch_wraps
+		 (album_id, epoch, recipient_token, ek_pub, wrap_nonce, wrap_tag_ct, sender_token, sender_sig)
+		 SELECT $1, e, $2, $3, $4, $5, $2, $6 FROM generate_series(0, 1) e`,
+		albumID, adminToken, make([]byte, 32), make([]byte, 12), make([]byte, 48), make([]byte, 64))
 	t.Cleanup(func() {
 		mustExec(t, pool, `DELETE FROM album_members WHERE album_id=$1`, albumID)
 		mustExec(t, pool, `DELETE FROM album_epoch_wraps WHERE album_id=$1`, albumID)

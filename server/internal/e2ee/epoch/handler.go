@@ -25,9 +25,7 @@ type Notifier interface {
 // to resolve recipient_tokens → user_ids for the WS fanout
 type memberLister interface {
 	UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uuid.UUID, error)
-	// PendingRotation surfaces the revoke→rotate window to an admin opening the
-	// album so the client can auto heal
-	PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error)
+	RotationRequired(ctx context.Context, albumID uuid.UUID) (bool, error)
 }
 
 type Handler struct {
@@ -179,23 +177,24 @@ func (h *Handler) GetCurrent(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.NotFound("album has no epoch yet"))
 		return
 	}
-	// pending_rotation lets an admin's client auto heal a crashed kick / deferred
-	// leave on album open , a lookup failure defaults to
-	// false rather than failing the read
-	pending := false
+	// Drives client rotation recovery : a lookup failure reports false rather
+	// than failing the read, and the upload gate still refuses on its own
+	required := false
 	if h.repo != nil {
-		if p, perr := h.repo.PendingRotation(r.Context(), albumID); perr == nil {
-			pending = p
+		if p, perr := h.repo.RotationRequired(r.Context(), albumID); perr == nil {
+			required = p
 		} else {
-			slog.Default().Warn("epoch: pending-rotation check failed", "album_id", albumID, "err", perr)
+			slog.Default().Warn("epoch: rotation-required check failed", "album_id", albumID, "err", perr)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"current_epoch":    res.CurrentEpoch,
-		"started_at":       res.StartedAt,
-		"pending_rotation": pending,
+		"current_epoch":     res.CurrentEpoch,
+		"started_at":        res.StartedAt,
+		"rotation_required": required,
+		// Older clients read this name
+		"pending_rotation": required,
 	})
 }
 

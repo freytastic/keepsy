@@ -137,22 +137,30 @@ func TestSetEpoch_RejectsNonAdmin(t *testing.T) {
 	}
 }
 
-func TestSetEpoch_AcceptsAdminAndCoAdmin(t *testing.T) {
+func TestSetEpoch_AcceptsAdmin(t *testing.T) {
 	f := newFixture(t)
-	for _, role := range []string{"admin", "co-admin"} {
-		var called bool
-		store := okStore(f)
-		store.insertEpochFn = func(_ context.Context, _ InsertEpochInput) error {
-			called = true
-			return nil
-		}
-		svc := NewService(store)
-		if _, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, role, f.validRequest(t, 0)); err != nil {
-			t.Fatalf("role=%s: err = %v", role, err)
-		}
-		if !called {
-			t.Fatalf("role=%s: InsertEpoch not called", role)
-		}
+	var called bool
+	store := okStore(f)
+	store.insertEpochFn = func(_ context.Context, _ InsertEpochInput) error {
+		called = true
+		return nil
+	}
+	svc := NewService(store)
+	if _, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "admin", f.validRequest(t, 0)); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !called {
+		t.Fatal("InsertEpoch not called")
+	}
+}
+
+// The dormant co-admin string grants no signing authority in Beta V1
+func TestSetEpoch_RejectsCoAdmin(t *testing.T) {
+	f := newFixture(t)
+	svc := NewService(okStore(f))
+	_, err := svc.SetEpoch(context.Background(), f.albumID, f.caller, "co-admin", f.validRequest(t, 0))
+	if !apierr.IsCode(err, "E_FORBIDDEN") {
+		t.Fatalf("err = %v, want E_FORBIDDEN", err)
 	}
 }
 

@@ -43,7 +43,7 @@ func (c *captureNotifier) EmitToUsers(_ context.Context, ids []uuid.UUID, typ st
 }
 
 // testEnv carries everything one handler test needs : pool, seeded album with
-// 3 members (admin, co-admin, member), private keys for each, and a router
+// 3 members (admin and two plain members), private keys for each, and a router
 // that mounts the epoch routes under the same RequireMember middleware as prod
 type testEnv struct {
 	t         *testing.T
@@ -93,7 +93,7 @@ func newEnv(t *testing.T) *testEnv {
 		users:     make(map[string]testUser),
 	}
 
-	roles := []string{"admin", "co-admin", "member"}
+	roles := []string{"admin", "peer", "member"}
 	userIDs := make([]uuid.UUID, 0, 3)
 	for _, role := range roles {
 		u := seedUserWithIdentity(t, pool)
@@ -112,9 +112,9 @@ func newEnv(t *testing.T) *testEnv {
 	env.albumID = album.ID
 	env.users["admin"] = withToken(env.users["admin"], adminToken)
 
-	for _, role := range []string{"co-admin", "member"} {
+	for _, role := range []string{"peer", "member"} {
 		u := env.users[role]
-		token, err := env.albumRepo.AddMember(ctx, album.ID, u.userID, role)
+		token, err := env.albumRepo.AddMember(ctx, album.ID, u.userID, "member")
 		if err != nil {
 			t.Fatalf("add %s: %v", role, err)
 		}
@@ -228,7 +228,7 @@ func buildSetEpochBody(t *testing.T, env *testEnv, signer testUser, epoch int, r
 func TestSetEpoch_HappyPath(t *testing.T) {
 	env := newEnv(t)
 	body := buildSetEpochBody(t, env, env.users["admin"], 0,
-		env.users["admin"], env.users["co-admin"], env.users["member"])
+		env.users["admin"], env.users["peer"], env.users["member"])
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodPost,
@@ -272,7 +272,7 @@ func TestSetEpoch_HappyPath(t *testing.T) {
 	}
 
 	// each member can fetch their own wrap
-	for _, role := range []string{"admin", "co-admin", "member"} {
+	for _, role := range []string{"admin", "peer", "member"} {
 		u := env.users[role]
 		recW := httptest.NewRecorder()
 		reqW := authReq(http.MethodGet,
@@ -287,7 +287,7 @@ func TestSetEpoch_HappyPath(t *testing.T) {
 func TestSetEpoch_ReplayRejected(t *testing.T) {
 	env := newEnv(t)
 	body := buildSetEpochBody(t, env, env.users["admin"], 0,
-		env.users["admin"], env.users["co-admin"], env.users["member"])
+		env.users["admin"], env.users["peer"], env.users["member"])
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodPost,
@@ -320,7 +320,7 @@ func TestSetEpoch_ReplayRejected(t *testing.T) {
 func TestSetEpoch_TamperedEnvelopeSig(t *testing.T) {
 	env := newEnv(t)
 	body := buildSetEpochBody(t, env, env.users["admin"], 0,
-		env.users["admin"], env.users["co-admin"], env.users["member"])
+		env.users["admin"], env.users["peer"], env.users["member"])
 
 	// flip a bit inside envelope_sig (the JSON body is a map, so we re decode + re encode)
 	var raw map[string]any
@@ -350,7 +350,7 @@ func TestSetEpoch_AuthzMemberRejected(t *testing.T) {
 	env := newEnv(t)
 	// member tries to rotate , caller is the plain member, sig is signed by them too
 	body := buildSetEpochBody(t, env, env.users["member"], 0,
-		env.users["admin"], env.users["co-admin"], env.users["member"])
+		env.users["admin"], env.users["peer"], env.users["member"])
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodPost,
@@ -377,13 +377,8 @@ func TestSetEpoch_Race(t *testing.T) {
 
 	bodies := make([][]byte, N)
 	for i := range bodies {
-		// every goroutine signs over the same payload, so any winner is valid
-		signer := env.users["admin"]
-		if i%2 == 1 {
-			signer = env.users["co-admin"]
-		}
-		bodies[i] = buildSetEpochBody(t, env, signer, 0,
-			env.users["admin"], env.users["co-admin"], env.users["member"])
+		bodies[i] = buildSetEpochBody(t, env, env.users["admin"], 0,
+			env.users["admin"], env.users["peer"], env.users["member"])
 	}
 
 	start := make(chan struct{})
@@ -394,9 +389,6 @@ func TestSetEpoch_Race(t *testing.T) {
 			defer wg.Done()
 			<-start
 			caller := env.users["admin"]
-			if i%2 == 1 {
-				caller = env.users["co-admin"]
-			}
 			rec := httptest.NewRecorder()
 			req := authReq(
 				http.MethodPost,
@@ -443,7 +435,7 @@ func TestSetEpoch_MemberSetDrift(t *testing.T) {
 	// build the body listing only admin + co-admin (NOT the member)
 	// the live snapshot has all 3 → drift
 	body := buildSetEpochBody(t, env, env.users["admin"], 0,
-		env.users["admin"], env.users["co-admin"])
+		env.users["admin"], env.users["peer"])
 
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodPost,
@@ -475,7 +467,7 @@ func TestGetEpoch_NoEpochsYet(t *testing.T) {
 func TestGetWrap_OnlyOwnerSucceeds(t *testing.T) {
 	env := newEnv(t)
 	body := buildSetEpochBody(t, env, env.users["admin"], 0,
-		env.users["admin"], env.users["co-admin"], env.users["member"])
+		env.users["admin"], env.users["peer"], env.users["member"])
 	rec := httptest.NewRecorder()
 	req := authReq(http.MethodPost,
 		"/api/v1/albums/"+env.albumID.String()+"/epoch", body, env.users["admin"].userID)
@@ -490,7 +482,7 @@ func TestGetWrap_OnlyOwnerSucceeds(t *testing.T) {
 	}
 
 	// each user gets their own wrap
-	for _, role := range []string{"admin", "co-admin", "member"} {
+	for _, role := range []string{"admin", "peer", "member"} {
 		u := env.users[role]
 		recW := httptest.NewRecorder()
 		reqW := authReq(http.MethodGet,

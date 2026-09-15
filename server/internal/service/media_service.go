@@ -22,21 +22,14 @@ import (
 // PresignTTL covers the largest transfer at the client's 64 KiB/s floor
 const PresignTTL = 30 * time.Minute
 
-// EpochLookup is the slice of *epoch.Repo this service needs : keeps the dep
-// surface small + lets tests stub without pulling pgx
 type EpochLookup interface {
 	CurrentEpoch(ctx context.Context, albumID uuid.UUID) (epoch int, exists bool, startedAt time.Time, err error)
-	// tells whether the album's live active member set differs
-	// from the current epoch's recipient set : true during the window between a
-	// revoke and the admin's rotation
-	PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error)
+	// true between a revoke and the next committed epoch
+	RotationRequired(ctx context.Context, albumID uuid.UUID) (bool, error)
 }
 
-// MediaStore is the slice of *repository.MediaRepository the service needs
 type MediaStore interface {
-	// it inserts the pending row under the albums row lock,
-	// re checking (atomically with the insert) that epochTag is still current
-	// and that no rotation is pending
+	// Rechecks epoch and rotation debt under the album lock
 	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
 	MarkConfirmed(ctx context.Context, mediaID, albumID, reservationID uuid.UUID) (int64, error)
 	MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error)
@@ -154,15 +147,8 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		return nil, apierr.EpochReplay("epoch_tag does not match current epoch")
 	}
 
-	// the stale epoch gate above passes during the
-	// window between a member revoke and the admin's rotation, bcs
-	// MK_current is unchanged. But a photo sealed under it during that window is
-	// readable by the just removed member (they still hold MK_current), which
-	// breaks "future, not past" under the DB-at-rest model. Freeze new
-	// uploads until the active set and the current epoch's recipients match
-	// again : the admin's rotation (or the client's pending rotation recovery)
-	// lifts it. Existing reads are unaffected
-	pending, err := s.epochs.PendingRotation(ctx, albumID)
+	// Freeze publication while a removed member still holds the current MK
+	pending, err := s.epochs.RotationRequired(ctx, albumID)
 	if err != nil {
 		return nil, apierr.Internal("failed to check rotation state").WithCause(err)
 	}
@@ -218,9 +204,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		row.ThumbSHA256 = in.ThumbSHA256
 	}
 
-	// Authoritative check + insert, atomic under the albums row lock. A revoke
-	// or rotation that commits between the pre checks above and here is caught
-	// now : the row is only written while the album is genuinely uploadable
+	// Repeat the gate under the shared lock before writing the reservation
 	if err := s.repo.ReserveUploadRow(ctx, row, in.EpochTag); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrNoEpoch):
@@ -337,6 +321,13 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 	// Commit only the reservation whose objects were checked
 	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID, row.ReservationID)
 	if err != nil {
+		// Typed so the client rewraps the sealed photo under the new key
+		switch {
+		case errors.Is(err, repository.ErrPendingRotation):
+			return 0, apierr.EpochPendingRotation("album has a pending epoch rotation ; the upload must be rewrapped")
+		case errors.Is(err, repository.ErrEpochMismatch):
+			return 0, apierr.EpochReplay("epoch_tag does not match current epoch ; the upload must be rewrapped")
+		}
 		if errors.Is(err, repository.ErrMediaNotFound) {
 			// Only an already confirmed row makes a repeated confirm successful
 			if again, rerr := s.repo.GetByID(ctx, mediaID, albumID); rerr == nil {

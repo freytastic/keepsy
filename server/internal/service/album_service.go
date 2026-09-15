@@ -105,7 +105,7 @@ func (s *AlbumService) UpdateAlbum(ctx context.Context, albumID, userID uuid.UUI
 	if err != nil {
 		return ErrUnauthorized
 	}
-	if role != "admin" && role != "co-admin" {
+	if role != "admin" {
 		return ErrUnauthorized
 	}
 	if len(nameCT) == 0 {
@@ -157,19 +157,13 @@ func (s *AlbumService) RemoveMember(ctx context.Context, albumID, callerUserID u
 		return nil, ErrUnauthorized
 	}
 
-	// Authorize before touching the target : removing anyone but yourself needs
-	// admin/co-admin. This precedes the idempotent already revoked no op so an
-	// unauthorized caller can never learn a target's state via a 204
+	// Authorize before reading target state to avoid leaking it through a 204
 	isSelf := bytes.Equal(callerToken, targetToken)
-	if !isSelf && callerRole != "admin" && callerRole != "co-admin" {
+	if !isSelf && callerRole != "admin" {
 		return nil, ErrUnauthorized
 	}
 
-	// The caller re check + target read + last admin guard + revoke happen
-	// atomically under the album lock: two concurrent admin removals can't both
-	// pass the guard and leave the album adminless, a revoke can't interleave
-	// with a rotation, and a caller revoked mid flight can't still remove anyone
-	// (Role authz stays above, outside the lock, because roles are immutable)
+	// The shared lock closes races with another revoke or rotation
 	_, alreadyRevoked, err := s.albumRepo.RevokeMemberTx(ctx, albumID, callerToken, targetToken)
 	if err != nil {
 		switch {

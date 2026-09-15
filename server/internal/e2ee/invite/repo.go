@@ -17,6 +17,14 @@ import (
 // published identity. Treated as a signature failure at the service boundary
 var ErrIKNotFound = errors.New("invite: member has no IK on file")
 
+var (
+	ErrSenderRevoked   = errors.New("invite: sender is no longer an active member")
+	ErrSenderNotAdmin  = errors.New("invite: sender is not the album admin")
+	ErrEpochMoved      = errors.New("invite: envelopes no longer reach the current epoch")
+	ErrPendingRotation = errors.New("invite: album owes a rotation")
+	ErrTargetDeleting  = errors.New("invite: target account is being deleted")
+)
+
 type Repo struct {
 	db     *pgxpool.Pool
 	linker *userlink.Hasher
@@ -46,9 +54,7 @@ func (r *Repo) CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, error)
 	return epoch, nil
 }
 
-// IKByMemberToken resolves the caller's member_token to its owner's IK_pub by
-// opening the M bridge seal then reading users.ik_pub. Mirrors the epoch repo's
-// AdminIKByMemberToken: the user_id is sealed at rest so it takes two hops
+// Opens the sealed user link before loading its identity key
 func (r *Repo) IKByMemberToken(ctx context.Context, memberToken []byte) ([]byte, error) {
 	var sealed []byte
 	err := r.db.QueryRow(ctx,
@@ -76,9 +82,7 @@ func (r *Repo) IKByMemberToken(ctx context.Context, memberToken []byte) ([]byte,
 	return ik, nil
 }
 
-// MarkReceived records the join_complete high-water mark. GREATEST + COALESCE
-// keep the max epoch the member ever acknowledged, so a stale receipt can't
-// regress it
+// GREATEST prevents stale receipts from lowering the acknowledged epoch
 func (r *Repo) MarkReceived(ctx context.Context, memberToken []byte, epoch int) error {
 	_, err := r.db.Exec(ctx,
 		`UPDATE album_member_identities
@@ -90,9 +94,7 @@ func (r *Repo) MarkReceived(ctx context.Context, memberToken []byte, epoch int) 
 	return err
 }
 
-// ActiveMemberUserIDs returns the user_ids of every nonrevoked member of the
-// album, opening each M bridge seal with its own member_token. Tokens that fail
-// to open are skipped. Used to fan out member_added to the existing roster
+// Opens each active member link and skips invalid seals
 func (r *Repo) ActiveMemberUserIDs(ctx context.Context, albumID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT amid.member_token, amid.user_id_enc
@@ -120,11 +122,87 @@ func (r *Repo) ActiveMemberUserIDs(ctx context.Context, albumID uuid.UUID) ([]uu
 	return out, rows.Err()
 }
 
-// it onboards the target in one tx: it writes (or reactivates) the M
-// bridge identity + album_members row, every per epoch wrap, and marks the
-// consumed OPK. A first time target gets a freshly minted member_token: a target
-// with a revoked tombstone is reactivated on that same token (see the slot note
-// below). An active member re invited returns ErrAlreadyMember
+// Rechecks authority and epoch under the lock shared with revoke and rotation
+func (r *Repo) recheckUnderLock(ctx context.Context, tx pgx.Tx, in DeliverMemberInput) error {
+	var role string
+	var revoked bool
+	var sealed []byte
+	err := tx.QueryRow(ctx,
+		`SELECT am.role, am.revoked_at IS NOT NULL, ami.user_id_enc
+		 FROM album_members am
+		 JOIN album_member_identities ami ON ami.member_token = am.member_token
+		 WHERE am.album_id = $1 AND am.member_token = $2`,
+		in.AlbumID, in.SenderToken,
+	).Scan(&role, &revoked, &sealed)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && revoked) {
+		return ErrSenderRevoked
+	}
+	if err != nil {
+		return err
+	}
+	if role != "admin" {
+		return ErrSenderNotAdmin
+	}
+	sender, err := r.linker.Open(sealed, in.SenderToken)
+	if err != nil {
+		return ErrSenderRevoked
+	}
+
+	// FOR SHARE waits out an account deletion being accepted, so neither side
+	// can join an album the deletion job has already enumerated
+	rows, err := tx.Query(ctx,
+		`SELECT id, deleting_at IS NOT NULL FROM users
+		 WHERE id = ANY($1) ORDER BY id FOR SHARE`,
+		[]uuid.UUID{sender, in.UserID},
+	)
+	if err != nil {
+		return err
+	}
+	deleting := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		var d bool
+		if err := rows.Scan(&id, &d); err != nil {
+			rows.Close()
+			return err
+		}
+		deleting[id] = d
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if d, ok := deleting[sender]; !ok || d {
+		return ErrSenderRevoked
+	}
+	if d, ok := deleting[in.UserID]; !ok || d {
+		return ErrTargetDeleting
+	}
+
+	var current int
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(MAX(epoch), -1) FROM album_epochs WHERE album_id = $1`,
+		in.AlbumID,
+	).Scan(&current); err != nil {
+		return err
+	}
+	if len(in.Envelopes) == 0 || in.Envelopes[len(in.Envelopes)-1].Epoch != current {
+		return ErrEpochMoved
+	}
+
+	var owed bool
+	if err := tx.QueryRow(ctx,
+		`SELECT `+repository.RotationRequiredExpr("$1"), in.AlbumID,
+	).Scan(&owed); err != nil {
+		return err
+	}
+	if owed {
+		return ErrPendingRotation
+	}
+	return nil
+}
+
+// Atomically creates or reactivates membership, stores wraps and consumes the OPK
 func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -132,24 +210,18 @@ func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte
 	}
 	defer tx.Rollback(ctx)
 
-	// Lock the album row to serialize concurrent joins (same pattern as the
-	// epoch rotator). Without this, READ COMMITTED lets two invites both read
-	// active=N below and both insert, overshooting MaxAlbumMembers. The lock
-	// forces the second tx to block until the first commits, so it sees the
-	// updated roster count
+	// Serializes joins so concurrent invites cannot exceed the member cap
 	var locked uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM albums WHERE id = $1 FOR UPDATE`, in.AlbumID).Scan(&locked); err != nil {
+		return nil, err
+	}
+	if err := r.recheckUnderLock(ctx, tx, in); err != nil {
 		return nil, err
 	}
 
 	userHandle := r.linker.Hash(in.UserID)
 
-	// A prior membership for this user in this album may already exist. If it is
-	// still active this is a real conflict (ErrAlreadyMember). If it was revoked
-	// (kicked or left), we reuse that same member_token and reactivate it rather
-	// than minting a new one: the (user_handle, album_id) M bridge slot is 1:1
-	// (LookupMember relies on that single row), and the tombstone cant be
-	// deleted anyway , media.uploader_token / sender_token still reference it
+	// Reactivation reuses the tombstoned token because signed history still references it
 	var token []byte
 	var revoked bool
 	err = tx.QueryRow(ctx,
@@ -188,11 +260,7 @@ func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte
 		}
 	}
 
-	// Cap check runs after the already member detection above (so a re invite of
-	// an active member surfaces ErrAlreadyMember, not ErrAlbumFull) and before
-	// the roster write. A reactivation adds one to the active count just like a
-	// fresh insert, so the guard is identical. The album row is locked FOR UPDATE
-	// above, serializing this count against concurrent joins/revokes
+	// Count after duplicate detection so an active member returns ErrAlreadyMember
 	var active int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(*) FROM album_members WHERE album_id = $1 AND revoked_at IS NULL`,
@@ -228,10 +296,7 @@ func (r *Repo) DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte
 		if in.OPKIdxUsed != nil {
 			opk = *in.OPKIdxUsed
 		}
-		// UPSERT: a reactivated member still has wrap rows for the epochs of their
-		// first membership: the invite re delivers fresh wraps for 0..current,
-		// overwriting them. A fresh member never conflicts, so this is a no op
-		// INSERT for them
+		// Reactivated members replace wraps tied to their reused token
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO album_epoch_wraps
 			 (album_id, epoch, recipient_token, ek_pub, opk_idx_used,
