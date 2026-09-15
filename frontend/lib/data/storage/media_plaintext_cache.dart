@@ -3,10 +3,7 @@ import 'dart:typed_data';
 
 import 'media_cache_key.dart';
 
-// L1 RAM cache : decrypted plaintext bytes keyed by MediaCacheKey. Bounded
-// LRU, default 50 MB. Cleared by main.dart on AppLifecycleState.paused so
-// a backgrounded app holds no plaintext. Strict server-blind line stays at
-// AndroidKeyStore : RAM is the only place plaintext ever lives
+// Bounded RAM-only plaintext cache cleared when the app is backgrounded
 
 class MediaPlaintextCache {
   final int budgetBytes;
@@ -38,6 +35,15 @@ class MediaPlaintextCache {
   void clearAll() {
     _map.clear();
     _bytes = 0;
+  }
+
+  // Account deletion only. Not used on pause, where a zeroed buffer could still
+  // be mid decode for a visible image
+  void wipe() {
+    for (final v in _map.values) {
+      v.fillRange(0, v.length, 0);
+    }
+    clearAll();
   }
 
   void clearAlbum(String albumId) {

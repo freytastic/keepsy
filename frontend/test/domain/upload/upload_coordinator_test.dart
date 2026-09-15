@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keepsy/domain/upload/upload_coordinator.dart';
@@ -78,17 +79,18 @@ void main() {
   });
 
   group('source ownership', () {
-    test('discards each picked file only after its confirm', () async {
-      final confirmedAtDiscard = <int>[];
+    test('discards each picked file as soon as it is sealed', () async {
+      final sealedAtDiscard = <int>[];
       sources.onDiscard = (_) {
-        confirmedAtDiscard.add(uploader.confirmed.length);
+        sealedAtDiscard.add(preparer.sealedIds.length);
       };
       co.enqueue(albumId: _album, sources: pick(2));
       await drain();
-      expect(confirmedAtDiscard, [1, 2]);
+      expect(sealedAtDiscard, [1, 2],
+          reason: 'a plaintext pick outlives only its own sealing');
     });
 
-    test('keeps the source when a recoverable failure parks the item',
+    test('keeps the sealed photo when a recoverable failure parks the item',
         () async {
       uploader.failStage('putFile',
           const UploadStageException(UploadFailureKind.transport, 'reset'),
@@ -97,8 +99,9 @@ void main() {
       await drain();
 
       expect(snap(id).failedCount, 1);
-      expect(sources.discarded, isEmpty);
-      expect(sources.existing, isNotEmpty);
+      expect(preparer.stored, hasLength(1));
+      expect(sources.existing, isEmpty,
+          reason: 'only ciphertext is held for the retry');
     });
 
     test('discards immediately on an unprocessable photo', () async {
@@ -343,7 +346,7 @@ void main() {
       expect(snap(id).doneCount, 1);
     });
 
-    test('manual retry after a transport park prepares again, same media id',
+    test('manual retry after a transport park rewraps the same sealed photo',
         () async {
       uploader.failStage('putFile',
           const UploadStageException(UploadFailureKind.transport, 'reset'),
@@ -360,7 +363,8 @@ void main() {
 
       expect(snap(id).doneCount, 1);
       expect(snap(id).items.single.mediaId, before);
-      expect(preparer.prepared, [before, before]);
+      expect(preparer.sealedIds, [before], reason: 'never encrypted twice');
+      expect(preparer.wrapped, [before, before]);
     });
 
     test('a terminal failure refuses manual retry', () async {
@@ -372,7 +376,8 @@ void main() {
       co.retry(snap(id).items.single.id);
       await drain();
       expect(snap(id).items.single.phase, UploadPhase.failed);
-      expect(preparer.prepared, isEmpty);
+      expect(preparer.wrapped, isEmpty);
+      expect(preparer.stored, isEmpty);
     });
   });
 
@@ -460,6 +465,31 @@ void main() {
   });
 
   group('album pause', () {
+    test('a pending rotation reports the album so recovery can start',
+        () async {
+      final reported = <String>[];
+      final hooked = UploadCoordinator(
+        sources: sources,
+        preparer: preparer,
+        uploader: uploader,
+        sink: sink,
+        onRotationPending: reported.add,
+        now: clock.call,
+        sleep: (_) async {},
+        throttle: Duration.zero,
+      );
+      addTearDown(hooked.dispose);
+      uploader.failStage(
+          'reserve',
+          const UploadStageException(
+              UploadFailureKind.rotationPending, 'rotation'));
+      hooked.enqueue(albumId: _album, sources: pick(2));
+      await drain();
+
+      expect(reported, [_album],
+          reason: 'the second photo is held by the pause, not rejected again');
+    });
+
     test('a pending rotation pauses the album and leaves items queued',
         () async {
       uploader.failStage(
@@ -500,7 +530,11 @@ void main() {
           const UploadStageException(
               UploadFailureKind.rotationPending, 'rotation'));
       final blocked = co.enqueue(albumId: _album, sources: pick(1));
-      final running = co.enqueue(albumId: _other, sources: pick(1));
+      // A distinct pick : the blocked album already sealed and freed its own
+      sources.add('/cache/pick/other.jpg');
+      final running = co.enqueue(
+          albumId: _other,
+          sources: [const PickedSource(path: '/cache/pick/other.jpg')]);
       await drain();
 
       expect(snap(blocked).paused, PauseReason.rotationPending);
@@ -525,8 +559,7 @@ void main() {
   });
 
   group('epoch drift', () {
-    test('a stale epoch prepares again under the new one, same media id',
-        () async {
+    test('a stale epoch rewraps under the new one, same media id', () async {
       uploader.failStage(
           'reserve',
           const UploadStageException(
@@ -535,8 +568,10 @@ void main() {
       await drain();
 
       expect(snap(id).doneCount, 1);
-      expect(preparer.prepared.length, 2);
-      expect(preparer.prepared.first, preparer.prepared.last);
+      expect(preparer.wrapped.length, 2);
+      expect(preparer.wrapped.first, preparer.wrapped.last);
+      expect(preparer.sealedIds, hasLength(1),
+          reason: 'the ciphertext never depends on the album key');
       expect(snap(id).failedCount, 0);
     });
 
@@ -551,7 +586,7 @@ void main() {
       await drain();
 
       expect(snap(id).failedCount, 1);
-      expect(preparer.prepared.length, lessThanOrEqualTo(3));
+      expect(preparer.wrapped.length, lessThanOrEqualTo(3));
     });
   });
 
@@ -606,18 +641,20 @@ void main() {
       expect(snap(id).items.length, 1);
       expect(snap(id).failedCount, 0);
       expect(sources.existing, isEmpty);
+      expect(preparer.stored, isEmpty);
     });
 
-    test('dismissing discards sources a parked failure was holding', () async {
+    test('dismissing drops the sealed photo a parked failure was holding',
+        () async {
       uploader.failStage('putFile',
           const UploadStageException(UploadFailureKind.transport, 'reset'),
           times: 9);
       final id = co.enqueue(albumId: _album, sources: pick(1));
       await drain();
-      expect(sources.discarded, isEmpty);
+      expect(preparer.stored, hasLength(1));
 
       await co.dismissBatch(id);
-      expect(sources.discarded.length, 1);
+      expect(preparer.stored, isEmpty);
       expect(sources.existing, isEmpty);
     });
 
@@ -646,6 +683,8 @@ void main() {
 
       expect(sink.previewed, isEmpty,
           reason: 'the item was gone before preparation finished');
+      expect(preparer.stored, isEmpty,
+          reason: 'an entry sealed after the cancel is dropped');
     });
 
     test('a cancel during confirmation waits instead of racing the commit',
@@ -687,6 +726,101 @@ void main() {
     });
   });
 
+  group('durable outbox', () {
+    const rotation =
+        UploadStageException(UploadFailureKind.rotationPending, 'rotation');
+
+    SealedUpload leftover(String itemId, [String album = _album]) =>
+        SealedUpload(
+          itemId: itemId,
+          albumId: album,
+          mediaId: MediaId.fresh(),
+          payloadByteLength: 1100,
+          thumbPreview: Uint8List(4),
+        );
+
+    test('a paused album still seals new photos and frees their picks',
+        () async {
+      uploader.failStage('reserve', rotation);
+      final id = co.enqueue(albumId: _album, sources: pick(3));
+      await drain();
+
+      expect(snap(id).paused, PauseReason.rotationPending);
+      expect(preparer.stored, hasLength(3));
+      expect(sources.existing, isEmpty);
+      expect(preparer.wrapped, hasLength(1),
+          reason: 'only the first photo reached the server before the pause');
+    });
+
+    test('resuming publishes sealed photos without rereading their picks',
+        () async {
+      uploader.failStage('reserve', rotation);
+      final id = co.enqueue(albumId: _album, sources: pick(3));
+      await drain();
+
+      co.resumeAlbum(_album);
+      await drain();
+
+      expect(snap(id).doneCount, 3);
+      expect(preparer.sealedIds, hasLength(3));
+      expect(preparer.stored, isEmpty,
+          reason: 'published photos leave the outbox');
+    });
+
+    test('restore requeues photos sealed by an earlier run', () async {
+      preparer.leftovers = [leftover('left-1'), leftover('left-2', _other)];
+      await co.restore();
+      await drain();
+
+      expect(co.state.batches, hasLength(2), reason: 'one batch per album');
+      expect(co.state.batches.every((b) => b.doneCount == 1), isTrue);
+      expect(preparer.sealedIds, isEmpty);
+      expect(sink.previewed, hasLength(2));
+      expect(preparer.stored, isEmpty);
+    });
+
+    test('restoring again never queues a photo twice', () async {
+      uploader.failStage('reserve', rotation, times: 9);
+      preparer.leftovers = [leftover('left-1')];
+      await Future.wait([co.restore(), co.restore()]);
+      await co.restore();
+      await drain();
+
+      final items = co.state.batches.expand((b) => b.items).toList();
+      expect(items, hasLength(1));
+    });
+
+    test('forgetting an album drops its queue and its sealed photos', () async {
+      uploader.failStage('reserve', rotation);
+      co.enqueue(albumId: _album, sources: pick(2));
+      await drain();
+      expect(preparer.stored, hasLength(2));
+
+      await co.forgetAlbum(_album);
+
+      expect(co.state.overlaysFor(_album), isEmpty);
+      expect(preparer.stored, isEmpty);
+      expect(preparer.discardedAlbums, [_album],
+          reason: 'photos an earlier run left behind go too');
+      expect(uploader.aborted, isEmpty,
+          reason: 'the server already refuses this device');
+    });
+
+    test('forgetting one album leaves another album queued', () async {
+      uploader.failStage('reserve', rotation);
+      co.enqueue(albumId: _album, sources: pick(1));
+      await drain();
+      preparer.leftovers = [leftover('keep', _other)];
+      uploader.failStage('reserve', rotation);
+      await co.restore();
+      await drain();
+
+      await co.forgetAlbum(_album);
+      expect(co.state.overlaysFor(_other), hasLength(1));
+      expect(preparer.stored, contains('keep'));
+    });
+  });
+
   group('cache seeding', () {
     test('a seed failure never turns a confirmed upload back into failed',
         () async {
@@ -695,6 +829,39 @@ void main() {
       await drain();
       expect(snap(id).doneCount, 1);
       expect(snap(id).failedCount, 0);
+    });
+  });
+
+  group('shutdown', () {
+    test('waits out the running confirm and forgets every item', () async {
+      final hold = uploader.holdConfirm = Completer<void>();
+      co.enqueue(albumId: _album, sources: pick(2));
+      await drain();
+      expect(uploader.calls.last, 'confirm');
+
+      var finished = false;
+      final done = co.shutdown().then((_) => finished = true);
+      await drain();
+      expect(finished, isFalse,
+          reason: 'a confirm in flight cannot be dropped');
+
+      hold.complete();
+      await done;
+      expect(co.state.batches, isEmpty);
+      expect(uploader.confirmed, hasLength(1),
+          reason: 'nothing new starts once shut down');
+    });
+
+    test('a run that will not end fails the shutdown instead of passing',
+        () async {
+      uploader.holdConfirm = Completer<void>();
+      co.enqueue(albumId: _album, sources: pick(1));
+      await drain();
+
+      await expectLater(co.shutdown(wait: const Duration(milliseconds: 10)),
+          throwsA(isA<TimeoutException>()));
+      expect(co.state.batches, isNotEmpty,
+          reason: 'nothing is reported cleared while the item still runs');
     });
   });
 }

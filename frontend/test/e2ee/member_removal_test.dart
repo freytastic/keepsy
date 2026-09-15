@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,13 @@ class _Ports {
   Uint8List? droppedToken;
   bool wiped = false;
   bool pending = false;
+  // A committed rotation settles the debt, as the server would report
+  bool rotateClearsPending = true;
+  Object? rotateError;
+  // Another rotation commits while ours is failing
+  bool winnerCommits = false;
+  Completer<void>? rotateGate;
+  int rotations = 0;
 
   // expected IK resolver knobs : by default maps token seed s -> ik seed s|0x80
   // so each recipient's expectedIk is distinguishable. Flip expectedIkThrows to
@@ -33,6 +41,7 @@ class _Ports {
         revoke: (album, token) async {
           calls.add('revoke');
           revokedToken = token;
+          if (revokeResult) pending = true;
           return revokeResult;
         },
         activeTokens: (album) async {
@@ -42,8 +51,17 @@ class _Ports {
         currentEpoch: (album) async => current,
         rotate: (album, epoch, recipients) async {
           calls.add('rotate');
+          rotations++;
+          final gate = rotateGate;
+          if (gate != null) await gate.future;
+          final err = rotateError;
+          if (err != null) {
+            if (winnerCommits) pending = false;
+            throw err;
+          }
           rotatedEpoch = epoch;
           rotatedRecipients = recipients;
+          if (rotateClearsPending) pending = false;
         },
         expectedIk: (album, token) async {
           calls.add('expectedIk');
@@ -58,8 +76,8 @@ class _Ports {
           calls.add('wipeLocalAlbum');
           wiped = true;
         },
-        isPendingRotation: (album) async {
-          calls.add('isPendingRotation');
+        isRotationRequired: (album) async {
+          calls.add('isRotationRequired');
           return pending;
         },
       );
@@ -81,6 +99,7 @@ void main() {
       // member out of the active set before the rotation is accepted)
       expect(p.calls, [
         'revoke',
+        'isRotationRequired',
         'activeTokens',
         'expectedIk',
         'expectedIk',
@@ -133,8 +152,37 @@ void main() {
         throwsA(isA<MissingIdentityPinException>()),
       );
       // resolver was reached, but no MK was ever minted or shipped
-      expect(p.calls, ['revoke', 'activeTokens', 'expectedIk']);
+      expect(p.calls, [
+        'revoke',
+        'isRotationRequired',
+        'activeTokens',
+        'expectedIk',
+        'isRotationRequired'
+      ]);
       expect(p.rotatedRecipients, isNull);
+    });
+
+    test('skips its own rotation when an earlier one already settled the debt',
+        () async {
+      final p = _Ports()..active = [_tok(1)];
+      final coord = p.build();
+      final gate = p.rotateGate = Completer<void>();
+
+      // A background recovery for an earlier departure is mid rotation
+      p.pending = true;
+      final background = coord.recoverIfPending(_album());
+      await Future<void>.delayed(Duration.zero);
+      final kick = coord.kick(_album(), _tok(9));
+      await Future<void>.delayed(Duration.zero);
+      // The kick's rotation waits behind the one in flight
+      expect(p.rotations, 1);
+
+      gate.complete();
+      await background;
+      await kick;
+      expect(p.rotations, 1,
+          reason: 'the queued call re checks and finds nothing owed');
+      expect(p.calls.last, 'dropDirectory');
     });
   });
 
@@ -184,7 +232,7 @@ void main() {
       final did = await p.build().recoverIfPending(_album());
       expect(did, isTrue);
       expect(p.calls, [
-        'isPendingRotation',
+        'isRotationRequired',
         'activeTokens',
         'expectedIk',
         'expectedIk',
@@ -199,7 +247,75 @@ void main() {
       final p = _Ports()..pending = false;
       final did = await p.build().recoverIfPending(_album());
       expect(did, isFalse);
-      expect(p.calls, ['isPendingRotation']);
+      expect(p.calls, ['isRotationRequired']);
+    });
+
+    test('losing the epoch race to another rotation counts as settled',
+        () async {
+      final p = _Ports()
+        ..pending = true
+        ..active = [_tok(1)]
+        ..rotateError = Exception('epoch replay')
+        ..winnerCommits = true;
+
+      final did = await p.build().recoverIfPending(_album());
+
+      expect(did, isFalse);
+      expect(p.calls.last, 'isRotationRequired');
+    });
+
+    test('a failed rotation that is still owed propagates', () async {
+      final p = _Ports()
+        ..pending = true
+        ..active = [_tok(1)]
+        ..rotateError = Exception('network');
+
+      await expectLater(
+        p.build().recoverIfPending(_album()),
+        throwsA(isA<Exception>()),
+      );
+      expect(p.calls, [
+        'isRotationRequired',
+        'activeTokens',
+        'expectedIk',
+        'rotate',
+        'isRotationRequired'
+      ]);
+    });
+
+    test('concurrent calls for one album never rotate twice', () async {
+      final p = _Ports()
+        ..pending = true
+        ..active = [_tok(1)];
+      final coord = p.build();
+      final gate = p.rotateGate = Completer<void>();
+
+      final first = coord.recoverIfPending(_album());
+      final second = coord.recoverIfPending(_album());
+      await Future<void>.delayed(Duration.zero);
+      expect(p.rotations, 1);
+
+      gate.complete();
+      expect(await first, isTrue);
+      expect(await second, isFalse);
+      expect(p.rotations, 1);
+    });
+
+    test('different albums rotate independently', () async {
+      final p = _Ports()
+        ..pending = true
+        ..active = [_tok(1)];
+      final coord = p.build();
+      final gate = p.rotateGate = Completer<void>();
+      p.rotateClearsPending = false;
+
+      final a = coord.recoverIfPending(_album(0xA1));
+      final b = coord.recoverIfPending(_album(0xB2));
+      await Future<void>.delayed(Duration.zero);
+      expect(p.rotations, 2, reason: 'album B must not wait on album A');
+
+      gate.complete();
+      await Future.wait([a, b]);
     });
   });
 }

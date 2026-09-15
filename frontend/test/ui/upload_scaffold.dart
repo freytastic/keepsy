@@ -18,15 +18,26 @@ class _NoSources implements PickedSourceStore {
 
 class _NoPreparer implements MediaPreparer {
   @override
-  Future<int> latestEpoch(String albumId) async => 0;
-  @override
-  Future<UploadEnvelope> prepare({
+  Future<SealedUpload> seal({
+    required String itemId,
     required String albumId,
     required MediaId mediaId,
     required Uint8List plaintext,
     required String mimeType,
   }) =>
       throw UnimplementedError();
+  @override
+  Future<UploadEnvelope> wrap({
+    required String itemId,
+    required String albumId,
+  }) =>
+      throw UnimplementedError();
+  @override
+  Future<List<SealedUpload>> restore() async => const [];
+  @override
+  Future<void> discardSealed(String itemId) async {}
+  @override
+  Future<void> discardAlbum(String albumId) async {}
 }
 
 class _NoUploader implements StagedUploader {

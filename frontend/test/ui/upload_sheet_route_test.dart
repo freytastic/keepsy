@@ -250,14 +250,15 @@ void main() {
     await tester.pump(Duration.zero);
     await pumpNestedHost(tester, id);
 
-    sources.holdDiscard = Completer<void>();
+    // The pick was freed at sealing, so removal waits on the outbox entry
+    preparer.holdDiscardSealed = Completer<void>();
     await tester.tap(find.text('Remove them'));
     await tester.pump();
 
     Navigator.of(tester.element(find.text('album'))).pop();
     await tester.pumpAndSettle();
 
-    sources.holdDiscard!.complete();
+    preparer.holdDiscardSealed!.complete();
     await tester.pumpAndSettle();
 
     expect(find.text('album'), findsOneWidget,

@@ -72,9 +72,27 @@ class SealedSeenStore extends ChangeNotifier implements SeenStore {
 
   @override
   Future<void> forget(String albumId) async {
-    if (_seen.remove(albumId) == null) return;
+    if (_seen.remove(albumId) == null && !_writeFailed) return;
     notifyListeners();
-    _scheduleFlush();
+    // Awaited so album removal can see whether the watermark left the disk
+    await flush();
+  }
+
+  bool _writeFailed = false;
+
+  bool holdsAlbum(String albumId) => _writeFailed || _seen.containsKey(albumId);
+
+  // Account deletion only. Waits out any pending write so it cannot recreate the file
+  Future<void> clear() async {
+    _flush?.cancel();
+    _seen.clear();
+    try {
+      await _inFlight;
+    } catch (_) {}
+    try {
+      if (await _file.exists()) await _file.delete();
+    } catch (_) {}
+    notifyListeners();
   }
 
   void _scheduleFlush() {
@@ -98,8 +116,10 @@ class SealedSeenStore extends ChangeNotifier implements SeenStore {
       final tmp = File('${_file.path}.tmp');
       await tmp.writeAsBytes(wire, flush: true);
       await tmp.rename(_file.path);
+      _writeFailed = false;
     } catch (_) {
       // Failed persistence may reannounce frames but cannot hide them
+      _writeFailed = true;
     }
   }
 

@@ -9,14 +9,17 @@ class ApiClient {
   final StorageService _storage = StorageService();
   static Future<bool>? _refreshFuture;
 
-  // Set once at startup. Fired when any album scoped request comes back
-  // E_MEMBER_REVOKED : RequireMember only returns that for the *caller's* own
-  // revoked membership, so this is the durable 403 fallback for the removed
-  // device when the live member_revoked WS event was missed. The argument is
-  // the album id parsed from the request path
+  // Turns a missed realtime revocation into durable local cleanup
   static void Function(String albumId)? onMemberRevoked;
 
+  // Turns a missed album deletion into durable local cleanup
+  static void Function(String albumId)? onNotMember;
+
   static final RegExp _albumIdRe = RegExp(r'/albums/([0-9a-fA-F-]{36})');
+
+  // Prevents the old service graph from reaching the server after a wipe
+  static bool _terminated = false;
+  static void terminate() => _terminated = true;
 
   Future<Map<String, String>> _headers() async {
     final token = await _storage.getToken();
@@ -83,6 +86,7 @@ class ApiClient {
 
   Future<http.Response> _sendWithRetry(String method, String path,
       String traceId, Future<http.Response> Function() requestAction) async {
+    if (_terminated) throw StateError('api client terminated');
     final span = Trace.start('api.request', traceId: traceId, fields: {
       'method': method,
       'route': _routeOf(path),
@@ -115,9 +119,10 @@ class ApiClient {
         if (refreshed) 'refreshed': true,
       });
       final err = ApiError.fromResponse(response);
-      if (err.code == 'E_MEMBER_REVOKED' && onMemberRevoked != null) {
-        final m = _albumIdRe.firstMatch(path);
-        if (m != null) onMemberRevoked!(m.group(1)!);
+      final album = _albumIdRe.firstMatch(path)?.group(1);
+      if (album != null) {
+        if (err.code == 'E_MEMBER_REVOKED') onMemberRevoked?.call(album);
+        if (err.code == 'E_NOT_MEMBER') onNotMember?.call(album);
       }
       throw err;
     } catch (error) {

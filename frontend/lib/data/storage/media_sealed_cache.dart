@@ -9,16 +9,13 @@ import 'package:sqflite/sqflite.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/domain/albums/album_cleanup.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 
 import 'media_cache_key.dart';
 import 'media_catalog.dart';
 
-// L2 disk cache : each blob is sealed under cache_root_key as the Aead wire
-// VER‖NONCE‖TAG‖CT, NOT the S3 ciphertext. readBlob/writeBlob deal in
-// plaintext, seal/unseal is internal. A filesystem dump yields opaque blobs
-// AAD = media_id‖asset binds a file to its slot so a swapped blob auth-fails
-// records.db doubles as the LRU access time index (size = sealed footprint)
+// Seals cached plaintext to its media and asset slot under the device cache key
 
 const String _formatSentinel = 'format_v3';
 
@@ -27,6 +24,15 @@ const String _createAlbums = '''
     album_id   TEXT PRIMARY KEY,
     album_json TEXT NOT NULL,
     sort_index INTEGER NOT NULL
+  )
+''';
+
+// Albums whose local data must still be wiped, kept until a wipe finishes
+const String _createAlbumCleanup = '''
+  CREATE TABLE album_cleanup (
+    album_id  TEXT PRIMARY KEY,
+    confirmed INTEGER NOT NULL,
+    version   INTEGER NOT NULL DEFAULT 0
   )
 ''';
 
@@ -40,7 +46,8 @@ const String _createCovers = '''
   )
 ''';
 
-class MediaSealedCache implements MediaCatalog, AlbumCatalog {
+class MediaSealedCache
+    implements MediaCatalog, AlbumCatalog, AlbumCleanupStore {
   // Full photos are disposable while the database and thumbnails are durable
   final Directory _root;
   final Directory _durableRoot;
@@ -76,7 +83,7 @@ class MediaSealedCache implements MediaCatalog, AlbumCatalog {
     if (!durable.existsSync()) durable.createSync(recursive: true);
     final db = await openDatabase(
       p.join(durable.path, 'records.db'),
-      version: 4,
+      version: 6,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE media_records (
@@ -95,6 +102,7 @@ class MediaSealedCache implements MediaCatalog, AlbumCatalog {
             'CREATE INDEX idx_records_access ON media_records(last_access)');
         await db.execute(_createCovers);
         await db.execute(_createAlbums);
+        await db.execute(_createAlbumCleanup);
       },
       onUpgrade: (db, from, to) async {
         if (from < 2) await db.execute(_createCovers);
@@ -104,6 +112,11 @@ class MediaSealedCache implements MediaCatalog, AlbumCatalog {
               'ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0');
         }
         if (from < 4) await db.execute(_createAlbums);
+        if (from < 5) await db.execute(_createAlbumCleanup);
+        if (from == 5) {
+          await db.execute('ALTER TABLE album_cleanup '
+              'ADD COLUMN version INTEGER NOT NULL DEFAULT 0');
+        }
       },
     );
     final cache = MediaSealedCache._(
@@ -128,6 +141,41 @@ class MediaSealedCache implements MediaCatalog, AlbumCatalog {
       }
     }
     return out;
+  }
+
+  @override
+  Future<Map<String, CleanupRecord>> pending() async {
+    final rows = await _db.query('album_cleanup');
+    return {
+      for (final r in rows)
+        r['album_id'] as String: (
+          confirmed: (r['confirmed'] as int) != 0,
+          version: r['version'] as int,
+        ),
+    };
+  }
+
+  // Avoids UPSERT, which older Android SQLite lacks
+  @override
+  Future<void> put(String albumId, {required bool confirmed}) async {
+    await _db.transaction((txn) async {
+      await txn.rawInsert(
+        'INSERT OR IGNORE INTO album_cleanup (album_id, confirmed, version) '
+        'VALUES (?, 0, -1)',
+        [albumId],
+      );
+      await txn.rawUpdate(
+        'UPDATE album_cleanup SET confirmed = MAX(confirmed, ?), '
+        'version = version + 1 WHERE album_id = ?',
+        [confirmed ? 1 : 0, albumId],
+      );
+    });
+  }
+
+  @override
+  Future<void> removeIfUnchanged(String albumId, int version) async {
+    await _db.delete('album_cleanup',
+        where: 'album_id = ? AND version = ?', whereArgs: [albumId, version]);
   }
 
   @override
@@ -438,17 +486,19 @@ class MediaSealedCache implements MediaCatalog, AlbumCatalog {
     return [for (final r in rows) r['media_id'] as String];
   }
 
+  // Files go first: a failed delete then leaves the record behind, which keeps
+  // the blob findable for the next attempt
   Future<void> invalidate(String mediaId) async {
-    await _db
-        .delete('media_records', where: 'media_id = ?', whereArgs: [mediaId]);
-    await _db
-        .delete('album_covers', where: 'media_id = ?', whereArgs: [mediaId]);
     for (final asset in CacheAsset.values) {
       final name =
           asset == CacheAsset.thumb ? '$mediaId.thumb.kec' : '$mediaId.kec';
       final f = File(p.join(_rootFor(asset).path, name));
       if (f.existsSync()) f.deleteSync();
     }
+    await _db
+        .delete('media_records', where: 'media_id = ?', whereArgs: [mediaId]);
+    await _db
+        .delete('album_covers', where: 'media_id = ?', whereArgs: [mediaId]);
   }
 
   Future<void> clearAlbum(String albumId) async {

@@ -76,6 +76,35 @@ void main() {
   Future<MediaSealedCache> openCache() => MediaSealedCache.open(
       rootDir: disposable, durableDir: durable, cacheRootKey: _key());
 
+  test('a cleanup record is only released at the version that was read',
+      () async {
+    final c = await openCache();
+    addTearDown(c.close);
+    await c.put('a1', confirmed: false);
+    final probed = (await c.pending())['a1']!;
+
+    // A removal event lands while the membership probe is still out
+    await c.put('a1', confirmed: true);
+    await c.removeIfUnchanged('a1', probed.version);
+    expect((await c.pending())['a1']?.confirmed, isTrue,
+        reason: 'the stale probe must not delete the confirmed record');
+
+    await c.put('a1', confirmed: false);
+    final now = (await c.pending())['a1']!;
+    expect(now.confirmed, isTrue, reason: 'confirmation is never downgraded');
+    await c.removeIfUnchanged('a1', now.version);
+    expect(await c.pending(), isEmpty);
+  });
+
+  test('cleanup records survive a restart', () async {
+    var c = await openCache();
+    await c.put('a1', confirmed: true);
+    await c.close();
+    c = await openCache();
+    addTearDown(c.close);
+    expect((await c.pending())['a1']?.confirmed, isTrue);
+  });
+
   test('the album shelf survives a restart with its order intact', () async {
     var c = await openCache();
     await c.saveAlbums([_album('a1', nameCt: 'n1'), _album('a2')]);

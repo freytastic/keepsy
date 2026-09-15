@@ -73,16 +73,21 @@ class FakePreparer implements MediaPreparer {
   int epoch = 3;
   int blob = 1000;
   int thumb = 100;
-  final List<MediaId> prepared = [];
+  final List<MediaId> sealedIds = [];
+  final List<MediaId> wrapped = [];
+  // Item ids with a durable outbox entry
+  final Set<String> stored = {};
+  final List<String> discardedAlbums = [];
+  List<SealedUpload> leftovers = [];
+  final Map<String, MediaId> _mediaOf = {};
+  final Map<String, String> _albumOf = {};
   UploadStageException? failWith;
   Completer<void>? holdPrepare;
   void Function()? onPrepared;
 
   @override
-  Future<int> latestEpoch(String albumId) async => epoch;
-
-  @override
-  Future<UploadEnvelope> prepare({
+  Future<SealedUpload> seal({
+    required String itemId,
     required String albumId,
     required MediaId mediaId,
     required Uint8List plaintext,
@@ -95,8 +100,57 @@ class FakePreparer implements MediaPreparer {
       failWith = null;
       throw f;
     }
-    prepared.add(mediaId);
-    return envelopeFor(mediaId, blob: blob, thumb: thumb, epoch: epoch);
+    sealedIds.add(mediaId);
+    _remember(itemId, albumId, mediaId);
+    return SealedUpload(
+      itemId: itemId,
+      albumId: albumId,
+      mediaId: mediaId,
+      payloadByteLength: blob + thumb,
+      thumbPreview: thumb == 0 ? null : _fill(thumb),
+    );
+  }
+
+  @override
+  Future<UploadEnvelope> wrap({
+    required String itemId,
+    required String albumId,
+  }) async {
+    if (!stored.contains(itemId)) {
+      throw const UploadStageException(
+          UploadFailureKind.sourceMissing, 'sealed_missing');
+    }
+    final id = _mediaOf[itemId]!;
+    wrapped.add(id);
+    return envelopeFor(id, blob: blob, thumb: thumb, epoch: epoch);
+  }
+
+  @override
+  Future<List<SealedUpload>> restore() async {
+    for (final s in leftovers) {
+      _remember(s.itemId, s.albumId, s.mediaId);
+    }
+    return List.of(leftovers);
+  }
+
+  Completer<void>? holdDiscardSealed;
+
+  @override
+  Future<void> discardSealed(String itemId) async {
+    if (holdDiscardSealed != null) await holdDiscardSealed!.future;
+    stored.remove(itemId);
+  }
+
+  @override
+  Future<void> discardAlbum(String albumId) async {
+    discardedAlbums.add(albumId);
+    stored.removeWhere((id) => _albumOf[id] == albumId);
+  }
+
+  void _remember(String itemId, String albumId, MediaId mediaId) {
+    stored.add(itemId);
+    _mediaOf[itemId] = mediaId;
+    _albumOf[itemId] = albumId;
   }
 }
 

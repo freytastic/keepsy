@@ -36,6 +36,7 @@ import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/invite.dart';
 import 'package:keepsy/e2ee/member_removal.dart';
+import 'package:keepsy/e2ee/rotation_recovery.dart';
 import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
@@ -92,6 +93,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // _appState is captured in didChangeDependencies for symmetric add/remove
   String? _lastSeenMediaAddedId;
   int _lastSeenMemberTick = 0;
+  int _lastSeenMediaRemovedTick = 0;
   // set once this screen has begun exiting (kicked, or a voluntary leave) so
   // the AppState listener never double pops
   bool _accessLost = false;
@@ -348,17 +350,22 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final s = _appState;
     if (s == null) return;
 
-    // This album was removed for me (kicked while viewing, or a missed WS event
-    // recovered via the 403 fallback) : exit the screen instead of showing
-    // stale content. Guarded so a voluntary leave (which sets _accessLost
-    // first) doesnt get the "you were removed" treatment or a double pop
+    // Exit on external access loss without double-popping a voluntary leave
     if (!_accessLost && s.lastRemovedAlbumId == widget.album.id) {
       _accessLost = true;
       final nav = Navigator.of(context);
       final messenger = ScaffoldMessenger.of(context);
       if (nav.canPop()) nav.pop();
-      messenger.showSnackBar(_note('You were removed from this album'));
+      messenger.showSnackBar(_note(s.wasDeleted(widget.album.id)
+          ? 'This album was deleted'
+          : 'You were removed from this album'));
       return;
+    }
+
+    if (s.lastMediaRemovedAlbumId == widget.album.id &&
+        s.mediaRemovedTick != _lastSeenMediaRemovedTick) {
+      _lastSeenMediaRemovedTick = s.mediaRemovedTick;
+      _loadMedia();
     }
 
     // a member joined or was revoked in this album : refresh the roster so a
@@ -379,10 +386,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
-  // memberToken -> (decrypted name, the name_ct it came from). The name_ct is
-  // kept so a rename (new name_ct) invalidates the stale cached name instead of
-  // showing it : a member whose ct no longer matches falls back to "Member"
-  // until the new name decrypts
+  // Ciphertext fingerprints prevent stale decrypted names after a rename
   final Map<String, ({String name, String ct})> _memberNames = {};
 
   // Never surface the raw token slice : and never a stale name after a rename
@@ -415,9 +419,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       });
       unawaited(_resolveMemberNames(members));
       unawaited(_reconcileTrust(members));
-      // As an admin, finish any rotation left pending by a crashed kick or a
-      // member who left while no admin was online
-      unawaited(_maybeRecoverPending());
     }
   }
 
@@ -477,6 +478,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final states = await trust.reconcile(albumIdBytes, peers,
           myMemberToken: widget.album.memberToken);
       if (mounted && !_accessLost) setState(() => _trust = states);
+      // Fresh roster pins may be what a failed rotation was missing
+      if (mounted &&
+          _appState?.rotationFor(widget.album.id)?.failure ==
+              RotationFailure.identityUnconfirmed) {
+        unawaited(_retryRotation());
+      }
     } catch (_) {
       // trust display : never break the album on it
     }
@@ -642,10 +649,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     return null;
   }
 
-  bool get _viewerIsAdmin {
-    final r = _me?.role;
-    return r == 'admin' || r == 'co-admin';
-  }
+  // The dormant co-admin role grants nothing in Beta V1
+  bool get _viewerIsAdmin => _me?.role == 'admin';
 
   // Mirrors the server's last admin guard: only role=='admin' counts (a
   // co admin can't rotate a keyless album), revoked rows dont
@@ -655,18 +660,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool get _hasOtherActiveMembers => _members
       .any((m) => !m.revoked && m.memberToken != widget.album.memberToken);
 
-  Future<void> _maybeRecoverPending() async {
-    if (!_viewerIsAdmin) return;
-    final albumIdBytes = _uuidStringToBytes(widget.album.id);
+  Future<void> _retryRotation() async {
+    final albumIdBytes = uuidToBytes(widget.album.id);
     if (albumIdBytes == null) return;
+    RotationRecoveryScheduler scheduler;
     try {
-      final did = await context
-          .read<MemberRemovalCoordinator>()
-          .recoverIfPending(albumIdBytes);
-      if (did && mounted) await _loadMembers();
+      scheduler = context.read<RotationRecoveryScheduler>();
     } catch (_) {
-      // the upload freeze still protects content until it heals
+      return; // widget tests that dont install the provider
     }
+    await scheduler.request(albumIdBytes);
   }
 
   Future<void> _kick(AlbumMember m) async {
@@ -791,8 +794,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   // §6.1 : invite an existing keepsy user by their keepsy_id. The server gates
-  // the actual add to admin/co-admin : a non-admin caller surfaces the generic
-  // error in the dialog (i think i might need to come back on this later)
+  // the actual add to the admin : a non-admin caller surfaces the generic
+  // error in the dialog
   Future<void> _openAddMember() async {
     final albumIdBytes = _uuidStringToBytes(widget.album.id);
     if (albumIdBytes == null) return;
@@ -978,6 +981,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     // A block survives failed sync attempts and disables uploads until a
     // successful catch up reaches the refused epoch
     final keyBlock = state.keyBlockFor(widget.album.id);
+    final rotation = state.rotationFor(widget.album.id);
 
     // Only surface a resolved name whose fingerprint still matches the member's
     // current name_ct : a renamed member falls back to "Member" until re resolved
@@ -1042,6 +1046,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     onVerify: () => _verifyBlockingSigner(keyBlock),
                     onRetry: _retryKeySync,
                   ),
+                ),
+              if (rotation != null && keyBlock == null)
+                SliverToBoxAdapter(
+                  child: _RotationBanner(
+                      status: rotation, onRetry: _retryRotation),
                 ),
               if (_changedKeyMembers.isNotEmpty)
                 SliverToBoxAdapter(
@@ -1593,6 +1602,75 @@ class _KeyChangeBanner extends StatelessWidget {
             const Icon(Icons.chevron_right, size: 16, color: Warm.inkFaint),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// An owed key rotation. The server holds new photos until it commits
+class _RotationBanner extends StatelessWidget {
+  final RotationStatus status;
+  final Future<void> Function() onRetry;
+
+  const _RotationBanner({required this.status, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    const amber = Color(0xFFF59E0B);
+    final text = switch (status.phase) {
+      RotationPhase.rotating => 'Securing this album’s keys…',
+      RotationPhase.failed =>
+        status.failure == RotationFailure.identityUnconfirmed
+            ? 'New photos are paused. A member’s identity key could not be '
+                'confirmed, so this album’s new key was not sent.'
+            : 'New photos are paused. This album’s new key could not be '
+                'sent yet.',
+      _ => 'Waiting for secure key rotation. New photos are shared once the '
+          'album admin’s phone is online.',
+    };
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: amber.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (status.phase == RotationPhase.rotating)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                )
+              else
+                const Icon(Icons.lock_outline, size: 16, color: amber),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style: const TextStyle(
+                      color: Warm.ink, fontSize: 12, height: 1.35),
+                ),
+              ),
+            ],
+          ),
+          if (status.phase == RotationPhase.failed)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onRetry,
+                child: const Text('Retry key rotation',
+                    style: TextStyle(fontSize: 12)),
+              ),
+            ),
+        ],
       ),
     );
   }

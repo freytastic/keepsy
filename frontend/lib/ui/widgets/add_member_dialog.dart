@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
 
-// §6.1 invite dialog. Accepts a keepsy_id as XXXX-XXXX or raw, normalizes +
-// validates client-side, then hands the canonical handle to onInvite (which runs
-// the X3DH delivery). Pops true on success. Kept dependency-light + callback-
-// driven so it can be widget-tested without the full e2ee stack
+// Normalizes a keepsy ID before handing it to the X3DH invite flow
 class AddMemberDialog extends StatefulWidget {
   final Future<void> Function(String keepsyId) onInvite;
   const AddMemberDialog({super.key, required this.onInvite});
@@ -45,6 +43,15 @@ class _AddMemberDialogState extends State<AddMemberDialog> {
         setState(() {
           _busy = false;
           _error = 'No keepsy user with that ID';
+        });
+      }
+    } on ApiError catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = e.code == 'E_EPOCH_PENDING_ROTATION'
+              ? "This album's keys are updating. Invite them once that finishes."
+              : 'Could not send invite. Try again.';
         });
       }
     } catch (_) {

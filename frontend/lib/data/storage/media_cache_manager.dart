@@ -12,11 +12,7 @@ import 'media_cache_key.dart';
 import 'media_plaintext_cache.dart';
 import 'media_sealed_cache.dart';
 
-// Composes L1 (RAM plaintext) + L2 (disk plaintext sealed under cache_root_key)
-// + L3 (S3 via MediaApi). The warm L2 path is pure cache_root_key CPU : no
-// useMk, no AndroidKeyStore IPC. useMk is paid once per photo on the L3
-// cold-fill path (the DEK unwrap), then the plaintext is sealed into L2 so
-// every later read stays warm
+// Keeps plaintext in RAM and sealed plaintext on disk after the first MK unwrap
 
 class MediaCacheManager {
   final MediaPlaintextCache _l1;
@@ -24,12 +20,10 @@ class MediaCacheManager {
   final MediaApiInterface _api;
   final AlbumKeyStore _aks;
 
-  // In flight dedupe : two callers asking for the same key collapse into one
-  // operation. _inflightPt covers the full path, _inflightCt covers just the
-  // L3 fetch + decrypt + seal (saves a redundant S3 GET + useMk when a widget
-  // races acceptNewMedia for the same blob)
+  // Separate in-flight maps deduplicate the full read and cold-fill paths
   final Map<MediaCacheKey, Future<Uint8List>> _inflightPt = {};
   final Map<MediaCacheKey, Future<Uint8List>> _inflightCt = {};
+  bool _closed = false;
 
   MediaCacheManager({
     required MediaPlaintextCache plaintext,
@@ -42,6 +36,7 @@ class MediaCacheManager {
         _aks = aks;
 
   Future<Uint8List> getDecrypted(MediaRecord r, {required bool thumb}) async {
+    if (_closed) throw StateError('media cache is shut down');
     final k = MediaCacheKey(
       albumId: r.albumId,
       mediaId: r.id,
@@ -86,7 +81,7 @@ class MediaCacheManager {
       Trace.event('media.get', fields: {..._keyFields(k), 'tier': 'l2'});
     }
     final pt = disk ?? await _coldFill(r, k, thumb: thumb);
-    _l1.put(k, pt);
+    if (!_closed) _l1.put(k, pt);
     return pt;
   }
 
@@ -97,9 +92,7 @@ class MediaCacheManager {
         'asset': k.asset == CacheAsset.thumb ? 'thumb' : 'file',
       };
 
-  // L3 cold fill : fetch S3 ciphertext, unwrap+decrypt via FileDecryptor (the
-  // one useMk per photo), then seal the plaintext into L2. Concurrent callers
-  // for the same key collapse to a single fetch+decrypt via _inflightCt
+  // Cold fills perform one fetch, MK unwrap and sealed-cache write per key
   Future<Uint8List> _coldFill(MediaRecord r, MediaCacheKey k,
       {required bool thumb}) async {
     final pending = _inflightCt[k];
@@ -183,12 +176,9 @@ class MediaCacheManager {
         aks: _aks, record: r, presignedUrl: 'cache://', download: stub);
   }
 
-  // Warms L2 on e2ee.media_added with ONLY the thumbnail (~20KB) so the grid
-  // tile is an instant plaintext hit when the album opens, at one useMk. The
-  // full file is deliberately NOT prefetched : it loads
-  // lazily on demand the first time the user opens the photo (EncryptedImage)
-  // The WS payload embeds the full record so we skip the listMedia roundtrip
+  // Realtime events warm only thumbnails and leave full photos on demand
   Future<void> acceptNewMedia(MediaRecord r) async {
+    if (_closed) return;
     try {
       await _l2.writeRecord(r);
       if (!r.hasThumb) return;
@@ -218,10 +208,7 @@ class MediaCacheManager {
     } catch (_) {}
   }
 
-  // Uploader side seed : after PUT+confirm the plaintext is still in process
-  // memory. Seal it into L2 + put in L1 so the grid rebuild hits cache (~0ms)
-  // instead of paying L3 + decrypt for content the uploader just produced. No
-  // useMk : we already hold the plaintext
+  // Seed caches from upload plaintext without another fetch or MK unwrap
   // Skip full size L1 inserts during batches to avoid evicting visible media
   Future<void> seedFromUpload({
     required String albumId,
@@ -229,6 +216,7 @@ class MediaCacheManager {
     required String uploaderToken,
     bool fullToL1 = true,
   }) async {
+    if (_closed) return;
     final mid = env.mediaIdString;
     // Persist the record before its blobs so uploads can render offline
     await _l2.writeRecord(MediaRecord(
@@ -258,8 +246,11 @@ class MediaCacheManager {
           epochTag: env.epoch,
           asset: CacheAsset.file,
         );
-        if (fullToL1) _l1.put(fileK, env.filePlaintext);
-        await _l2.writeBlob(fileK, env.filePlaintext);
+        final file = env.filePlaintext;
+        if (file != null) {
+          if (fullToL1 && !_closed) _l1.put(fileK, file);
+          await _l2.writeBlob(fileK, file);
+        }
         if (env.hasThumb && env.thumbPlaintext != null) {
           final thumbK = MediaCacheKey(
             albumId: albumId,
@@ -267,14 +258,14 @@ class MediaCacheManager {
             epochTag: env.epoch,
             asset: CacheAsset.thumb,
           );
-          _l1.put(thumbK, env.thumbPlaintext!);
+          if (!_closed) _l1.put(thumbK, env.thumbPlaintext!);
           await _l2.writeBlob(thumbK, env.thumbPlaintext!);
         }
       },
       fields: {
         'album': Trace.id(albumId),
         'media': Trace.id(mid),
-        'file_bytes': env.filePlaintext.length,
+        'file_bytes': env.filePlaintext?.length ?? 0,
         'thumb_bytes': env.thumbPlaintext?.length ?? 0,
       },
     );
@@ -297,5 +288,17 @@ class MediaCacheManager {
   Future<void> clearAll() async {
     _l1.clearAll();
     await _l2.clearAll();
+  }
+
+  // Refuses wipe success while a download may still write plaintext
+  Future<void> shutdown({Duration wait = const Duration(seconds: 20)}) async {
+    _closed = true;
+    try {
+      final running = [..._inflightPt.values, ..._inflightCt.values];
+      await Future.wait(running.map((f) => f.then((_) {}, onError: (_) {})))
+          .timeout(wait);
+    } finally {
+      _l1.wipe();
+    }
   }
 }

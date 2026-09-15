@@ -100,4 +100,21 @@ void main() {
     expect(f.existsSync(), isFalse);
     expect(c.get(NameCache.albumKey('A'), 'ct'), isNull);
   });
+
+  test('a failed write keeps the album counted as held until one succeeds',
+      () async {
+    final c = await NameCache.open(file: nameFile(), cacheRootKey: _key(1));
+    c.put(NameCache.albumKey('a1'), 'Trip', 'ct');
+    await c.flush();
+    // The directory vanishing makes the next write fail
+    dir.deleteSync(recursive: true);
+
+    await c.clearAlbum('a1');
+    expect(c.holdsAlbum('a1'), isTrue,
+        reason: 'the old file may still carry the name');
+
+    dir.createSync();
+    await c.clearAlbum('a1');
+    expect(c.holdsAlbum('a1'), isFalse);
+  });
 }

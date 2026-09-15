@@ -3,10 +3,7 @@ import 'dart:typed_data';
 import 'package:keepsy/secure_store/key_handle.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
 
-// MK_epoch store keyed on (albumId, epoch). Persists each MK under a fixed
-// label scheme (D6) so re init can rebuild the in memory presence map by
-// listing the SecureKeyStore. Replay/downgrade rule lives in installVerified
-// (spec §7.3) : useMk<T> is the ONLY public surface for MK bytes (D2)
+// Persists MKs by album and epoch while exposing bytes only through useMk
 
 const String kAlbumLabelPrefix = 'keepsy.album.';
 
@@ -19,10 +16,7 @@ class AlbumKeyStore {
 
   AlbumKeyStore(this._store);
 
-  // Rebuilds presence from any keepsy.album.<hex>.mk.<epoch> labels already
-  // in the SecureKeyStore. Runs once : every public method awaits this, so
-  // there is no separate "call initialize() first" contract. A failed init
-  // is not cached, so the next call retries
+  // Failed initialization is not cached so the next call can retry
   Future<void> initialize() {
     return _initFuture ??= _rebuildPresence().catchError((Object e) {
       _initFuture = null;
@@ -61,6 +55,7 @@ class AlbumKeyStore {
     if (mk.length != 32) {
       throw ArgumentError('mk must be 32 bytes, got ${mk.length}');
     }
+    if (_closed) throw StateError('album key store is closed');
     final hex = _hex(albumId);
     final label = '$kAlbumLabelPrefix$hex.mk.$epoch';
     final h = await _store.put(label, mk);
@@ -111,19 +106,26 @@ class AlbumKeyStore {
     await install(albumId, epoch, mk);
   }
 
-  // Removes every MK for one album (all keepsy.album.<hex>.mk.* labels) from
-  // the SecureKeyStore and the presence map. Used by the removed-device wipe:
-  // when this client learns it was revoked from an album it drops the album's
-  // keys so it can never derive anything under them again. No op when the album
-  // has no MKs
+  bool _closed = false;
+
+  // Closing first prevents a late install from recreating wiped key state
+  void forgetAll() {
+    _closed = true;
+    _present.clear();
+  }
+
+  // Deletes each MK before dropping its in-memory handle
   Future<void> deleteAlbumMKs(Uint8List albumId) async {
     await initialize();
     final hex = _hex(albumId);
-    final handles = _present.remove(hex);
+    final handles = _present[hex];
     if (handles == null) return;
-    for (final h in handles.values) {
-      await _store.delete(h);
+    // Forget each key only once deleted, so a failure stays visible to a retry
+    for (final epoch in handles.keys.toList()) {
+      await _store.delete(handles[epoch]!);
+      handles.remove(epoch);
     }
+    _present.remove(hex);
   }
 
   // Only public surface for MK bytes (D2). Mirrors SecureKeyStore.use<T> :

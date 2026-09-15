@@ -91,6 +91,8 @@ class UploadItem {
   final int manualRetries;
   final UploadFailure? failure;
   final bool sourceDiscarded;
+  // Encrypted and durably stored, so only the key wrap and send remain
+  final bool sealed;
 
   const UploadItem({
     required this.id,
@@ -106,6 +108,7 @@ class UploadItem {
     this.manualRetries = 0,
     this.failure,
     this.sourceDiscarded = false,
+    this.sealed = false,
   });
 
   bool get isFinished =>
@@ -124,6 +127,7 @@ class UploadItem {
     UploadFailure? failure,
     bool clearFailure = false,
     bool? sourceDiscarded,
+    bool? sealed,
   }) =>
       UploadItem(
         id: id,
@@ -139,5 +143,6 @@ class UploadItem {
         manualRetries: manualRetries ?? this.manualRetries,
         failure: clearFailure ? null : (failure ?? this.failure),
         sourceDiscarded: sourceDiscarded ?? this.sourceDiscarded,
+        sealed: sealed ?? this.sealed,
       );
 }
