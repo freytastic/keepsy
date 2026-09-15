@@ -21,6 +21,7 @@ const maxKeepsyIDAttempts = 5
 
 var (
 	ErrInvalidOTP      = errors.New("invalid or expired OTP")
+	ErrAccountDeleting = errors.New("account is being deleted")
 	ErrTooManyRequests = errors.New("too many requests, please try again later")
 )
 
@@ -132,6 +133,9 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 			log.Printf("VerifyOTP: user fetch failed: %v", err)
 			return "", err
 		}
+	}
+	if user.DeletingAt != nil {
+		return "", ErrAccountDeleting
 	}
 
 	token, err := generateToken(32)

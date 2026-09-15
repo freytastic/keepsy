@@ -133,6 +133,7 @@ func TestDeliverExistingUser_Validation(t *testing.T) {
 		wantCode string
 	}{
 		{"non-admin", "member", 2, nil, nil, "E_FORBIDDEN"},
+		{"co-admin", "co-admin", 2, nil, nil, "E_FORBIDDEN"},
 		{"unknown handle", "admin", 2, nil, repository.ErrUserNotFound, "E_NOT_FOUND"},
 		{"malformed handle", "admin", 2, func(in *DeliverExistingUserInput) { in.TargetKeepsyID = "!!!" }, nil, "E_NOT_FOUND"},
 		{"max epoch below current (replay)", "admin", 2, func(in *DeliverExistingUserInput) { in.Envelopes = envs(0, 1) }, nil, "E_EPOCH_REPLAY"},

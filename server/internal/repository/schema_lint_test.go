@@ -1,6 +1,3 @@
-// No i don't even trust myself to remember every rule 100% of the time
-// that i created myself.
-
 package repository_test
 
 import (
@@ -11,18 +8,17 @@ import (
 	"testing"
 )
 
-// only these tables may FK to users(id). Any other reference leaks
-// the user→album linkage that the pseudonymous token model is designed to
-// hide. If u need to add a new table, prove the privacy story first
+// New users(id) foreign keys must preserve the pseudonymous album boundary
 var allowedUserFKTables = map[string]bool{
 	"sessions":         true,
 	"one_time_prekeys": true,
 	"spk_rotations":    true,
+	// Holds no album reference, only that an account is being deleted
+	"account_deletions": true,
 }
 
 func TestMigrationsRespectUserFKAllowlist(t *testing.T) {
-	// every *.up.sql under migrations/ contributes tables : the allowlist must
-	// stay closed across the whole history, not just the initial schema
+	// Check the allowlist against every migration, not only the initial schema
 	matches, err := filepath.Glob("../../migrations/*.up.sql")
 	if err != nil {
 		t.Fatalf("glob migrations: %v", err)

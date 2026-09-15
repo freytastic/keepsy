@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -22,21 +21,14 @@ import (
 // PresignTTL covers the largest transfer at the client's 64 KiB/s floor
 const PresignTTL = 30 * time.Minute
 
-// EpochLookup is the slice of *epoch.Repo this service needs : keeps the dep
-// surface small + lets tests stub without pulling pgx
 type EpochLookup interface {
 	CurrentEpoch(ctx context.Context, albumID uuid.UUID) (epoch int, exists bool, startedAt time.Time, err error)
-	// tells whether the album's live active member set differs
-	// from the current epoch's recipient set : true during the window between a
-	// revoke and the admin's rotation
-	PendingRotation(ctx context.Context, albumID uuid.UUID) (bool, error)
+	// true between a revoke and the next committed epoch
+	RotationRequired(ctx context.Context, albumID uuid.UUID) (bool, error)
 }
 
-// MediaStore is the slice of *repository.MediaRepository the service needs
 type MediaStore interface {
-	// it inserts the pending row under the albums row lock,
-	// re checking (atomically with the insert) that epochTag is still current
-	// and that no rotation is pending
+	// Rechecks epoch and rotation debt under the album lock
 	ReserveUploadRow(ctx context.Context, m *model.Media, epochTag int) error
 	MarkConfirmed(ctx context.Context, mediaID, albumID, reservationID uuid.UUID) (int64, error)
 	MediaGeneration(ctx context.Context, albumID uuid.UUID) (int64, error)
@@ -47,11 +39,9 @@ type MediaStore interface {
 	RescheduleObjectCleanupKey(ctx context.Context, key string) (int, error)
 	GetByID(ctx context.Context, mediaID, albumID uuid.UUID) (*model.Media, error)
 	ListConfirmed(ctx context.Context, albumID uuid.UUID) ([]model.Media, error)
-	Delete(ctx context.Context, mediaID, albumID uuid.UUID) error
-	ListAlbumObjectKeys(ctx context.Context, albumID uuid.UUID) ([]repository.MediaObjectKeys, error)
+	DeleteOwnedMedia(ctx context.Context, albumID, mediaID uuid.UUID, uploaderToken []byte) (repository.MediaRemoval, error)
 }
 
-// ObjectStore is the slice of *storage.S3Client the service needs
 type ObjectStore interface {
 	GetPresignedUploadURLWithChecksum(ctx context.Context, key, contentType string, contentLength int64, sha256B64 string, expires time.Duration) (*PresignedUpload, error)
 	GetPresignedDownloadURL(ctx context.Context, key string, expires time.Duration) (string, error)
@@ -59,21 +49,15 @@ type ObjectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
-// Notifier matches *ws.Hub.EmitToUsers : ConfirmUpload fanout uses it so the
-// e2ee.media_added event reaches every active album member within ~1s of the
-// row going confirmed. Mirrors the pattern in internal/e2ee/invite/handler.go
+// Delivers confirmed media to active album members
 type Notifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }
 
-// MemberLookup matches *invite.Repo.ActiveMemberUserIDs : the existing repo
-// satisfies it implicitly
 type MemberLookup interface {
 	ActiveMemberUserIDs(ctx context.Context, albumID uuid.UUID) ([]uuid.UUID, error)
 }
 
-// PresignedUpload mirrors storage.PresignedUpload : duplicated here so the
-// service layer doesnt force handler tests to import internal/storage
 type PresignedUpload struct {
 	URL            string
 	RequiredHeader map[string]string
@@ -87,9 +71,6 @@ type MediaService struct {
 	lookup   MemberLookup
 }
 
-// NewMediaService : notifier + lookup are nil-safe so tests that don't
-// exercise the fanout can keep the old 3-arg shape via wrapper. The
-// production wiring in cmd/server/main.go always passes both
 func NewMediaService(repo MediaStore, epochs EpochLookup, s3 ObjectStore, notifier Notifier, lookup MemberLookup) *MediaService {
 	return &MediaService{repo: repo, epochs: epochs, s3: s3, notifier: notifier, lookup: lookup}
 }
@@ -105,9 +86,7 @@ const (
 	maxThumbSize = 500 * 1024
 )
 
-// RequestUploadInput is the decoded body of POST /albums/{id}/media/upload-ur.
-// thumb fields are optional : present-as-a-group for photos that include
-// a thumb, absent-as-a-group for videos or any non thumbnailable media
+// Thumbnail fields must be present or absent as one group
 type RequestUploadInput struct {
 	MediaID        uuid.UUID
 	BlobSize       int64
@@ -123,8 +102,6 @@ type RequestUploadInput struct {
 	ThumbWrapTagCT []byte // empty if no thumb
 }
 
-// RequestUploadResult is what the handler returns to the client. Thumb fields
-// are populated only when the request included thumb_* fields
 type RequestUploadResult struct {
 	MediaID             uuid.UUID
 	UploadURL           string
@@ -134,15 +111,13 @@ type RequestUploadResult struct {
 	ThumbRequiredHeader map[string]string
 }
 
-// RequestUploadURL : creates a pending row + presigned PUT URL. The client
-// then uploads to S3 and calls ConfirmUpload to flip the row confirmed=TRUE
+// Creates a pending row before returning its presigned upload URLs
 func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, uploaderToken []byte, in RequestUploadInput) (*RequestUploadResult, error) {
 	if err := validateUploadInput(in); err != nil {
 		return nil, err
 	}
 
-	// Epoch gate (§5.1) : reject uploads against a stale epoch. Stops a
-	// removed admin from sneaking a wrap under MK_old in past the rotation
+	// Reject stale epochs before issuing storage URLs
 	cur, exists, _, err := s.epochs.CurrentEpoch(ctx, albumID)
 	if err != nil {
 		return nil, apierr.Internal("failed to read current epoch").WithCause(err)
@@ -154,15 +129,8 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		return nil, apierr.EpochReplay("epoch_tag does not match current epoch")
 	}
 
-	// the stale epoch gate above passes during the
-	// window between a member revoke and the admin's rotation, bcs
-	// MK_current is unchanged. But a photo sealed under it during that window is
-	// readable by the just removed member (they still hold MK_current), which
-	// breaks "future, not past" under the DB-at-rest model. Freeze new
-	// uploads until the active set and the current epoch's recipients match
-	// again : the admin's rotation (or the client's pending rotation recovery)
-	// lifts it. Existing reads are unaffected
-	pending, err := s.epochs.PendingRotation(ctx, albumID)
+	// Freeze publication while a removed member still holds the current MK
+	pending, err := s.epochs.RotationRequired(ctx, albumID)
 	if err != nil {
 		return nil, apierr.Internal("failed to check rotation state").WithCause(err)
 	}
@@ -170,9 +138,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		return nil, apierr.EpochPendingRotation("album has a pending epoch rotation ; uploads are frozen until it completes")
 	}
 
-	// M9 : storage_key is server generated random opaque. NEVER carry album_id
-	// or media_id in the path : the S3 host can group objects by key string
-	// even tho the body is ciphertext
+	// Opaque keys prevent the storage host grouping objects by album or media id
 	storageKey, err := newStorageKey()
 	if err != nil {
 		return nil, apierr.Internal("failed to mint storage key").WithCause(err)
@@ -202,8 +168,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		MimeType:      &mimePtr,
 	}
 
-	//thumb fields present-as-a-group → mint second storage_key + presign
-	// a second PUT. ConfirmUpload validates BOTH objects exist + checksum
+	// Thumbnail fields produce a second object that confirmation also verifies
 	hasThumb := len(in.ThumbWrapNonce) > 0
 	var thumbKey string
 	if hasThumb {
@@ -218,9 +183,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 		row.ThumbSHA256 = in.ThumbSHA256
 	}
 
-	// Authoritative check + insert, atomic under the albums row lock. A revoke
-	// or rotation that commits between the pre checks above and here is caught
-	// now : the row is only written while the album is genuinely uploadable
+	// Repeat the gate under the shared lock before writing the reservation
 	if err := s.repo.ReserveUploadRow(ctx, row, in.EpochTag); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrNoEpoch):
@@ -259,9 +222,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 			thumbKey = *row.ThumbKey
 		}
 		thumbSHA256B64 := base64.StdEncoding.EncodeToString(in.ThumbSHA256)
-		// Thumb is always image/webp client choice. Hardcoded here
-		// instead of taking from the request so a bad client cant claim a
-		// thumb is application/octet-stream or worse
+		// Do not let clients choose a misleading thumbnail content type
 		thumbPre, err := s.s3.GetPresignedUploadURLWithChecksum(ctx, thumbKey, "image/webp", in.ThumbSize, thumbSHA256B64, PresignTTL)
 		if err != nil {
 			_ = s.retirePending(ctx, row)
@@ -273,9 +234,7 @@ func (s *MediaService) RequestUploadURL(ctx context.Context, albumID uuid.UUID, 
 	return res, nil
 }
 
-// ConfirmUpload validates the S3 object against the claimed size + sha256
-// On match : flips confirmed=TRUE. On mismatch : DELETEs the S3 object +
-// pending row. The client gets a typed error so it can retry the whole flow
+// Confirms only storage objects matching their claimed size and hash
 func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uploaderUserID uuid.UUID, uploaderToken []byte) (int64, error) {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
@@ -314,9 +273,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 		return 0, apierr.Validation("uploaded blob sha256 mismatch ; pending row dropped")
 	}
 
-	// if the row has a thumb, the matching S3 object MUST exist + match
-	// before confirm. A row gets at most one shot at thumb upload : if it
-	// fails here the row is dropped (orphan) and client retries the whole flow
+	// A thumbnail mismatch drops the reservation so the client retries both objects
 	if row.ThumbKey != nil {
 		thGot, thGotSHA256B64, err := s.s3.HeadObject(ctx, *row.ThumbKey)
 		if err != nil {
@@ -337,6 +294,13 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 	// Commit only the reservation whose objects were checked
 	generation, err := s.repo.MarkConfirmed(ctx, mediaID, albumID, row.ReservationID)
 	if err != nil {
+		// Typed so the client rewraps the sealed photo under the new key
+		switch {
+		case errors.Is(err, repository.ErrPendingRotation):
+			return 0, apierr.EpochPendingRotation("album has a pending epoch rotation ; the upload must be rewrapped")
+		case errors.Is(err, repository.ErrEpochMismatch):
+			return 0, apierr.EpochReplay("epoch_tag does not match current epoch ; the upload must be rewrapped")
+		}
 		if errors.Is(err, repository.ErrMediaNotFound) {
 			// Only an already confirmed row makes a repeated confirm successful
 			if again, rerr := s.repo.GetByID(ctx, mediaID, albumID); rerr == nil {
@@ -355,12 +319,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 		return 0, apierr.Internal("failed to mark confirmed").WithCause(err)
 	}
 
-	// Fanout e2ee.media_added to every active member EXCEPT the uploader
-	// The uploader's UI updates from the local upload success path : sending
-	// them the event back would only re trigger _loadMedia and a wasted
-	// prefetch for ciphertext they already have in memory
-	// Payload embeds the full record (same shape as ListMedia) so recipients
-	// can warm L2 without a separate listMedia roundtrip
+	// Exclude the uploader because its local success path already seeds the cache
 	if s.notifier != nil && s.lookup != nil {
 		go func() {
 			bg := context.Background()
@@ -413,9 +372,6 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 	return generation, nil
 }
 
-// DownloadURLResult is the per request presigned GET URL. TTL is short on
-// purpose : the client downloads immediately after this returns. URL is the
-// only field today : future expansion (range support, byte budgets) goes here
 type DownloadURLResult struct {
 	URL       string
 	ExpiresAt time.Time
@@ -424,11 +380,7 @@ type DownloadURLResult struct {
 // DownloadURLTTL matches the longest client transfer budget
 const DownloadURLTTL = 30 * time.Minute
 
-// RequestDownloadURL : returns a fresh presigned GET URL for a confirmed
-// media row. Refuses pending rows (their S3 object may not exist yet) and
-// missing rows (caller's RequireMember middleware already gates album scope)
-// asset == "thumb" presigns row.ThumbKey instead of row.StorageKey : 404s if
-// the row has no thumb
+// Returns a fresh download URL only for a confirmed object
 func (s *MediaService) RequestDownloadURL(ctx context.Context, albumID, mediaID uuid.UUID, asset string) (*DownloadURLResult, error) {
 	row, err := s.repo.GetByID(ctx, mediaID, albumID)
 	if err != nil {
@@ -465,35 +417,46 @@ func (s *MediaService) ListMedia(ctx context.Context, albumID uuid.UUID) ([]mode
 	return out, nil
 }
 
-// DeleteMedia drops the S3 object then the row. On S3 failure the row stays
-// (caller can retry) : on row delete failure the S3 object is gone but the
-// row is tombstone since the storage_key now 404s. Acceptable trade off if you ask me
+// DeleteMedia removes the row and queues its objects in one transaction, then
+// deletes the objects best effort. A failed delete stays queued for the sweep
 func (s *MediaService) DeleteMedia(ctx context.Context, albumID, mediaID uuid.UUID, callerToken []byte) error {
-	row, err := s.repo.GetByID(ctx, mediaID, albumID)
-	if err != nil {
-		if errors.Is(err, repository.ErrMediaNotFound) {
-			return apierr.NotFound("media not found")
-		}
-		return apierr.Internal("failed to read media").WithCause(err)
-	}
-	// Album membership does not grant media ownership
-	if !bytes.Equal(row.UploaderToken, callerToken) {
+	removed, err := s.repo.DeleteOwnedMedia(ctx, albumID, mediaID, callerToken)
+	switch {
+	case errors.Is(err, repository.ErrMediaNotFound), errors.Is(err, repository.ErrAlbumNotFound):
+		return apierr.NotFound("media not found")
+	case errors.Is(err, repository.ErrMediaNotOwned):
 		return apierr.Forbidden("only the uploader can delete this media")
+	case err != nil:
+		return apierr.Internal("failed to delete media").WithCause(err)
 	}
-	if err := s.s3.DeleteObject(ctx, row.StorageKey); err != nil {
-		return apierr.Internal("failed to delete s3 object").WithCause(err)
-	}
-	// Drop the thumbnail object too, else it orphans in storage. Hard delete:
-	// if it can't be removed, keep the row so the whole delete can be retried
-	if row.ThumbKey != nil && *row.ThumbKey != "" {
-		if err := s.s3.DeleteObject(ctx, *row.ThumbKey); err != nil {
-			return apierr.Internal("failed to delete s3 thumb object").WithCause(err)
-		}
-	}
-	if err := s.repo.Delete(ctx, mediaID, albumID); err != nil {
-		return apierr.Internal("failed to delete media row").WithCause(err)
-	}
+	s.CleanupObjectKeys(ctx, removed.Keys)
+	s.EmitMediaDeleted(albumID, removed.MediaIDs)
 	return nil
+}
+
+// Offline members converge on their next authoritative listing
+func (s *MediaService) EmitMediaDeleted(albumID uuid.UUID, mediaIDs []uuid.UUID) {
+	if len(mediaIDs) == 0 || s.notifier == nil || s.lookup == nil {
+		return
+	}
+	go func() {
+		bg := context.Background()
+		members, err := s.lookup.ActiveMemberUserIDs(bg, albumID)
+		if err != nil {
+			slog.Warn("media_deleted: lookup failed", "err", err, "album_id", albumID)
+			return
+		}
+		ids := make([]string, len(mediaIDs))
+		for i, id := range mediaIDs {
+			ids[i] = id.String()
+		}
+		if err := s.notifier.EmitToUsers(bg, members, ws.EventMediaDeleted, map[string]any{
+			"album_id":  albumID.String(),
+			"media_ids": ids,
+		}); err != nil {
+			slog.Warn("media_deleted: emit failed", "err", err, "album_id", albumID)
+		}
+	}()
 }
 
 // Prevents replacement between lookup and cleanup
@@ -584,38 +547,10 @@ func (s *MediaService) RunPendingUploadCleanup(ctx context.Context) {
 	}
 }
 
-// deletes every media object (blob + thumbnail) for an album
-// from object storage. Called before the album row is dropped, since the media
-// rows cascade away with it and the S3 objects would otherwise orphan (S3 is
-// not part of the DB cascade)
-
-// Hard delete semantics: it attempts every object (so a single failure doesn't
-// strand the rest), but if ANY delete failed it returns an error so DeleteAlbum
-// keeps the DB row : that row is the only handle left to retry the cleanup
-// S3 DeleteObject is idempotent, so already gone objects don't count as
-// failures and a retry converges
-func (s *MediaService) PurgeAlbumObjects(ctx context.Context, albumID uuid.UUID) error {
-	keys, err := s.repo.ListAlbumObjectKeys(ctx, albumID)
-	if err != nil {
-		return err
-	}
-	var failed int
-	for _, k := range keys {
-		if err := s.s3.DeleteObject(ctx, k.StorageKey); err != nil {
-			slog.Warn("purge: failed to delete blob", "album_id", albumID, "err", err)
-			failed++
-		}
-		if k.ThumbKey != nil && *k.ThumbKey != "" {
-			if err := s.s3.DeleteObject(ctx, *k.ThumbKey); err != nil {
-				slog.Warn("purge: failed to delete thumb", "album_id", albumID, "err", err)
-				failed++
-			}
-		}
-	}
-	if failed > 0 {
-		return fmt.Errorf("purge: %d object(s) failed to delete for album %s", failed, albumID)
-	}
-	return nil
+// CleanupObjectKeys deletes already queued objects now instead of waiting for
+// the periodic sweep
+func (s *MediaService) CleanupObjectKeys(ctx context.Context, keys []string) {
+	s.cleanupObjectKeys(ctx, keys)
 }
 
 func (s *MediaService) dropOrphan(ctx context.Context, row *model.Media) error {
@@ -699,8 +634,7 @@ func validateUploadInput(in RequestUploadInput) error {
 	if in.MimeType != "" && !strings.HasPrefix(in.MimeType, "image/") && !strings.HasPrefix(in.MimeType, "video/") {
 		return apierr.Validation("mime_type must be image/* or video/*")
 	}
-	//all-or-nothing. A client that sends one thumb field must
-	// send all four so the row never ends up partially set
+	// One thumbnail field requires all four to avoid partial rows
 	hasAnyThumb := len(in.ThumbWrapNonce) > 0 || len(in.ThumbWrapTagCT) > 0 ||
 		in.ThumbSize > 0 || len(in.ThumbSHA256) > 0
 	if hasAnyThumb {

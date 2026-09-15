@@ -19,27 +19,20 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Notifier matches the EmitToUsers method on *ws.Hub so the handler can be
-// constructed without a hard dep on the hub package (and tests can stub it)
 type Notifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }
 
-// HandleResolver maps a normalized keepsy_id to its user_id. *repository.UserRepository
-// satisfies it : the by-handle bundle lookup never exposes the resolved UUID
+// Keeps the resolved UUID out of by-handle responses
 type HandleResolver interface {
 	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
 }
 
-// MemberResolver maps an album's member_token back to its user_id (M bridge
-// unseal, scoped to the album). Backs the by nickname bundle fetch the epoch
-// rotator uses to wrap MK_new for members it only knows by token : the resolved
-// UUID never reaches the wire. The epoch repo satisfies it
+// Resolves rotation targets without exposing their UUIDs
 type MemberResolver interface {
 	UserIDByAlbumMemberToken(ctx context.Context, albumID uuid.UUID, token []byte) (uuid.UUID, error)
 }
 
-// Handler routes the §2.2 endpoints + the §6.1 by-handle lookup into the service layer
 type Handler struct {
 	svc            *Service
 	notifier       Notifier
@@ -231,10 +224,7 @@ func (h *Handler) GetOPKCount(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]int{"count": n})
 }
 
-// GetPrekeyBundle handles GET /users/{id}/prekey-bundle. The handler fires the
-// e2ee.opk_low fanout post commit when the target's unconsumed count drops
-// below the threshold : the goroutine uses a fresh background ctx bcs the
-// request ctx may be cancelled before the WS hub picks it up
+// Low-OPK notification uses a background context after the request commits
 func (h *Handler) GetPrekeyBundle(w http.ResponseWriter, r *http.Request) {
 	if _, ok := middleware.MustGetUserID(w, r); !ok {
 		return
@@ -252,10 +242,7 @@ func (h *Handler) GetPrekeyBundle(w http.ResponseWriter, r *http.Request) {
 	h.writeBundle(w, bundle.UserID, bundle, targetID)
 }
 
-// GetPrekeyBundleByHandle handles GET /users/by-handle/{handle}/prekey-bundle
-// It resolves the random keepsy_id to a user_id server side and returns the
-// same bundle shape, but with the user_id field set to the handle , the real
-// UUID never reaches the wire (§6.1 D10). Unknown/invalid handles 404 alike
+// Resolves handles server-side without returning the account UUID
 func (h *Handler) GetPrekeyBundleByHandle(w http.ResponseWriter, r *http.Request) {
 	if _, ok := middleware.MustGetUserID(w, r); !ok {
 		return
@@ -282,23 +269,15 @@ func (h *Handler) GetPrekeyBundleByHandle(w http.ResponseWriter, r *http.Request
 	h.writeBundle(w, norm, bundle, targetID)
 }
 
-// GetPrekeyBundleByMemberToken handles
-// GET /albums/{id}/members/{member_token}/prekey-bundle
-
-// Mounted under the album membership gate, so the caller is already a member
-// this additionally requires admin/co admin. The member_token is resolved to a
-// user_id server side (scoped to this album, so a token from another album 404s)
-// and the same bundle shape is returned with the identity field set to the
-// member_token : the real UUID and keepsy_id never reach the wire. Like every
-// bundle fetch it consumes an OPK
+// Admin-only rotation lookup returns an album token instead of an account UUID
 func (h *Handler) GetPrekeyBundleByMemberToken(w http.ResponseWriter, r *http.Request) {
 	role, ok := middleware.MustGetMemberRole(r)
 	if !ok {
 		apierr.Write(w, r, apierr.Auth("missing member context"))
 		return
 	}
-	if role != "admin" && role != "co-admin" {
-		apierr.Write(w, r, apierr.Forbidden("only admin or co admin can fetch a member's prekey bundle"))
+	if role != "admin" {
+		apierr.Write(w, r, apierr.Forbidden("only the admin can fetch a member's prekey bundle"))
 		return
 	}
 	albumID, err := uuid.Parse(mux.Vars(r)["id"])
@@ -329,10 +308,7 @@ func (h *Handler) GetPrekeyBundleByMemberToken(w http.ResponseWriter, r *http.Re
 	h.writeBundle(w, base64.StdEncoding.EncodeToString(token), bundle, targetID)
 }
 
-// decodeMemberTokenPath decodes a member_token carried in a URL path. Tokens
-// are 32 raw bytes emitted to clients as std base64, a client putting one in a
-// path re encodes as base64url (std base64's '/' and '+' break routing). Accept
-// any of the four alphabets so a forgotten padding strip still round-trips
+// Accept all padded and unpadded base64 forms used by old clients
 func decodeMemberTokenPath(s string) ([]byte, error) {
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding,
@@ -378,10 +354,7 @@ func (h *Handler) writeBundle(w http.ResponseWriter, userIDField any, bundle *Pr
 	}
 }
 
-// KeyByRequesterAndTarget keys the per pair rate limit. Pre M10 the key was
-// per requester only : that allowed 5/min probing across distinct targets,
-// trivially enumerable as 7,200/day. Per pair makes legitimate "Im inviting
-// person X to album Y" repeats cheap while making target enumeration costly
+// Pair-scoped limits preserve retries without giving each target a shared bucket
 func KeyByRequesterAndTarget(r *http.Request) string {
 	uid, ok := middleware.GetUserID(r.Context())
 	if !ok {
@@ -394,9 +367,7 @@ func KeyByRequesterAndTarget(r *http.Request) string {
 	return "prekey-bundle:" + uid.String() + ":" + target
 }
 
-// KeyByRequesterAndHandle keys the by-handle lookup limit per (requester, handle)
-// Normalizing first means dash/case variants of one handle share a bucket and
-// cant multiply an attacker's probe budget
+// Normalization keeps handle variants in one rate-limit bucket
 func KeyByRequesterAndHandle(r *http.Request) string {
 	uid, ok := middleware.GetUserID(r.Context())
 	if !ok {
@@ -413,10 +384,7 @@ func KeyByRequesterAndHandle(r *http.Request) string {
 	return "prekey-bundle-handle:" + uid.String() + ":" + norm
 }
 
-// KeyByRequesterAndMemberToken keys the by nickname bundle limit per
-// (requester, album, member_token), mirroring the per (requester, target) pair
-// limit on the by id route so an admin rotating an album repeatedly is cheap
-// while token enumeration stays costly
+// Album-token limits preserve rotation retries without widening probe budgets
 func KeyByRequesterAndMemberToken(r *http.Request) string {
 	uid, ok := middleware.GetUserID(r.Context())
 	if !ok {

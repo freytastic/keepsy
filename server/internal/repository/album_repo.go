@@ -50,6 +50,21 @@ func (r *AlbumRepository) CreateWithAdmin(ctx context.Context, nameCT []byte, cr
 	}
 	defer tx.Rollback(ctx)
 
+	// FOR SHARE holds off the deletion job's final step until this commits
+	var deleting bool
+	err = tx.QueryRow(ctx,
+		`SELECT deleting_at IS NOT NULL FROM users WHERE id = $1 FOR SHARE`, creatorUserID,
+	).Scan(&deleting)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if deleting {
+		return nil, nil, ErrAccountDeleting
+	}
+
 	// Sequence empty albums created within the same hour
 	a := &model.Album{ID: uuid.New(), NameCT: nameCT}
 	err = tx.QueryRow(ctx,
@@ -116,7 +131,8 @@ func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]
 		       am.role, ami.member_token,
 		       COALESCE(stats.media_count, 0),
 		       stats.latest_activity_at,
-		       COALESCE(members.active_count, 0)
+		       COALESCE(members.active_count, 0),
+		       `+RotationRequiredExpr("a.id")+`
 		FROM albums a
 		JOIN album_member_identities ami ON ami.album_id = a.id
 		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
@@ -147,7 +163,7 @@ func (r *AlbumRepository) ListForUser(ctx context.Context, userID uuid.UUID) ([]
 		if err := rows.Scan(&a.ID, &a.NameCT, &a.CreatedAt, &a.UpdatedAt,
 			&a.Summary.MediaGeneration, &a.UserRole, &a.MemberToken,
 			&a.Summary.MediaCount, &a.Summary.LatestActivityAt,
-			&a.Summary.ActiveMemberCount); err != nil {
+			&a.Summary.ActiveMemberCount, &a.Summary.RotationRequired); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -270,14 +286,7 @@ func (r *AlbumRepository) LookupMember(ctx context.Context, userID uuid.UUID, al
 	return token, role, nil
 }
 
-// AddMember mints a member_token for userID in albumID and inserts the bridge
-// row and album_members row. Returns the new token.
-
-// TEST FIXTURE ONLY. This is a raw DB insert with NO X3DH MK delivery, so a
-// member added this way cannot decrypt anything ("member without keys"). It is
-// retained solely to seed realistic roster fixtures in tests. Production member
-// onboarding MUST go through the E2EE invite path (internal/e2ee/invite,
-// DeliverMember). Do NOT call this from a request handler or service
+// Test fixture only because this bypasses X3DH key delivery
 func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UUID, role string) ([]byte, error) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -316,11 +325,7 @@ func (r *AlbumRepository) AddMember(ctx context.Context, albumID, userID uuid.UU
 }
 
 func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
-	// Two pass : the old single query joined users via ami.user_id, but
-	// user_id is sealed in amid.user_id_enc post M-bridge. Pass 1 reads the
-	// album rows + sealed blobs : pass 2 bulk fetches IK/LK for the decoded
-	// user_ids. name_ct may be NULL until the member publishes their
-	// encrypted display name (M7)
+	// Open sealed user links before the bulk public-key lookup
 	rows, err := r.DB.Query(ctx, `
 		SELECT
 			am.member_token,
@@ -359,9 +364,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 		}
 		userID, err := r.linker.Open(sealed, m.MemberToken)
 		if err != nil {
-			// A row whose seal cant be opened is unreadable for IK/LK lookup :
-			// skip it rather than 500 on the whole list (matches the silent
-			// skip in epoch.UserIDsByMemberTokens)
+			// Skip invalid user-link seals instead of failing the full roster
 			continue
 		}
 		pendings = append(pendings, pending{idx: len(members), userID: userID})
@@ -400,9 +403,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 	return members, nil
 }
 
-// UpdateMemberNameCT writes the caller's encrypted display name for one album
-// Caller must already be a member (RequireMember middleware enforces). Bytes
-// are opaque to the server : it stores the wrap, never decrypts
+// Stores the caller's encrypted display name as opaque bytes
 func (r *AlbumRepository) UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error {
 	_, err := r.DB.Exec(ctx,
 		`UPDATE album_members SET name_ct = $1 WHERE album_id = $2 AND member_token = $3`,
@@ -411,21 +412,8 @@ func (r *AlbumRepository) UpdateMemberNameCT(ctx context.Context, albumID uuid.U
 	return err
 }
 
-// It atomically revokes a member. takes the same albums row
-// FOR UPDATE lock that epoch rotation (InsertEpoch) takes, so revoke, rotate,
-// and upload reserve all serialize on one album : this is what stops two
-// concurrent admin removals from both passing the last admin guard and leaving
-// the album adminless, and stops a revoke from interleaving with a rotation's
-// active set snapshot
-
-// The caller is re checked under the lock too: revoked_at is the only authz
-// input that can change between the service's auth check and this commit (a
-// concurrent removal could revoke the caller), so re reading it here closes
-// that TOCTOU. The caller's role is NOT re read because roles are immutable
-// (there is no promotion/demotion flow) : if that changes, re check role here
-
-// Returns the target's role, whether it was already revoked (idempotent no-op),
-// ErrCallerRevoked, ErrMemberNotFound, ErrAlbumNotFound, or ErrLastAdmin
+// Serializes revocation with rotation and upload reservation on the album lock
+// Caller state and the last-admin guard are rechecked inside the transaction
 func (r *AlbumRepository) RevokeMemberTx(ctx context.Context, albumID uuid.UUID, callerToken, targetToken []byte) (string, bool, error) {
 	tx, err := r.DB.Begin(ctx)
 	if err != nil {
@@ -498,6 +486,12 @@ func (r *AlbumRepository) RevokeMemberTx(ctx context.Context, albumID uuid.UUID,
 		`UPDATE album_members SET revoked_at = NOW()
 		 WHERE album_id = $1 AND member_token = $2 AND revoked_at IS NULL`,
 		albumID, targetToken,
+	); err != nil {
+		return "", false, err
+	}
+	// The departed member still holds the current key until the next epoch
+	if _, err := tx.Exec(ctx,
+		`UPDATE albums SET rotation_required = TRUE WHERE id = $1`, albumID,
 	); err != nil {
 		return "", false, err
 	}

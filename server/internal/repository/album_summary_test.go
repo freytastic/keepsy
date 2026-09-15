@@ -74,9 +74,35 @@ func (e *summaryEnv) addPhoto(t *testing.T, albumID uuid.UUID, uploader []byte, 
 	return gen
 }
 
+// Direct inserts skip reservation, so confirmation needs a current epoch whose
+// wraps cover every active member
+func (e *summaryEnv) ensureEpoch(t *testing.T, albumID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx,
+		`INSERT INTO album_epochs (album_id, epoch) VALUES ($1, 0)
+		 ON CONFLICT DO NOTHING`, albumID); err != nil {
+		t.Fatalf("seed epoch: %v", err)
+	}
+	if _, err := e.pool.Exec(ctx,
+		`INSERT INTO album_epoch_wraps
+		   (album_id, epoch, recipient_token, ek_pub, wrap_nonce, wrap_tag_ct,
+		    sender_token, sender_sig)
+		 SELECT $1, 0, m.member_token, $2, $3, $4, m.member_token, $5
+		 FROM album_members m
+		 WHERE m.album_id = $1 AND m.revoked_at IS NULL
+		 ON CONFLICT DO NOTHING`,
+		albumID, make([]byte, 32), make([]byte, 12), make([]byte, 48),
+		make([]byte, 64),
+	); err != nil {
+		t.Fatalf("seed wraps: %v", err)
+	}
+}
+
 func (e *summaryEnv) addPhotoID(t *testing.T, albumID uuid.UUID, uploader []byte, withThumb bool) (uuid.UUID, int64) {
 	t.Helper()
 	ctx := context.Background()
+	e.ensureEpoch(t, albumID)
 	id := uuid.New()
 	nonce := make([]byte, 12)
 	tag := make([]byte, 48)
@@ -273,6 +299,7 @@ func TestMarkConfirmed_ConcurrentDuplicateBumpsOnce(t *testing.T) {
 		_, _ = env.pool.Exec(ctx, `DELETE FROM albums WHERE id = $1`, album.ID)
 	})
 
+	env.ensureEpoch(t, album.ID)
 	mediaID := uuid.New()
 	reservationID := uuid.New()
 	if _, err := env.pool.Exec(ctx,

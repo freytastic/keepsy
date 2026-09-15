@@ -87,21 +87,23 @@ func TestBundleByMemberToken_AdminGetsBundleWithTokenIdentity(t *testing.T) {
 }
 
 func TestBundleByMemberToken_NonAdminForbidden(t *testing.T) {
-	store := &mockStore{}
-	svc := NewService(store)
-	resolver := stubMemberResolver{fn: func(context.Context, uuid.UUID, []byte) (uuid.UUID, error) {
-		t.Fatal("resolver must not be called for a non-admin caller")
-		return uuid.Nil, nil
-	}}
-	h := NewHandler(svc, nil, nil, resolver)
+	for _, role := range []string{"member", "co-admin"} {
+		store := &mockStore{}
+		svc := NewService(store)
+		resolver := stubMemberResolver{fn: func(context.Context, uuid.UUID, []byte) (uuid.UUID, error) {
+			t.Fatalf("%s: resolver must not be called for a non-admin caller", role)
+			return uuid.Nil, nil
+		}}
+		h := NewHandler(svc, nil, nil, resolver)
 
-	token := make([]byte, 32)
-	rec := httptest.NewRecorder()
-	req := memberBundleReq(uuid.New(), base64.RawURLEncoding.EncodeToString(token), uuid.New(), "member", []byte("callercallercallercallercaller32"))
-	memberBundleRouter(h).ServeHTTP(rec, req)
+		token := make([]byte, 32)
+		rec := httptest.NewRecorder()
+		req := memberBundleReq(uuid.New(), base64.RawURLEncoding.EncodeToString(token), uuid.New(), role, []byte("callercallercallercallercaller32"))
+		memberBundleRouter(h).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403", role, rec.Code)
+		}
 	}
 }
 
@@ -115,7 +117,7 @@ func TestBundleByMemberToken_UnknownTokenNotFound(t *testing.T) {
 
 	token := make([]byte, 32)
 	rec := httptest.NewRecorder()
-	req := memberBundleReq(uuid.New(), base64.RawURLEncoding.EncodeToString(token), uuid.New(), "co-admin", []byte("callercallercallercallercaller32"))
+	req := memberBundleReq(uuid.New(), base64.RawURLEncoding.EncodeToString(token), uuid.New(), "admin", []byte("callercallercallercallercaller32"))
 	memberBundleRouter(h).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {

@@ -60,13 +60,10 @@ type SetEpochInput struct {
 	EnvelopeSig   []byte
 }
 
-// SetEpoch validates a rotation request and writes the ledger row + per
-// recipient wraps in one tx via the repo. Role gate : admin or co admin only
-// On success returns the member_tokens that are >24h behind on their
-// join_complete receipt (never blocks the rotation).
+// Validates an admin rotation and atomically stores its epoch and wraps
 func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken []byte, callerRole string, in SetEpochInput) ([][]byte, error) {
-	if callerRole != "admin" && callerRole != "co-admin" {
-		return nil, apierr.Forbidden("only admin or co-admin can rotate epoch")
+	if callerRole != "admin" {
+		return nil, apierr.Forbidden("only the admin can rotate epoch")
 	}
 	if in.Epoch < 0 {
 		return nil, apierr.Validation("epoch must be >= 0")
@@ -156,6 +153,10 @@ func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken [
 		return nil, apierr.MemberSetDrift("active member set drifted between request and commit")
 	case errors.Is(err, ErrAlbumNotFound):
 		return nil, apierr.NotFound("album not found")
+	case errors.Is(err, ErrCallerRevoked):
+		return nil, apierr.MemberRevoked("your access to this album has been revoked")
+	case errors.Is(err, ErrCallerNotAdmin):
+		return nil, apierr.Forbidden("only the admin can rotate epoch")
 	}
 	if err != nil {
 		return nil, err
@@ -170,7 +171,6 @@ func (s *Service) SetEpoch(ctx context.Context, albumID uuid.UUID, callerToken [
 	return pending, nil
 }
 
-// CurrentResult is the shape the GET /epoch endpoint returns
 type CurrentResult struct {
 	CurrentEpoch int
 	StartedAt    time.Time
@@ -197,10 +197,7 @@ func (s *Service) GetWrap(ctx context.Context, albumID uuid.UUID, epoch int, cal
 	return w, err
 }
 
-// MemberSetHash = SHA256( uint32_be(N) ‖ token_0 ‖ token_1 ‖ ... ‖ token_{N-1} )
-// Tokens are sorted lexicographically before hashing : this is the canonical
-// snapshot of "who must receive a wrap in this rotation". Length prefix
-// guards against future token length changes
+// Hashes the sorted recipient tokens with a count prefix
 func MemberSetHash(tokens [][]byte) []byte {
 	dup := make([][]byte, len(tokens))
 	copy(dup, tokens)

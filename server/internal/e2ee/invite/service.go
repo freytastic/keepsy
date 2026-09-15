@@ -68,13 +68,10 @@ type DeliverMemberInput struct {
 	Envelopes   []Envelope // sorted ascending by epoch, contiguous 0..current
 }
 
-// DeliverExistingUser validates an invite and delivers all historical MK wraps
-// to a freshly minted member_token for the target. Validation order is fixed so
-// the error surface is stable. Returns the new member_token and the resolved
-// target user_id (for the caller's WS fanout) on success
+// Validates and delivers every historical MK wrap to the target membership
 func (s *Service) DeliverExistingUser(ctx context.Context, albumID uuid.UUID, callerToken []byte, callerRole string, in DeliverExistingUserInput) ([]byte, uuid.UUID, error) {
-	if callerRole != "admin" && callerRole != "co-admin" {
-		return nil, uuid.Nil, apierr.Forbidden("only admin or co-admin can invite")
+	if callerRole != "admin" {
+		return nil, uuid.Nil, apierr.Forbidden("only the admin can invite")
 	}
 	if len(in.EKPub) != pubLen {
 		return nil, uuid.Nil, apierr.Validation("ek_pub must be 32 bytes")
@@ -144,6 +141,18 @@ func (s *Service) DeliverExistingUser(ctx context.Context, albumID uuid.UUID, ca
 	}
 	if errors.Is(err, ErrAlbumFull) {
 		return nil, uuid.Nil, apierr.AlbumFull(err.Error())
+	}
+	switch {
+	case errors.Is(err, ErrSenderRevoked):
+		return nil, uuid.Nil, apierr.MemberRevoked("your access to this album has been revoked")
+	case errors.Is(err, ErrSenderNotAdmin):
+		return nil, uuid.Nil, apierr.Forbidden("only the admin can invite")
+	case errors.Is(err, ErrEpochMoved):
+		return nil, uuid.Nil, apierr.EpochReplay("envelopes must cover up to the current epoch")
+	case errors.Is(err, ErrPendingRotation):
+		return nil, uuid.Nil, apierr.EpochPendingRotation("album keys are being replaced ; invite again once they update")
+	case errors.Is(err, ErrTargetDeleting):
+		return nil, uuid.Nil, apierr.NotFound("user not found")
 	}
 	if err != nil {
 		return nil, uuid.Nil, err
