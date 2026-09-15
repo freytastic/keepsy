@@ -155,6 +155,23 @@ class UploadQueueModel extends ChangeNotifier {
   }
 
   void resumeAlbum(String albumId) => _co.resumeAlbum(albumId);
+
+  Future<void> restore() async {
+    await _co.restore();
+    _syncState();
+  }
+
+  Future<List<String>> forgetAlbum(String albumId) async {
+    for (final batch in _co.state.batches) {
+      if (batch.albumId == albumId) _forgetPreviews(batch.batchId);
+    }
+    final picks = await _co.forgetAlbum(albumId);
+    _syncState();
+    return picks;
+  }
+
+  bool holdsAlbum(String albumId) => _co.holdsAlbum(albumId);
+
   Future<void> cancelBatch(String batchId) async {
     _forgetPreviews(batchId);
     await _co.cancelBatch(batchId);
@@ -180,6 +197,20 @@ class UploadQueueModel extends ChangeNotifier {
     for (final item in _co.state.batch(batchId)?.items ?? const []) {
       if (onlyFailed && item.phase != UploadPhase.failed) continue;
       _previews.remove(item.mediaId.value);
+    }
+  }
+
+  // Account deletion: stops the queue and zeroes every preview it holds
+  Future<void> shutdown() async {
+    try {
+      await _co.shutdown();
+    } finally {
+      for (final b in _previews.values) {
+        b.fillRange(0, b.length, 0);
+      }
+      _previews.clear();
+      _landed.clear();
+      _syncState();
     }
   }
 

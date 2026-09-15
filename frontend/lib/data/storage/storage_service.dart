@@ -1,10 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// JWT credentials (token/refresh/expiry) is in platform secure storage
-// (Android Keystore backed EncryptedSharedPreferences / iOS Keychain), never
-// plaintext SharedPreferences. Email/name are non credential display caches
-// and stay in SharedPreferences
+// Keeps credentials in secure storage and non-secret display values in prefs
 class StorageService {
   static const _keyToken = 'auth_token';
   static const _keyRefreshToken = 'auth_refresh_token';
@@ -12,12 +9,11 @@ class StorageService {
   // Server stores users.email_hmac, never the plaintext, so the client owns
   // its own email cache for display in the profile screen
   static const _keyEmail = 'auth_email';
-  // M7 : display name lives encrypted per album in album_members.name_ct
-  // The user's own typed name is cached locally for the profile screen :
-  // pushing to each album's name_ct slot is wired in Phase 5
+  // The typed profile name is a local cache for per-album encrypted names
   static const _keyName = 'auth_name';
+  // Lets sealed uploads be matched to their account before the network answers
+  static const _keyUserId = 'auth_user_id';
 
-  // singleton
   static final StorageService _instance = StorageService._();
   factory StorageService() => _instance;
   StorageService._();
@@ -33,7 +29,6 @@ class StorageService {
     return _prefs!;
   }
 
-  // write
   Future<void> saveAuth(
       String token, String refreshToken, String expiresAt) async {
     await _secure.write(key: _keyToken, value: token);
@@ -67,7 +62,16 @@ class StorageService {
     return sp.getString(_keyName);
   }
 
-  // read
+  Future<void> saveUserId(String id) async {
+    final sp = await _sp;
+    await sp.setString(_keyUserId, id);
+  }
+
+  Future<String?> getUserId() async {
+    final sp = await _sp;
+    return sp.getString(_keyUserId);
+  }
+
   Future<String?> getToken() => _secure.read(key: _keyToken);
 
   Future<String?> getRefreshToken() => _secure.read(key: _keyRefreshToken);
@@ -78,7 +82,6 @@ class StorageService {
     return DateTime.tryParse(raw);
   }
 
-  // validate
   Future<bool> isValid() async {
     final token = await getToken();
     if (token == null || token.isEmpty) return false;
@@ -89,7 +92,6 @@ class StorageService {
     return DateTime.now().isBefore(expiry);
   }
 
-  // delete (logout)
   Future<void> deleteAuth() async {
     await _secure.delete(key: _keyToken);
     await _secure.delete(key: _keyRefreshToken);
@@ -101,5 +103,6 @@ class StorageService {
     await sp.remove(_keyExpiry);
     await sp.remove(_keyEmail);
     await sp.remove(_keyName);
+    await sp.remove(_keyUserId);
   }
 }

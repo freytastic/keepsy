@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:keepsy/crypto/uuid_bytes.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
@@ -8,6 +9,7 @@ import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
+import 'package:keepsy/e2ee/rotation_recovery.dart';
 
 // Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
 // so AppState itself stays free of crypto/keystore deps
@@ -35,16 +37,11 @@ class AppState extends ChangeNotifier {
   List<AlbumModel> _albums = [];
   List<AlbumModel> get albums => _albums;
 
-  // Decrypted album titles keyed by album id. Populated asynchronously by the
-  // injected resolver : the UI reads this (with a placeholder fallback) rather
-  // than the raw name_ct
+  // The UI reads resolved titles here and never renders raw ciphertext
   final Map<String, String> _albumNames = {};
   String? albumDisplayName(String id) => _albumNames[id];
 
-  // nameCt we authored locally (create/rename PATCH) that the server may not
-  // have echoed back yet. setAlbums/prependAlbum overlay it so a stale GET that
-  // still carries the create time placeholder can't regress the title. Dropped
-  // once the server returns the same nameCt
+  // Prevents stale server reads from replacing a locally written title
   final Map<String, String> _localNameCt = {};
 
   AlbumModel _overlayLocalNameCt(AlbumModel a) {
@@ -76,6 +73,7 @@ class AppState extends ChangeNotifier {
     _memberNames.clear();
     _syncing.clear();
     _keyBlocks.clear();
+    _rotations.clear();
     _selfTokens.clear();
     _lastRemovedAlbumId = null;
     _hasUnreadNotifications = false;
@@ -84,6 +82,9 @@ class AppState extends ChangeNotifier {
     _lastMediaAddedMediaId = null;
     _lastMemberChangedAlbumId = null;
     _memberChangeTick = 0;
+    _lastMediaRemovedAlbumId = null;
+    _mediaRemovedTick = 0;
+    _deletedAlbums.clear();
     // identity + profile : must not bleed into the next account's session
     _userId = null;
     _email = null;
@@ -144,10 +145,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // After sealing + PATCHing a new title, update BOTH the cached display name
-  // and the stored album's raw nameCt. Without the nameCt update, _albums still
-  // holds the create time placeholder, so a later refreshAlbumNames() would
-  // re resolve that placeholder and clobber the correct title
+  // Update ciphertext and plaintext together so later resolution cannot regress
   void applyAlbumNameCt(String id, String nameCt, String displayName) {
     _localNameCt[id] = nameCt;
     final i = _albums.indexWhere((a) => a.id == id);
@@ -159,9 +157,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Re resolve every album's title. Called after the resolver attaches and
-  // again after key catch up installs the MKs (names sealed under a not yet
-  // installed epoch resolve to a placeholder until then)
+  // Retry title resolution after missing MKs install
   void refreshAlbumNames() {
     for (final a in _albums) {
       unawaited(_resolveName(a));
@@ -172,10 +168,7 @@ class AppState extends ChangeNotifier {
     final r = _nameResolver;
     if (r == null) return;
     final name = await r(a.id, a.nameCt);
-    // Stale guard: if the album's nameCt changed while we were resolving (eg
-    // applyAlbumNameCt landed the real title after a create PATCH, or setAlbums
-    // replaced the row), discard this now stale result so it can't clobber the
-    // newer name
+    // A newer ciphertext invalidates this in-flight result
     final idx = _albums.indexWhere((x) => x.id == a.id);
     if (idx == -1 || _albums[idx].nameCt != a.nameCt) return;
     if (_albumNames[a.id] != name) {
@@ -184,13 +177,26 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // Albums held here that an authoritative listing no longer returns
+  void Function(List<String> albumIds)? _onAlbumsVanished;
+  void attachAlbumsVanished(void Function(List<String> albumIds) f) =>
+      _onAlbumsVanished = f;
+
   void setAlbums(List<AlbumModel> newAlbums) {
+    final incoming = {for (final a in newAlbums) a.id};
+    final vanished = [
+      for (final a in _albums)
+        if (!incoming.contains(a.id)) a.id,
+    ];
     // Overlay any locally authored nameCt so a stale GET placeholder can't
     // regress a title me just PATCHed (create/rename)
     _albums = _mergeMonotonic(newAlbums.map(_overlayLocalNameCt).toList());
     for (final a in _albums) {
       final t = a.memberToken;
       if (t != null) _selfTokens[a.id] = t;
+      if (a.rotationRequired && !_rotations.containsKey(a.id)) {
+        _rotationPrompt?.call(a.id);
+      }
     }
     _saveShelf();
     // A re invited album reappearing clears the stale "was removed" signal so an
@@ -202,6 +208,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     refreshAlbumNames();
     refreshMemberNames();
+    if (vanished.isNotEmpty) _onAlbumsVanished?.call(vanished);
   }
 
   // Never replace a newer realtime summary with an older HTTP response
@@ -253,10 +260,7 @@ class AppState extends ChangeNotifier {
     unawaited(_resolveName(overlaid));
   }
 
-  // Drop an album from the home grid : used when this device is removed/leaves
-  // an album (removed device wipe). Also records the id as the last removed
-  // signal so an open AlbumDetailScreen for that album can exit itself instead
-  // of showing stale content
+  // Records the loss so an open album can exit instead of showing stale content
   String? _lastRemovedAlbumId;
   String? get lastRemovedAlbumId => _lastRemovedAlbumId;
 
@@ -266,6 +270,7 @@ class AppState extends ChangeNotifier {
     _albumNames.remove(albumIdStr);
     _localNameCt.remove(albumIdStr);
     _keyBlocks.remove(albumIdStr);
+    _rotations.remove(albumIdStr);
     _selfTokens.remove(albumIdStr);
     _lastRemovedAlbumId = albumIdStr;
     _saveShelf();
@@ -358,10 +363,7 @@ class AppState extends ChangeNotifier {
     _summaryDebounce = Timer(summaryDebounce, () => unawaited(r()));
   }
 
-  // last (albumId, mediaId) seen on e2ee.media_added
-  // AlbumDetailScreen watches AppState and re-runs _loadMedia when the
-  // matching album_id arrives. Tuple is overwritten on each event : the
-  // screen tracks last seen locally so it only reacts once per id
+  // Open albums track the last seen id to consume each media signal once
   String? _lastMediaAddedAlbumId;
   String? _lastMediaAddedMediaId;
   String? get lastMediaAddedAlbumId => _lastMediaAddedAlbumId;
@@ -373,9 +375,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Roster change signal (member joined / revoked). An open AlbumDetailScreen
-  // watches this and re fetches its member list. The tick lets the screen react
-  // to repeated changes on the same album (album id alone wouldnt change)
+  // The tick distinguishes repeated roster changes on the same album
   String? _lastMemberChangedAlbumId;
   int _memberChangeTick = 0;
   String? get lastMemberChangedAlbumId => _lastMemberChangedAlbumId;
@@ -387,10 +387,25 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // albumId -> MY member_token there. Kept separately from _albums bcs the
-  // signer gate needs it the moment an album exists : the creator's own epoch 0
-  // rotation fans back to them, and that can land before the album list has
-  // refreshed. Without it their own wrap takes the peer path and is refused
+  // Photos deleted elsewhere. An open album re lists so they disappear
+  String? _lastMediaRemovedAlbumId;
+  int _mediaRemovedTick = 0;
+  String? get lastMediaRemovedAlbumId => _lastMediaRemovedAlbumId;
+  int get mediaRemovedTick => _mediaRemovedTick;
+
+  void notifyMediaRemoved(String albumId) {
+    _lastMediaRemovedAlbumId = albumId;
+    _mediaRemovedTick++;
+    notifyListeners();
+    _scheduleSummaryRefresh();
+  }
+
+  // Lets an open album tell deletion apart from removal
+  final Set<String> _deletedAlbums = {};
+  bool wasDeleted(String albumId) => _deletedAlbums.contains(albumId);
+  void markAlbumDeleted(String albumId) => _deletedAlbums.add(albumId);
+
+  // Kept outside album listings because epoch 0 may arrive before a refresh
   final Map<String, String> _selfTokens = {};
   String? selfMemberToken(String albumId) => _selfTokens[albumId];
 
@@ -415,11 +430,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // reachedEpoch is what the sync actually caught up TO. A delayed duplicate
-  // event for an older epoch completes trivially (everything below it is
-  // already installed) and would otherwise clear a block raised by a newer one
-  // No ops silently: this fires after every successful sync, so the
-  // overwhelmingly common call has nothing to announce
+  // An older completed sync must not clear a block raised by a newer epoch
   void clearKeyBlock(String albumId, int reachedEpoch) {
     final block = _keyBlocks[albumId];
     // Never resume a queue still blocked on a newer epoch
@@ -431,10 +442,59 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Per album sync state : album IDs whose MK install is still in flight
-  // (catchUpAll on cold start, or a wsreconnect replay). Album detail
-  // screens should render a "syncing keys" placeholder while their id is in
-  // this set instead of trying to decrypt and failing
+  bool isAdminOf(String albumId) {
+    for (final a in _albums) {
+      if (a.id == albumId) return a.myRole == 'admin';
+    }
+    return false;
+  }
+
+  // Albums owing a key rotation. Held until the scheduler reports it clear
+  final Map<String, RotationStatus> _rotations = {};
+
+  RotationStatus? rotationFor(String albumId) {
+    final live = _rotations[albumId];
+    if (live != null) return live;
+    // The persisted summary shows the debt offline before any check runs
+    for (final a in _albums) {
+      if (a.id != albumId) continue;
+      if (!a.rotationRequired) return null;
+      final admin = a.myRole == 'admin';
+      return RotationStatus(
+        albumId: uuidToBytes(albumId) ?? Uint8List(0),
+        phase: admin ? RotationPhase.failed : RotationPhase.waiting,
+        failure: admin ? RotationFailure.unavailable : null,
+      );
+    }
+    return null;
+  }
+
+  void setRotationStatus(String albumId, RotationStatus status) {
+    final owed = status.phase != RotationPhase.clear;
+    // A late report must not resurrect state for a removed album
+    if (owed && !_albums.any((a) => a.id == albumId)) return;
+    final changed = owed
+        ? !identical(_rotations[albumId], status)
+        : _rotations.remove(albumId) != null;
+    if (owed) _rotations[albumId] = status;
+    final flagged = _setRotationFlag(albumId, owed);
+    if (changed || flagged) notifyListeners();
+  }
+
+  // Keeps the persisted summary in step with what the scheduler learned
+  bool _setRotationFlag(String albumId, bool owed) {
+    final i = _albums.indexWhere((a) => a.id == albumId);
+    if (i < 0 || _albums[i].rotationRequired == owed) return false;
+    _albums[i] = _albums[i].copyWith(rotationRequired: owed);
+    _saveShelf();
+    return true;
+  }
+
+  void Function(String albumId)? _rotationPrompt;
+  void attachRotationPrompt(void Function(String albumId) prompt) =>
+      _rotationPrompt = prompt;
+
+  // Album screens wait while their MK installation is still in flight
   final Set<String> _syncing = {};
   bool isSyncing(String albumId) => _syncing.contains(albumId);
 
@@ -479,17 +539,26 @@ class AppState extends ChangeNotifier {
   String? get avatarUrl => _avatarKey;
 
   void setUserData(Map<String, dynamic> data) {
-    // Email intentionally absent : server stores email_hmac per M8 privacy
-    // audit, never the plaintext. Client owns its own email cache via
-    // StorageService.saveEmail and pushes it via setEmail()
-    // Name + avatar absent for the same reason (M7) : name lives encrypted
-    // per album in album_members.name_ct, client caches its own typed name
-    // via StorageService.saveName + setProfileName
+    // The server response intentionally omits email, name and avatar plaintext
     _userId = data['id'];
     _keepsyId = data['keepsy_id'] as String?;
 
     notifyListeners();
+    final id = _userId;
+    if (id != null) _onUserKnown?.call(id);
   }
+
+  // Seeds the account from the local cache so offline work can be bound to it
+  void setCachedUserId(String id) {
+    if (_userId != null) return;
+    _userId = id;
+    notifyListeners();
+    _onUserKnown?.call(id);
+  }
+
+  void Function(String userId)? _onUserKnown;
+  void attachUserKnown(void Function(String userId) hook) =>
+      _onUserKnown = hook;
 
   void setEmail(String? email) {
     _email = email;
@@ -509,7 +578,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Called after a successful login to start receiving push events.
+  // Called after a successful login to start receiving push events
   // Dispatchers are stubs , populated in Phase 4+ as E2EE protocol layers land
   void startRealtime(Stream<RealtimeEvent> events) {
     _realtimeSub?.cancel();

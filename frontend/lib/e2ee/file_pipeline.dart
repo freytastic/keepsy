@@ -67,11 +67,8 @@ class UploadEnvelope {
   final Uint8List? thumbWrapNonce;
   final Uint8List? thumbWrapTagCT;
   final Uint8List? thumbSha256;
-  // Cleartext bytes carried alongside the wire for the post upload cache
-  // seed : the uploader already has the plaintext in memory, no reason to
-  // pay an L3 fetch + decrypt to render their own freshly uploaded grid
-  // tile. These DO NOT i repeat soldier DO NOT touch disk (L1 RAM only)
-  final Uint8List filePlaintext;
+  // Plaintext kept only in memory to seed the post upload cache
+  final Uint8List? filePlaintext;
   final Uint8List? thumbPlaintext;
 
   const UploadEnvelope({
@@ -84,7 +81,7 @@ class UploadEnvelope {
     required this.blobSha256,
     required this.mediaType,
     required this.mimeType,
-    required this.filePlaintext,
+    this.filePlaintext,
     this.thumbCipherBytes,
     this.thumbWrapNonce,
     this.thumbWrapTagCT,
@@ -100,12 +97,53 @@ class UploadEnvelope {
   String get mediaIdString => _uuidStringFromBytes(mediaId);
 }
 
+// Media encrypted under fresh DEKs but not yet bound to an album key
+class EncryptedMedia {
+  final Uint8List mediaId;
+  final Uint8List cipherBytes;
+  final Uint8List blobSha256;
+  final Uint8List dek;
+  final String mediaType;
+  final String? mimeType;
+  final Uint8List? thumbCipherBytes;
+  final Uint8List? thumbSha256;
+  final Uint8List? thumbDek;
+  final Uint8List? filePlaintext;
+  final Uint8List? thumbPlaintext;
+
+  const EncryptedMedia({
+    required this.mediaId,
+    required this.cipherBytes,
+    required this.blobSha256,
+    required this.dek,
+    required this.mediaType,
+    required this.mimeType,
+    this.thumbCipherBytes,
+    this.thumbSha256,
+    this.thumbDek,
+    this.filePlaintext,
+    this.thumbPlaintext,
+  });
+
+  int get payloadByteLength =>
+      cipherBytes.length + (thumbCipherBytes?.length ?? 0);
+
+  void zeroKeys() {
+    dek.fillRange(0, dek.length, 0);
+    final t = thumbDek;
+    if (t != null) t.fillRange(0, t.length, 0);
+  }
+
+  void zeroAll() {
+    zeroKeys();
+    for (final b in [filePlaintext, thumbPlaintext]) {
+      if (b != null) b.fillRange(0, b.length, 0);
+    }
+  }
+}
+
 abstract class FilePipeline {
-  // PrepareUpload generates a fresh DEK, encrypts plaintext under it (VER
-  // selected by size), wraps the DEK under MK_current of (albumId, epoch),
-  // and returns everything the upload step needs. The DEK is zeroed before
-  // return : nothing in the returned envelope can decrypt the cipher without
-  // unwrapping the DEK first
+  // Encrypts with fresh DEKs, wraps them under the current MK, then zeroes them
   static Future<UploadEnvelope> prepareUpload({
     required AlbumKeyStore aks,
     required Uint8List albumIdBytes,
@@ -120,24 +158,61 @@ abstract class FilePipeline {
       throw ArgumentError(
           'albumIdBytes must be 16 bytes, got ${albumIdBytes.length}');
     }
+    final span = Trace.start('media.prepareUpload', fields: {
+      'kind': mediaType,
+      'input_bytes': plaintext.length,
+      'epoch': currentEpoch,
+    });
+    try {
+      final media = await encryptMedia(
+        plaintext: plaintext,
+        mediaType: mediaType,
+        mimeType: mimeType,
+        mediaId: mediaId,
+      );
+      try {
+        final env = await wrapKeys(
+          aks: aks,
+          albumIdBytes: albumIdBytes,
+          epoch: currentEpoch,
+          media: media,
+        );
+        span.end(fields: {
+          'file_bytes': env.blobSize,
+          'thumb_bytes': env.thumbSize,
+        });
+        return env;
+      } finally {
+        media.zeroKeys();
+      }
+    } catch (e) {
+      span.fail(Trace.reasonOf(e));
+      rethrow;
+    }
+  }
+
+  // Needs no album key because the file AAD is only the media id
+  static Future<EncryptedMedia> encryptMedia({
+    required Uint8List plaintext,
+    required String mediaType,
+    String? mimeType,
+    Uint8List? mediaId,
+  }) async {
     if (mediaType != 'photo' && mediaType != 'video') {
       throw ArgumentError(
           "mediaType must be 'photo' or 'video', got $mediaType");
     }
-
     if (mediaId != null && mediaId.length != _mediaIdLen) {
       throw ArgumentError('mediaId must be 16 bytes, got ${mediaId.length}');
     }
     final id = mediaId ?? _newUuidBytes();
-    final dek = Csprng.bytes(_dekLen);
     final traceFields = <String, Object?>{
       'media': Trace.id(_uuidStringFromBytes(id)),
       'kind': mediaType,
       'input_bytes': plaintext.length,
-      'epoch': currentEpoch,
     };
-    final prepareSpan = Trace.start('media.prepareUpload', fields: traceFields);
-
+    final dek = Csprng.bytes(_dekLen);
+    Uint8List? dekThumb;
     try {
       // Photos are re-encoded without metadata and reuse one thumbnail decode
       // Undecodable photos fail closed while videos keep their original bytes
@@ -186,114 +261,130 @@ abstract class FilePipeline {
         endFields: (result) => {'output_bytes': result.length},
       );
 
-      final blobSha256 = await _sha256(cipher);
-
-      final wrapAad = _wrapAad(albumIdBytes, currentEpoch);
-
-      // thumb has its OWN DEK so MK compromise doesnt leak thumb + file
-      // together. Thumb cipher AAD = media_id ‖ "thumb" so a swapped thumb
-      // object from the same media_id fails the AEAD tag. The thumb cipher
-      // needs no MK, so encrypt it before we touch the keystore
-      final Uint8List? dekThumb =
-          thumbPlaintext == null ? null : Csprng.bytes(_dekLen);
+      // A separate thumbnail DEK limits a single DEK compromise
+      // Distinct AAD prevents swapping file and thumbnail objects
       Uint8List? thumbCipher;
-      Uint8List? thumbWrapNonce;
-      Uint8List? thumbWrapTagCT;
       Uint8List? thumbSha256;
-
-      // dekThumb + the MK wraps all are under one try/finally so the thumb DEK
-      // is zeroed even if the thumb encrypt/hash or a wrap throws. Both DEK
-      // wraps run INSIDE one useMk callback : the MK bytes never escape it
-      // (SecureKeyStore.use zeroes them in finally : see the album_keys "zeroes
-      // the buffer in finally" test) and we still hit the keystore MethodChannel
-      // a single time per upload (platform thread thrash matters more than ms
-      // here : see project_post_libsodium_bottleneck)
-      late final Uint8List wrapNonce;
-      late final Uint8List wrapTagCT;
-      try {
-        if (dekThumb != null) {
-          thumbCipher = await Aead.encrypt(
-            version: kVerAesGcm,
-            key: dekThumb,
-            plaintext: thumbPlaintext!,
-            aad: _thumbAad(id),
-          );
-          thumbSha256 = await _sha256(thumbCipher);
-        }
-        await Trace.measure<void>(
-          'media.keyWrap',
-          () => aks.useMk<void>(albumIdBytes, currentEpoch, (mk) async {
-            final wrapWire = await Aead.encrypt(
-              version: kVerAesGcm,
-              key: mk,
-              plaintext: dek,
-              aad: wrapAad,
-            );
-            if (wrapWire.length != _wrapWireLen) {
-              throw StateError(
-                  'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
-            }
-            wrapNonce =
-                Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
-            wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
-
-            if (dekThumb != null) {
-              final thumbWrapWire = await Aead.encrypt(
-                version: kVerAesGcm,
-                key: mk,
-                plaintext: dekThumb,
-                aad: wrapAad,
-              );
-              thumbWrapNonce = Uint8List.fromList(
-                  thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
-              thumbWrapTagCT =
-                  Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
-            }
-          }),
-          fields: {
-            ...traceFields,
-            'wraps': dekThumb == null ? 1 : 2,
-          },
+      if (thumbPlaintext != null) {
+        dekThumb = Csprng.bytes(_dekLen);
+        thumbCipher = await Aead.encrypt(
+          version: kVerAesGcm,
+          key: dekThumb,
+          plaintext: thumbPlaintext,
+          aad: _thumbAad(id),
         );
-      } finally {
-        dekThumb?.fillRange(0, dekThumb.length, 0);
+        thumbSha256 = await _sha256(thumbCipher);
       }
 
-      final envelope = UploadEnvelope(
+      return EncryptedMedia(
         mediaId: id,
         cipherBytes: cipher,
-        wrapNonce: wrapNonce,
-        wrapTagCT: wrapTagCT,
-        epoch: currentEpoch,
-        blobSize: cipher.length,
-        blobSha256: blobSha256,
+        blobSha256: await _sha256(cipher),
+        dek: dek,
         mediaType: mediaType,
-        // photos are always re encoded to JPEG, so the stored mime must say so
-        // regardless of the picker's input mime (a decoded PNG becomes JPEG)
+        // Photos are re-encoded as JPEG regardless of their input format
         mimeType: mediaType == 'photo' ? 'image/jpeg' : mimeType,
-        filePlaintext: bytesToEncrypt,
         thumbCipherBytes: thumbCipher,
-        thumbWrapNonce: thumbWrapNonce,
-        thumbWrapTagCT: thumbWrapTagCT,
         thumbSha256: thumbSha256,
+        thumbDek: dekThumb,
+        filePlaintext: bytesToEncrypt,
         thumbPlaintext: thumbPlaintext,
       );
-      prepareSpan.end(fields: {
-        'file_bytes': envelope.blobSize,
-        'thumb_bytes': envelope.thumbSize,
-      });
-      return envelope;
-    } catch (e) {
-      prepareSpan.fail(Trace.reasonOf(e));
-      rethrow;
-    } finally {
+    } catch (_) {
       dek.fillRange(0, dek.length, 0);
+      dekThumb?.fillRange(0, dekThumb.length, 0);
+      rethrow;
     }
   }
+
+  // Keeps MK bytes inside one useMk callback while wrapping both DEKs
+  static Future<UploadEnvelope> wrapKeys({
+    required AlbumKeyStore aks,
+    required Uint8List albumIdBytes,
+    required int epoch,
+    required EncryptedMedia media,
+  }) async {
+    if (albumIdBytes.length != _mediaIdLen) {
+      throw ArgumentError(
+          'albumIdBytes must be 16 bytes, got ${albumIdBytes.length}');
+    }
+    final wrapAad = _wrapAad(albumIdBytes, epoch);
+    final thumbDek = media.thumbCipherBytes == null ? null : media.thumbDek;
+    late final Uint8List wrapNonce;
+    late final Uint8List wrapTagCT;
+    Uint8List? thumbWrapNonce;
+    Uint8List? thumbWrapTagCT;
+    await Trace.measure<void>(
+      'media.keyWrap',
+      () => aks.useMk<void>(albumIdBytes, epoch, (mk) async {
+        final wrapWire = await Aead.encrypt(
+          version: kVerAesGcm,
+          key: mk,
+          plaintext: media.dek,
+          aad: wrapAad,
+        );
+        if (wrapWire.length != _wrapWireLen) {
+          throw StateError(
+              'wrap wire length = ${wrapWire.length}, want $_wrapWireLen');
+        }
+        wrapNonce = Uint8List.fromList(wrapWire.sublist(1, 1 + _wrapNonceLen));
+        wrapTagCT = Uint8List.fromList(wrapWire.sublist(1 + _wrapNonceLen));
+
+        if (thumbDek != null) {
+          final thumbWrapWire = await Aead.encrypt(
+            version: kVerAesGcm,
+            key: mk,
+            plaintext: thumbDek,
+            aad: wrapAad,
+          );
+          thumbWrapNonce =
+              Uint8List.fromList(thumbWrapWire.sublist(1, 1 + _wrapNonceLen));
+          thumbWrapTagCT =
+              Uint8List.fromList(thumbWrapWire.sublist(1 + _wrapNonceLen));
+        }
+      }),
+      fields: {
+        'media': Trace.id(_uuidStringFromBytes(media.mediaId)),
+        'epoch': epoch,
+        'wraps': thumbDek == null ? 1 : 2,
+      },
+    );
+
+    return UploadEnvelope(
+      mediaId: media.mediaId,
+      cipherBytes: media.cipherBytes,
+      wrapNonce: wrapNonce,
+      wrapTagCT: wrapTagCT,
+      epoch: epoch,
+      blobSize: media.cipherBytes.length,
+      blobSha256: media.blobSha256,
+      mediaType: media.mediaType,
+      mimeType: media.mimeType,
+      filePlaintext: media.filePlaintext,
+      thumbCipherBytes: thumbDek == null ? null : media.thumbCipherBytes,
+      thumbWrapNonce: thumbWrapNonce,
+      thumbWrapTagCT: thumbWrapTagCT,
+      thumbSha256: thumbDek == null ? null : media.thumbSha256,
+      thumbPlaintext: media.thumbPlaintext,
+    );
+  }
+
+  static Future<Uint8List?> openThumb(EncryptedMedia media) async {
+    final cipher = media.thumbCipherBytes;
+    final dek = media.thumbDek;
+    if (cipher == null || dek == null) return null;
+    return openThumbCipher(mediaId: media.mediaId, cipher: cipher, dek: dek);
+  }
+
+  static Future<Uint8List> openThumbCipher({
+    required Uint8List mediaId,
+    required Uint8List cipher,
+    required Uint8List dek,
+  }) =>
+      Aead.decrypt(wire: cipher, key: dek, aad: _thumbAad(mediaId));
 }
 
-// _wrapAad builds album_id(16) ‖ uint32_be(epoch) per §5.1 + §4.1 ; the same
-// AAD must be passed to Aead.decrypt on the download side or unwrap fails
+// Wrap AAD is album_id(16) followed by uint32_be(epoch) and must match on download
 Uint8List _wrapAad(Uint8List albumIdBytes, int epoch) {
   final out = Uint8List(_mediaIdLen + 4);
   out.setRange(0, _mediaIdLen, albumIdBytes);
@@ -301,9 +392,7 @@ Uint8List _wrapAad(Uint8List albumIdBytes, int epoch) {
   return out;
 }
 
-// thumb AAD = media_id(16) ‖ "thumb"(5). Distinct from the file cipher's
-// AAD (= media_id alone) so a tampered server cant swap a thumb object with a
-// file object from the same row : the AEAD tag mismatches on decrypt
+// Thumbnail AAD differs from file AAD so the server cannot swap their objects
 Uint8List _thumbAad(Uint8List mediaId) {
   final out = Uint8List(mediaId.length + _kThumbAadSuffix.length);
   out.setRange(0, mediaId.length, mediaId);
@@ -339,22 +428,23 @@ class _StrippedAndThumb {
   });
 }
 
-// Runs image codecs off the Flutter UI isolate
 Future<_StrippedAndThumb?> _stripExifAndThumb(Uint8List bytes) =>
     Isolate.run(() => _stripExifAndThumbSync(bytes));
 
-// Returns a cleaned JPEG and thumbnail or null when decoding fails
 _StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
   final watch = Stopwatch()..start();
-  final decoded = img.decodeImage(bytes);
+  img.Image? decoded;
+  try {
+    decoded = img.decodeImage(bytes);
+  } catch (_) {
+    // Some decoders throw on malformed input instead of returning null
+    decoded = null;
+  }
   final decodeMs = watch.elapsedMilliseconds;
   if (decoded == null) return null;
 
-  // Drop EXIF (GPS, camera, capture time) + any XMP/IPTC BEFORE re encoding :
-  // package:image parses EXIF into decoded.exif and encodeJpg writes it back
-  // out, so decoding alone does NOT strip it. Clearing here means both the
-  // clean JPEG and the thumbnail (derived below from the same Image) are
-  // metadata free. ICC colour profile is left alone (not privacy sensitive)
+  // Clear EXIF before encoding because package:image otherwise writes it back
+  // Re-encoding also drops XMP and IPTC from the full image and thumbnail
   decoded.exif = img.ExifData();
 
   watch.reset();
@@ -363,8 +453,6 @@ _StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
       img.encodeJpg(decoded, quality: 90, chroma: img.JpegChroma.yuv420);
   final encodeMs = watch.elapsedMilliseconds;
 
-  // Resize the LONG edge to _thumbMaxDim. copyResize preserves aspect ratio
-  // when only one of width/height is given
   watch.reset();
   final thumbImg = _resizeLongEdge(decoded, _thumbMaxDim);
   final resizeMs = watch.elapsedMilliseconds;
@@ -389,7 +477,6 @@ _StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
   );
 }
 
-// Average interpolation avoids jagged downscale edges
 img.Image _resizeLongEdge(img.Image src, int maxDim) {
   final longEdge = src.width >= src.height ? src.width : src.height;
   if (longEdge <= maxDim) return src;
@@ -408,7 +495,6 @@ class _Thumb {
   const _Thumb(this.bytes, this.width, this.height, this.quality);
 }
 
-// Lowers quality before dimensions to preserve thumbnail detail
 _Thumb _encodeThumbUnderBudget(img.Image src) {
   var image = src;
   var quality = _thumbJpegQuality;

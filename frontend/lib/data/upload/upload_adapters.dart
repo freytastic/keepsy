@@ -7,6 +7,7 @@ import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/api/s3_transport.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/picked_file.dart';
+import 'package:keepsy/data/upload/upload_outbox.dart';
 import 'package:keepsy/domain/upload/upload_item.dart';
 import 'package:keepsy/domain/upload/upload_ports.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
@@ -42,30 +43,31 @@ class PickedSourceStoreImpl implements PickedSourceStore {
 
 class MediaPreparerImpl implements MediaPreparer {
   final AlbumKeyStore _aks;
-  MediaPreparerImpl(this._aks);
+  final UploadOutboxStore _outbox;
+  // Prevents sealed media from crossing signed-in accounts
+  final String? Function() _owner;
+  // Retains only the latest plaintext for immediate cache seeding
+  ({String itemId, String owner, EncryptedMedia media})? _hot;
+
+  MediaPreparerImpl(this._aks, this._outbox,
+      {required String? Function() owner})
+      : _owner = owner;
 
   @override
-  Future<int> latestEpoch(String albumId) =>
-      _aks.latestEpoch(_albumBytes(albumId));
-
-  @override
-  Future<UploadEnvelope> prepare({
+  Future<SealedUpload> seal({
+    required String itemId,
     required String albumId,
     required MediaId mediaId,
     required Uint8List plaintext,
     required String mimeType,
   }) async {
-    final albumIdBytes = _albumBytes(albumId);
-    // Recheck the epoch because rotation can occur mid batch
-    final epoch = await _aks.latestEpoch(albumIdBytes);
-    if (epoch < 0) {
-      throw const UploadStageException(UploadFailureKind.noAlbumKey, 'no_mk');
+    final owner = _owner();
+    if (owner == null) {
+      throw const UploadStageException(UploadFailureKind.unknown, 'no_account');
     }
+    final EncryptedMedia media;
     try {
-      return await FilePipeline.prepareUpload(
-        aks: _aks,
-        albumIdBytes: albumIdBytes,
-        currentEpoch: epoch,
+      media = await FilePipeline.encryptMedia(
         plaintext: plaintext,
         mediaType: 'photo',
         mimeType: mimeType,
@@ -75,6 +77,106 @@ class MediaPreparerImpl implements MediaPreparer {
       throw const UploadStageException(
           UploadFailureKind.unprocessable, 'undecodable');
     }
+    try {
+      await _outbox.put(
+          itemId: itemId, albumId: albumId, owner: owner, media: media);
+    } catch (_) {
+      media.zeroKeys();
+      throw const UploadStageException(
+          UploadFailureKind.unknown, 'outbox_write');
+    }
+    _dropHot();
+    _hot = (itemId: itemId, owner: owner, media: media);
+    return SealedUpload(
+      itemId: itemId,
+      albumId: albumId,
+      mediaId: mediaId,
+      payloadByteLength: media.payloadByteLength,
+      thumbPreview: media.thumbPlaintext,
+    );
+  }
+
+  @override
+  Future<UploadEnvelope> wrap({
+    required String itemId,
+    required String albumId,
+  }) async {
+    final albumIdBytes = _albumBytes(albumId);
+    // Recheck the epoch because rotation can occur mid batch
+    final epoch = await _aks.latestEpoch(albumIdBytes);
+    if (epoch < 0) {
+      throw const UploadStageException(UploadFailureKind.noAlbumKey, 'no_mk');
+    }
+    final owner = _owner();
+    final hot = _hot;
+    EncryptedMedia? media;
+    if (hot != null && hot.itemId == itemId) {
+      _hot = null;
+      if (hot.owner == owner) {
+        media = hot.media;
+      } else {
+        hot.media.zeroKeys();
+      }
+    } else if (owner != null) {
+      media = await _outbox.load(itemId, owner: owner);
+    }
+    if (media == null) {
+      throw const UploadStageException(
+          UploadFailureKind.sourceMissing, 'sealed_missing');
+    }
+    try {
+      return await FilePipeline.wrapKeys(
+        aks: _aks,
+        albumIdBytes: albumIdBytes,
+        epoch: epoch,
+        media: media,
+      );
+    } finally {
+      media.zeroKeys();
+    }
+  }
+
+  @override
+  Future<List<SealedUpload>> restore() async {
+    final owner = _owner();
+    if (owner == null) return const [];
+    final out = <SealedUpload>[];
+    for (final r in await _outbox.restore(owner)) {
+      try {
+        out.add(SealedUpload(
+          itemId: r.itemId,
+          albumId: r.albumId,
+          mediaId: MediaId.parse(r.mediaId),
+          payloadByteLength: r.payloadByteLength,
+          thumbPreview: r.thumbPreview,
+        ));
+      } catch (_) {
+        await _outbox.remove(r.itemId);
+      }
+    }
+    return out;
+  }
+
+  @override
+  Future<void> discardSealed(String itemId) async {
+    if (_hot?.itemId == itemId) _dropHot();
+    await _outbox.remove(itemId);
+  }
+
+  @override
+  Future<void> discardAlbum(String albumId) async {
+    _dropHot();
+    await _outbox.clearAlbum(albumId);
+  }
+
+  void _dropHot() {
+    _hot?.media.zeroKeys();
+    _hot = null;
+  }
+
+  void wipeMemory() {
+    _hot?.media.zeroAll();
+    _hot = null;
   }
 
   Uint8List _albumBytes(String albumId) {

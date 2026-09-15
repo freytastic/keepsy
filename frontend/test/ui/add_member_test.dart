@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
 import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 
@@ -11,7 +12,8 @@ Future<void> _open(
         builder: (ctx) => Center(
           child: ElevatedButton(
             onPressed: () => showDialog(
-                context: ctx, builder: (_) => AddMemberDialog(onInvite: onInvite)),
+                context: ctx,
+                builder: (_) => AddMemberDialog(onInvite: onInvite)),
             child: const Text('open'),
           ),
         ),
@@ -35,7 +37,8 @@ void main() {
     expect(captured, 'K7F29QXM');
   });
 
-  testWidgets('rejects malformed input inline without inviting', (tester) async {
+  testWidgets('rejects malformed input inline without inviting',
+      (tester) async {
     var called = false;
     await _open(tester, (id) async => called = true);
 
@@ -49,12 +52,30 @@ void main() {
 
   testWidgets('surfaces "no such user" on HandleNotFoundException',
       (tester) async {
-    await _open(tester, (id) async => throw const HandleNotFoundException('K7F29QXM'));
+    await _open(
+        tester, (id) async => throw const HandleNotFoundException('K7F29QXM'));
 
     await tester.enterText(find.byType(TextField), 'K7F29QXM');
     await tester.tap(find.text('Invite'));
     await tester.pumpAndSettle();
 
     expect(find.text('No keepsy user with that ID'), findsOneWidget);
+  });
+
+  testWidgets('asks to wait while the album owes a key rotation',
+      (tester) async {
+    await _open(
+        tester,
+        (id) async => throw const ApiError(
+            code: 'E_EPOCH_PENDING_ROTATION', message: '', httpStatus: 409));
+
+    await tester.enterText(find.byType(TextField), 'K7F29QXM');
+    await tester.tap(find.text('Invite'));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.text(
+            "This album's keys are updating. Invite them once that finishes."),
+        findsOneWidget);
   });
 }

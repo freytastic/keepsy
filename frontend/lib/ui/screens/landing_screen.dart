@@ -12,6 +12,7 @@ import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
+import 'package:keepsy/e2ee/rotation_recovery.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
@@ -42,15 +43,19 @@ class _LandingPageState extends State<LandingPage> {
       // straight to landing without going through login : harmless
       final cachedEmail = await storage.getEmail();
       final cachedName = await storage.getName();
+      final cachedUserId = await storage.getUserId();
       if (mounted) {
         final appState = context.read<AppState>();
         if (cachedEmail != null) appState.setEmail(cachedEmail);
         if (cachedName != null) appState.setProfileName(cachedName);
+        // Photos sealed offline can be listed before the server answers
+        if (cachedUserId != null) appState.setCachedUserId(cachedUserId);
 
         // Capture providers before the background awaits
         final identity = context.read<IdentityService>();
         final epochProcessor = context.read<EpochProcessor>();
         final catalog = context.read<AlbumCatalog>();
+        final rotationRecovery = context.read<RotationRecoveryScheduler>();
         // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
         unawaited(_warmSession(
@@ -60,6 +65,7 @@ class _LandingPageState extends State<LandingPage> {
           appState: appState,
           identity: identity,
           epochProcessor: epochProcessor,
+          rotationRecovery: rotationRecovery,
         ));
       }
     }
@@ -88,6 +94,7 @@ class _LandingPageState extends State<LandingPage> {
     required AppState appState,
     required IdentityService identity,
     required EpochProcessor epochProcessor,
+    required RotationRecoveryScheduler rotationRecovery,
   }) async {
     final userData = await Trace.measure<Map<String, dynamic>?>(
       'coldstart.identity',
@@ -107,7 +114,8 @@ class _LandingPageState extends State<LandingPage> {
       final b = _uuidStringToBytes(a.id);
       if (b != null) albumIds.add(b);
     }
-    await _runCryptoHygiene(identity, epochProcessor, appState, albumIds);
+    await _runCryptoHygiene(
+        identity, epochProcessor, rotationRecovery, appState, albumIds);
   }
 
   // Runs cold start crypto hygiene off the navigation critical path. Album
@@ -116,33 +124,31 @@ class _LandingPageState extends State<LandingPage> {
   Future<void> _runCryptoHygiene(
       IdentityService identity,
       EpochProcessor epochProcessor,
+      RotationRecoveryScheduler rotationRecovery,
       AppState appState,
       List<Uint8List> albumIds) async {
     try {
       await identity.bootstrap();
     } catch (_) {/* logged via identity.cryptoReady error */}
-    // Reconcile and rotate under the shared SPK transition lock.
+    // Reconcile and rotate under the shared SPK transition lock
     try {
       await identity.settleSpkState();
     } catch (_) {/* diagnostics are logged inside */}
     try {
-      // trigger=kTargetOpkPool so the post-bootstrap pool (5) is force refilled
-      // up to 20 immediately. Steady state callers (WS opk_low) use the default
-      // trigger=kReplenishTrigger so they only refill on real consumption
+      // Bootstrap fills the OPK target while steady state refills on consumption
       await identity.replenishOpks(
         target: kTargetOpkPool,
         trigger: kTargetOpkPool,
       );
     } catch (_) {/* best effort */}
-    // _appState captured up front : the sync lifecycle outlives this screen
-    // (fire'n'forget + immediate pushReplacement), so it MUST NOT be gated on
-    // `mounted`. clearing after unmount is
-    // safe and is the only thing that lifts the "Syncing keys" overlay
+    // Key sync outlives this screen and must clear its app-level state after unmount
     await syncAlbumKeys(
       appState: appState,
       albumIds: albumIds,
       catchUp: epochProcessor.catchUpAll,
     );
+    // Rotating needs a settled identity and caught up album keys
+    await rotationRecovery.checkAll(albumIds);
   }
 
   // 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
@@ -206,11 +212,7 @@ String uuidStringFromBytes(Uint8List b) {
       '-${s.substring(16, 20)}-${s.substring(20)}';
 }
 
-// Drives the per album "Syncing encryption keys" overlay around a key catch up
-// Mark on, run, clear in a finally : the overlay state lives in the app level
-// AppState singleton and outlives the (fire'n'forget) screen that triggers it,
-// so cleanup must NOT depend on any widget being mounted. Forgetting to clear
-// (the prior `if (!mounted) return` bug) stranded the overlay forever
+// Always clears app-level sync state even after the triggering screen unmounts
 Future<void> syncAlbumKeys({
   required AppState appState,
   required List<Uint8List> albumIds,

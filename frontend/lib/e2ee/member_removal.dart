@@ -1,15 +1,9 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'epoch_rotator.dart';
 
-// MemberRemovalCoordinator : the client side orchestration of member removal
-// Kept out of the UI layer and driven by injected ports so
-// the order sensitive logic is unit testable : the screens/composition root
-// wire the real API + rotator + cache closures
-
-// The one invariant that must never break is revoke-before-rotate: the server's
-// epoch drift check only accepts a rotation whose recipient set equals the live
-// active set, and the removed member drops out of that set only once revoked
+// Revoke must commit before rotation so wraps target only the remaining set
 
 typedef RevokeMemberFn = Future<bool> Function(
     Uint8List albumId, Uint8List memberToken);
@@ -17,15 +11,13 @@ typedef ActiveTokensFn = Future<List<Uint8List>> Function(Uint8List albumId);
 typedef CurrentEpochFn = Future<int> Function(Uint8List albumId);
 typedef RotateFn = Future<void> Function(
     Uint8List albumId, int epoch, List<RotateRecipient> recipients);
-// resolves the IK an MK wrap must be bound to for each remaining member. A
-// throw (eg: a missing pin) MUST propagate : the rotation fails closed rather
-// than wrap the next MK to an unauthenticated, possibly substituted, key
+// Missing or changed recipient pins must fail rotation before MK creation
 typedef ExpectedIkFn = Future<Uint8List> Function(
     Uint8List albumId, Uint8List memberToken);
 typedef DropDirectoryFn = void Function(
     Uint8List albumId, Uint8List memberToken);
 typedef WipeLocalAlbumFn = Future<void> Function(Uint8List albumId);
-typedef IsPendingRotationFn = Future<bool> Function(Uint8List albumId);
+typedef IsRotationRequiredFn = Future<bool> Function(Uint8List albumId);
 
 class MemberRemovalException implements Exception {
   final String message;
@@ -42,7 +34,10 @@ class MemberRemovalCoordinator {
   final ExpectedIkFn _expectedIk;
   final DropDirectoryFn _dropDirectory;
   final WipeLocalAlbumFn _wipeLocalAlbum;
-  final IsPendingRotationFn _isPendingRotation;
+  final IsRotationRequiredFn _isRotationRequired;
+
+  // One rotation chain per album
+  final Map<String, Future<void>> _rotations = {};
 
   MemberRemovalCoordinator({
     required RevokeMemberFn revoke,
@@ -52,7 +47,7 @@ class MemberRemovalCoordinator {
     required ExpectedIkFn expectedIk,
     required DropDirectoryFn dropDirectory,
     required WipeLocalAlbumFn wipeLocalAlbum,
-    required IsPendingRotationFn isPendingRotation,
+    required IsRotationRequiredFn isRotationRequired,
   })  : _revoke = revoke,
         _activeTokens = activeTokens,
         _currentEpoch = currentEpoch,
@@ -60,23 +55,18 @@ class MemberRemovalCoordinator {
         _expectedIk = expectedIk,
         _dropDirectory = dropDirectory,
         _wipeLocalAlbum = wipeLocalAlbum,
-        _isPendingRotation = isPendingRotation;
+        _isRotationRequired = isRotationRequired;
 
-  // admin removes another member. Revoke, then rotate to the next epoch
-  // for the (now smaller) active set so new content is sealed under a key the
-  // removed member never receives, then drop them from the member directory
+  // Revoke first so the recovery rotation excludes the removed member
   Future<void> kick(Uint8List albumId, Uint8List memberToken) async {
     if (!await _revoke(albumId, memberToken)) {
       throw const MemberRemovalException('revoke failed');
     }
-    await _rotateForActiveSet(albumId);
+    await recoverIfPending(albumId);
     _dropDirectory(albumId, memberToken);
   }
 
-  // self removal. Revoke, then wipe this album's local data (MKs +
-  // cache + list entry). The leaver deliberately does NOT rotate : minting the
-  // key the remaining members will hold is the admin's job, deferred to the
-  // pending rotation recovery
+  // The leaver wipes locally and leaves recovery rotation to the admin
   Future<void> leave(Uint8List albumId, Uint8List selfToken) async {
     if (!await _revoke(albumId, selfToken)) {
       throw const MemberRemovalException('revoke failed');
@@ -84,32 +74,37 @@ class MemberRemovalCoordinator {
     await _wipeLocalAlbum(albumId);
   }
 
-  // called when an admin opens an album. If the album is in
-  // the transient window between a revoke and its rotation (a crashed kick or a
-  // deferred leave), finish the rotation for the current active set. Returns
-  // whether a rotation was performed
-  Future<bool> recoverIfPending(Uint8List albumId) async {
-    if (!await _isPendingRotation(albumId)) return false;
-    await _rotateForActiveSet(albumId);
-    return true;
-  }
+  // Serialized so queued callers recheck after any earlier rotation commits
+  Future<bool> recoverIfPending(Uint8List albumId) =>
+      _serial(albumId, () => _rotateIfRequired(albumId));
 
-  // this device learned it was removed from an album by someone
-  // else (member_revoked event or a 403). No server call : just drop the local
-  // data so nothing under the album's keys survives
   Future<void> onSelfRemoved(Uint8List albumId) => _wipeLocalAlbum(albumId);
 
-  // another member was removed. Evict them from the directory
-  // so the next roster lookup re fetches and sees them gone
   void onOtherRemoved(Uint8List albumId, Uint8List memberToken) =>
       _dropDirectory(albumId, memberToken);
+
+  Future<bool> _rotateIfRequired(Uint8List albumId) async {
+    if (!await _isRotationRequired(albumId)) return false;
+    try {
+      await _rotateForActiveSet(albumId);
+      return true;
+    } catch (_) {
+      // A rotation committed elsewhere wins the epoch race and settles the debt
+      bool stillRequired;
+      try {
+        stillRequired = await _isRotationRequired(albumId);
+      } catch (_) {
+        stillRequired = true;
+      }
+      if (stillRequired) rethrow;
+      return false;
+    }
+  }
 
   Future<void> _rotateForActiveSet(Uint8List albumId) async {
     final active = await _activeTokens(albumId);
     final next = (await _currentEpoch(albumId)) + 1;
-    // Resolve every recipient's expected IK BEFORE minting/shipping anything : a
-    // missing pin throws here and the rotation fails closed, so the server can
-    // never harvest the new MK by substituting an unauthenticated bundle
+    // Resolve every pinned recipient key before generating the new MK
     final recipients = <RotateRecipient>[];
     for (final t in active) {
       recipients.add(RotateRecipient(
@@ -117,4 +112,21 @@ class MemberRemovalCoordinator {
     }
     await _rotate(albumId, next, recipients);
   }
+
+  Future<T> _serial<T>(Uint8List albumId, Future<T> Function() body) async {
+    final key = _hex(albumId);
+    final prev = _rotations[key];
+    final done = Completer<void>();
+    _rotations[key] = done.future;
+    try {
+      if (prev != null) await prev;
+      return await body();
+    } finally {
+      done.complete();
+      if (identical(_rotations[key], done.future)) _rotations.remove(key);
+    }
+  }
 }
+
+String _hex(Uint8List b) =>
+    b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();

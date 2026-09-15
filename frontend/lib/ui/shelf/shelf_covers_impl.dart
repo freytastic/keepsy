@@ -37,6 +37,7 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
   final Map<String, Future<void>> _registryWrite = {};
 
   bool _suspended = false;
+  bool _closed = false;
 
   ShelfCoversImpl({
     required MediaSealedCache sealedCache,
@@ -103,7 +104,7 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
   }
 
   void _want(String albumId, List<PreviewMedia> preview, int slot) {
-    if (slot >= preview.length) return;
+    if (_closed || slot >= preview.length) return;
     final id = preview[slot].mediaId;
     if (_bytes.containsKey(id) ||
         _inflight.contains(id) ||
@@ -169,7 +170,7 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
       plaintext ??= await _coldFill(record, cacheKey, albumId, epoch);
       if (plaintext == null || !_current(albumId, p.mediaId, epoch)) return;
 
-      if (_suspended) return;
+      if (_suspended || _closed) return;
       _bytes[p.mediaId] = plaintext;
       notifyListeners();
     } catch (_) {
@@ -241,6 +242,25 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
       await Future.wait(active.toList());
     }
     await _registryWrite.remove(albumId);
+  }
+
+  // Account deletion: no new loads, running ones drain, and every decrypted
+  // cover is zeroed. Throws TimeoutException while a load still runs
+  Future<void> shutdown({Duration wait = const Duration(seconds: 20)}) async {
+    _closed = true;
+    _queue.clear();
+    try {
+      final albums = {..._preview.keys, ..._owned.keys, ..._active.keys};
+      await Future.wait([for (final id in albums) forget(id)]).timeout(wait);
+    } finally {
+      for (final b in _bytes.values) {
+        b.fillRange(0, b.length, 0);
+      }
+      _bytes.clear();
+      _inflight.clear();
+      _failed.clear();
+      notifyListeners();
+    }
   }
 
   @override

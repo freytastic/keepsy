@@ -9,14 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 
-// Local identity trust state, sealed under cache_root_key. Roster pins detect
-// key changes per stable album member token : verification claims bind this
-// device identity to a peer IK across albums. Separate signer bindings authorize
-// epoch signers, and creator markers protect the epoch 0 bootstrap window
-
-// This state survives normal logout so a substituted key cannot become an
-// innocent first sight afterward. clearAlbum drops album scoped state: only a
-// full account reset drops verification claims
+// Keeps roster and signer trust separate and sealed under the device cache key
+// Trust survives logout so substituted keys cannot become a new first sight
 class IdentityPinStore {
   final File _file;
   final Uint8List _cacheKey;
@@ -122,7 +116,11 @@ class IdentityPinStore {
     _pins.removeWhere((k, _) => k.startsWith(prefix));
     _signers.removeWhere((k, _) => k.startsWith(prefix));
     _creating.remove(albumId);
-    if (_pins.length + _signers.length + _creating.length == before) return;
+    // A failed earlier write may still hold these pins on disk
+    if (_pins.length + _signers.length + _creating.length == before &&
+        !_writeFailed) {
+      return;
+    }
     _gen++;
     _flushTimer?.cancel();
     try {
@@ -176,6 +174,17 @@ class IdentityPinStore {
     }
   }
 
+  bool _writeFailed = false;
+
+  // Album removal treats a failed write as pins possibly still on disk
+  bool holdsAlbum(String albumId) {
+    final prefix = '$albumId:';
+    return _writeFailed ||
+        _creating.contains(albumId) ||
+        _pins.keys.any((k) => k.startsWith(prefix)) ||
+        _signers.keys.any((k) => k.startsWith(prefix));
+  }
+
   void _scheduleFlush() {
     _flushTimer?.cancel();
     _flushTimer = Timer(const Duration(milliseconds: 400), () {
@@ -209,8 +218,10 @@ class IdentityPinStore {
         return;
       }
       await tmp.rename(_file.path);
+      _writeFailed = false;
     } catch (_) {
       // Keep the last durable snapshot: in-memory updates may be lost on restart
+      _writeFailed = true;
     }
   }
 

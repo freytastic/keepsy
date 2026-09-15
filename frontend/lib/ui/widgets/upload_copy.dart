@@ -60,10 +60,11 @@ String sheetTitle(UploadBatchSnapshot b, String? albumName) {
 String? pauseNote(UploadBatchSnapshot b) {
   switch (b.paused) {
     case PauseReason.rotationPending:
-      return 'Waiting for this album to finish updating its keys. '
-          'Your photos are held here, nothing is lost.';
+      return 'Waiting for secure sync. Your photos are locked on this phone '
+          'and go up once this album’s keys update.';
     case PauseReason.noAlbumKey:
-      return 'Waiting for this album’s keys to arrive on this phone.';
+      return 'Waiting for this album’s keys to arrive on this phone. Your '
+          'photos are locked here meanwhile.';
     case null:
       return null;
   }

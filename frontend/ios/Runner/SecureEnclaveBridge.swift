@@ -268,15 +268,26 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
         }
     }
 
+    // Account deletion trusts this, so a delete that did not happen must throw
     private func wipeAll() throws {
-        SecItemDelete([
+        let envelope = SecItemDelete([
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrAccount as String: Self.ENVELOPE_TAG
         ] as CFDictionary)
-        SecItemDelete([
+        let wrap = SecItemDelete([
             kSecClass as String:              kSecClassKey,
             kSecAttrApplicationTag as String: Self.WRAP_TAG.data(using: .utf8)!
         ] as CFDictionary)
+        for (what, status) in [("envelope", envelope), ("wrap key", wrap)]
+        where status != errSecSuccess && status != errSecItemNotFound {
+            throw Err.native("SecItemDelete \(what): \(status)")
+        }
+        let left = SecItemCopyMatching([
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrAccount as String: Self.ENVELOPE_TAG
+        ] as CFDictionary, nil)
+        if left != errSecItemNotFound { throw Err.native("envelope survived deletion: \(left)") }
+        if (try? loadWrapKey()) != nil { throw Err.native("wrap key survived deletion") }
     }
 
     // MARK:  Wire format (matches Android byte for byte)

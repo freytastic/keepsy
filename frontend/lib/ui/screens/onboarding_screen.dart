@@ -152,6 +152,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _goHome();
       // Keep keystore work off the sign-in transition
       unawaited(_bootstrapInBackground(identity, messenger));
+    } on AccountDeletingException {
+      if (!mounted) return;
+      _otpCtrl.clear();
+      setState(() => _busy = false);
+      _showError('This account is still being deleted. Try again later.');
     } catch (_) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -407,7 +412,7 @@ class _Copy extends StatelessWidget {
             duration: Warm.crossfade,
             switchInCurve: Warm.easeSoft,
             switchOutCurve: const FlippedCurve(Warm.easeSoft),
-            // Keep copy top-aligned across phases.
+            // Keep copy top-aligned across phases
             layoutBuilder: (current, previous) => Stack(
               alignment: Alignment.topCenter,
               children: [...previous, if (current != null) current],
@@ -482,7 +487,7 @@ class _PhaseCopy extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: Warm.leadMaxWidth,
-      // Align phase copy with the intro lead.
+      // Align phase copy with the intro lead
       margin: EdgeInsets.only(top: compact ? 4 : Warm.headingToLead),
       child: phase == _Phase.email
           ? const Text(

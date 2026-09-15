@@ -33,16 +33,47 @@ abstract class PickedSourceStore {
   Future<void> discard(String path);
 }
 
-abstract class MediaPreparer {
-  // Negative when no MK is installed for the album yet
-  Future<int> latestEpoch(String albumId);
+// A photo encrypted on this device under its own keys, which are sealed to a
+// device key and never to an album key, so it survives a restart
+class SealedUpload {
+  final String itemId;
+  final String albumId;
+  final MediaId mediaId;
+  final int payloadByteLength;
+  // Decrypted for the optimistic tile, never persisted in the clear
+  final Uint8List? thumbPreview;
 
-  Future<UploadEnvelope> prepare({
+  const SealedUpload({
+    required this.itemId,
+    required this.albumId,
+    required this.mediaId,
+    required this.payloadByteLength,
+    this.thumbPreview,
+  });
+}
+
+abstract class MediaPreparer {
+  // Strips, encrypts and durably stores the photo. Needs no album key
+  Future<SealedUpload> seal({
+    required String itemId,
     required String albumId,
     required MediaId mediaId,
     required Uint8List plaintext,
     required String mimeType,
   });
+
+  // Wraps the sealed keys under the album's newest key
+  Future<UploadEnvelope> wrap({
+    required String itemId,
+    required String albumId,
+  });
+
+  // Photos the signed in account sealed in an earlier run
+  Future<List<SealedUpload>> restore();
+
+  Future<void> discardSealed(String itemId);
+
+  Future<void> discardAlbum(String albumId);
 }
 
 class Reservation {

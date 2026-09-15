@@ -3,29 +3,20 @@ import 'dart:typed_data';
 
 import 'wrap_envelope.dart';
 
-// Bits of the album epoch endpoints EpochProcessor needs. The HTTP impl lives
-// here (mirrors HttpPrekeyApi), with a thin EpochJsonClient port that the
-// composition root wires to ApiClient. Keeping the abstract + impl in
-// lib/e2ee/ means EpochProcessor never imports package:keepsy/data
-
 class EpochCurrent {
   final int currentEpoch;
   final DateTime startedAt;
-  // pendingRotation : true when the album is in the revoke→rotate window (a
-  // removed member is still covered by the current epoch, or the active set
-  // shrank). An admin's client uses it to auto heal on album open
-  final bool pendingRotation;
+  // Set by every revoke, cleared only by the next committed epoch. Feeds the
+  // app level rotation recovery
+  final bool rotationRequired;
   const EpochCurrent({
     required this.currentEpoch,
     required this.startedAt,
-    this.pendingRotation = false,
+    this.rotationRequired = false,
   });
 }
 
-// SetEpochWrap : one row in the POST /albums/{id}/epoch wraps[] array
-// wrap is the full 61 byte VER‖NONCE‖TAG‖CT (server splits + stores nonce
-// and tag_ct separately : the client builds the full wire). senderSig is
-// Ed25519_sign(IK_priv_sender, SHA256(album_id ‖ u32_be(epoch) ‖ wrap_blob))
+// The client carries the full wrap wire while the server stores its parts
 class SetEpochWrap {
   final Uint8List recipientToken;
   final Uint8List ekPub;
@@ -62,16 +53,11 @@ abstract class EpochApi {
   // can apply the D7 retry with backoff for racy fetches
   Future<WrapEnvelope> getWrap(String albumId, int epoch);
 
-  // POST /albums/{id}/epoch. Used by EpochRotator on album create (bootstrap
-  // epoch 0) and on member add/remove. Server validates wraps_hash +
-  // envelope_sig + role gate : on success fires e2ee.epoch_changed fanout
   Future<void> setEpoch(String albumId, SetEpochRequest req);
 }
 
 abstract class EpochJsonClient {
-  // Returns null on 404 : rethrows other ApiErrors from the data layer
   Future<Map<String, dynamic>?> getJsonOrNotFound(String path);
-  // POST a JSON body. Rethrows ApiError on non 2xx
   Future<void> postJson(String path, Map<String, dynamic> body);
 }
 
@@ -95,7 +81,10 @@ class HttpEpochApi implements EpochApi {
     return EpochCurrent(
       currentEpoch: (body['current_epoch'] as num).toInt(),
       startedAt: DateTime.parse(body['started_at'] as String),
-      pendingRotation: body['pending_rotation'] as bool? ?? false,
+      // Servers before the explicit flag only send pending_rotation
+      rotationRequired:
+          (body['rotation_required'] ?? body['pending_rotation']) as bool? ??
+              false,
     );
   }
 

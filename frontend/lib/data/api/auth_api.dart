@@ -1,12 +1,17 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:keepsy/data/api/api_error.dart';
 import 'package:keepsy/data/constants.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
+
+// Sign in reached an account whose deletion is still being finished
+class AccountDeletingException implements Exception {
+  const AccountDeletingException();
+}
 
 class AuthService {
   final StorageService _storage = StorageService();
 
-  // request OTP
   Future<bool> requestOtp(String email) async {
     try {
       final url = Uri.parse('${AppConstants.baseURL}/auth/otp/request');
@@ -21,11 +26,7 @@ class AuthService {
     }
   }
 
-  // verify OTP and persist credentials. Returns 'true' once token is saved
-  // E2EE bootstrap is NOT done here anymore (was D4 hard block) : the caller
-  // fires identity.bootstrap() unawaited after navigation so the user gets
-  // an instant home screen instead of staring at a spinner during the
-  // keystore heavy bootstrap. cryptoReady gates any subsequent crypto action
+  // Crypto bootstrap remains asynchronous after credentials are stored
   Future<bool> verifyOtp(String email, String code) async {
     try {
       final url = Uri.parse('${AppConstants.baseURL}/auth/otp/verify');
@@ -48,6 +49,9 @@ class AuthService {
           await _storage.saveEmail(email);
           return true;
         }
+      }
+      if (ApiError.tryParse(response)?.code == 'E_ACCOUNT_DELETING') {
+        throw const AccountDeletingException();
       }
       return false;
     } catch (e) {

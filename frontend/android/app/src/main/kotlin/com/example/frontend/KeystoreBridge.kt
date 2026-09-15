@@ -38,20 +38,14 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
     }
     private val rng = SecureRandom()
 
-    // All keystore + envelope I/O runs on this single serial worker so it never
-    // blocks the platform (UI) thread. Serial keeps the envelope file's
-    // read-modify-write ordering intact (the main thread serialised it before)
-    // ks + rng become single-thread-confined as a result
+    // One worker preserves envelope ordering without blocking the UI thread
     private val worker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "keepsy-keystore").apply { isDaemon = true }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Args are read here on the platform thread
-    // the heavy keystore work runs on the worker via dispatch. An
-    // arg-parsing failure stays on this thread and maps to E_NATIVE, matching
-    // the previous catch-all
+    // Parse arguments before dispatch so failures keep their E_NATIVE mapping
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
             when (call.method) {
@@ -180,9 +174,14 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
     }
 
     private fun wipeAll() {
-        // Shred the data file and the hardware backed wrapper key
-        File(ctx.filesDir, ENVELOPE_FILE).delete()
+        // Shred the data file and the hardware backed wrapper key. Account
+        // deletion trusts this, so anything left behind must surface as an error
+        for (name in listOf(ENVELOPE_FILE, "$ENVELOPE_FILE.tmp")) {
+            val f = File(ctx.filesDir, name)
+            if (f.exists() && !f.delete()) throw IllegalStateException("could not delete $name")
+        }
         if (ks.containsAlias(WRAP_ALIAS)) ks.deleteEntry(WRAP_ALIAS)
+        if (ks.containsAlias(WRAP_ALIAS)) throw IllegalStateException("wrapper key survived deletion")
     }
 
     //Reads the encrypted envelope from disk and decrypts it using the master key

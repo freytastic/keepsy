@@ -7,13 +7,16 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:keepsy/domain/account/account_deletion.dart';
 import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/ui/shelf/safety_summary.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/screens/account_deletion_screen.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/delete_shared_albums_dialog.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
 
 const _docsUrl = 'https://keepsy-web.vercel.app';
@@ -33,6 +36,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final FocusNode _nameFocus = FocusNode();
   bool _editing = false;
   bool _confirmingDelete = false;
+  bool _deleting = false;
   final GlobalKey _dangerKey = GlobalKey();
   String? _verified;
 
@@ -44,6 +48,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
       Scrollable.ensureVisible(ctx,
           duration: Warm.springSoft, curve: Warm.easeSoft, alignment: 1);
     });
+  }
+
+  // A plan can go stale repeatedly only under constant roster churn
+  static const _maxPlanReviews = 3;
+
+  Future<void> _deleteAccount() async {
+    final AccountDeletion deletion;
+    try {
+      deletion = context.read<AccountDeletion>();
+    } catch (_) {
+      return;
+    }
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    setState(() => _deleting = true);
+    try {
+      var changed = false;
+      for (var review = 0; review < _maxPlanReviews; review++) {
+        final plan = await deletion.plan();
+        if (!mounted) return;
+        if (plan.shared.isNotEmpty) {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (_) => DeleteSharedAlbumsDialog(
+              changed: changed,
+              albums: [
+                for (final a in plan.shared)
+                  (
+                    name: state.albumDisplayName(a.albumId) ?? 'Untitled album',
+                    members: a.activeMemberCount,
+                  ),
+              ],
+            ),
+          );
+          if (ok != true) {
+            if (mounted) setState(() => _deleting = false);
+            return;
+          }
+        }
+        // The screen owns the outcome from here, including a lost response
+        final result = await rootNav.push<DeletionResult>(MaterialPageRoute(
+          builder: (_) => AccountDeletionScreen(deletion: deletion, plan: plan),
+        ));
+        if (!mounted) return;
+        if (result == DeletionResult.planChanged) {
+          changed = true;
+          continue;
+        }
+        setState(() => _deleting = false);
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Your account was not deleted. Try again.'),
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+      throw StateError('deletion plan kept changing');
+    } catch (_) {
+      if (mounted) setState(() => _deleting = false);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Could not delete your account. Try again.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
   }
 
   @override
@@ -192,7 +260,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _Danger(
                     key: _dangerKey,
                     confirming: _confirmingDelete,
+                    deleting: _deleting,
                     onAsk: _askDelete,
+                    onConfirm: _deleteAccount,
                     onDismiss: () => setState(() => _confirmingDelete = false),
                   ),
                 ],
@@ -635,13 +705,17 @@ class _Mid extends StatelessWidget {
 
 class _Danger extends StatelessWidget {
   final bool confirming;
+  final bool deleting;
   final VoidCallback onAsk;
+  final VoidCallback onConfirm;
   final VoidCallback onDismiss;
 
   const _Danger({
     super.key,
     required this.confirming,
+    required this.deleting,
     required this.onAsk,
+    required this.onConfirm,
     required this.onDismiss,
   });
 
@@ -659,20 +733,23 @@ class _Danger extends StatelessWidget {
                 children: [
                   const _FactTitle('Delete your account?'),
                   const _Note(
-                      'This removes your account, your albums, and everything '
-                      "stored for them on Keepsy's servers. Photos other "
-                      "members already downloaded stay on their phones, we "
-                      "can't reach those."),
+                      'This removes your account and every photo you shared. '
+                      'Albums you run are deleted for everyone in them. '
+                      'Members who are offline lose them the next time they '
+                      "open Keepsy. Copies saved outside Keepsy can't be "
+                      'recalled.'),
                   Padding(
                     padding: const EdgeInsets.only(top: 14),
-                    child: Row(
-                      children: [
-                        _Link('Delete everything',
-                            warn: true, onTap: onDismiss),
-                        const _Mid(),
-                        _Link('Cancel', onTap: onDismiss),
-                      ],
-                    ),
+                    child: deleting
+                        ? const _Note('Deleting your account…')
+                        : Row(
+                            children: [
+                              _Link('Delete everything',
+                                  warn: true, onTap: onConfirm),
+                              const _Mid(),
+                              _Link('Cancel', onTap: onDismiss),
+                            ],
+                          ),
                   ),
                 ],
               )

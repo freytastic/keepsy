@@ -17,19 +17,17 @@ class RealtimeService {
 
   WebSocketChannel? _channel;
   bool _active = false;
+  bool _terminated = false;
 
   RealtimeService(this._api);
 
   Stream<RealtimeEvent> get stream => _controller.stream;
 
-  // Fires once per successful WS open (initial connect + every reconnect after
-  // a flap). Subscribers use it to catch up on events they may have missed
-  // while the socket was down. May emit spuriously if the upgrade fails right
-  // after connect() returns : consumers should make catch up idempotent
+  // May fire before an upgrade failure, so catch-up consumers must be idempotent
   Stream<void> get connected => _connectedController.stream;
 
   Future<void> connect() async {
-    if (_active) return;
+    if (_active || _terminated) return;
     _active = true;
     _connectLoop();
   }
@@ -74,7 +72,7 @@ class RealtimeService {
 
   // Constructs the WebSocket URI from the HTTP API base URL and a ticket
   // Exposed as a static method so tests can verify the bearer-token invariant
-  // without spinning up a real connection.
+  // without spinning up a real connection
   static Uri buildWsUri(String apiBase, String ticket) {
     final wsBase = apiBase
         .replaceFirst('http://', 'ws://')
@@ -86,6 +84,12 @@ class RealtimeService {
     _active = false;
     await _channel?.sink.close();
     _channel = null;
+  }
+
+  // Prevents later connect calls from reopening the wiped service graph
+  Future<void> terminate() async {
+    _terminated = true;
+    await disconnect();
   }
 
   void dispose() {

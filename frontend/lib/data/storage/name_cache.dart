@@ -9,23 +9,14 @@ import 'package:path_provider/path_provider.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 
-// Persistent display name cache: key -> (name, fingerprint), stored as ONE JSON
-// blob sealed under cache_root_key (the same device key + AEAD as the media
-// cache). After load() every read is solely CPU : no album MK keystore round trip
-// on the render path, so names paint instantly even on a cold start
-
-// fingerprint is the source name_ct. A rename or a member re publishing changes
-// name_ct, so a stale entry is a natural miss and gets re decrypted. its in
-// the app support dir (persistent), NOT the OS evictable cache dir : we never
-// want names evicted by photo churn
+// Seals names and their ciphertext fingerprints under the device cache key
+// A changed fingerprint makes stale names miss naturally
 class NameCache {
   final File _file;
   final Uint8List _cacheKey;
   final Map<String, _Entry> _entries = {};
   Timer? _flushTimer;
-  // Bumped by clear()/clearAlbum() to invalidate any queued or in flight flush
-  // whose sealed snapshot is now stale : _inFlight serializes all file writes so
-  // a clear() can await the last one before deleting
+  // Invalidates queued snapshots when clear races a flush
   int _gen = 0;
   Future<void> _inFlight = Future.value();
 
@@ -80,15 +71,14 @@ class NameCache {
     _scheduleFlush();
   }
 
-  // Drop one album's title + all its member names (removed device wipe)
-  // Hard persists: a removed member's names must be durably gone, not left to a
-  // debounced flush that a kill or an old in\ flight write could defeat
+  // Waits out older flushes before durably removing every album name
   Future<void> clearAlbum(String albumId) async {
     final ak = albumKey(albumId);
     final mp = 'm:$albumId:';
     final before = _entries.length;
     _entries.removeWhere((k, _) => k == ak || k.startsWith(mp));
-    if (_entries.length == before) return;
+    // A failed earlier write may still hold these names on disk
+    if (_entries.length == before && !_writeFailed) return;
     _gen++; // invalidate any in flight flush that snapshotted the old entries
     _flushTimer?.cancel();
     try {
@@ -110,6 +100,14 @@ class NameCache {
     await _delete(_file);
     await _delete(File('${_file.path}.tmp'));
   }
+
+  bool _writeFailed = false;
+
+  // Album removal treats a failed write as names possibly still on disk
+  bool holdsAlbum(String albumId) =>
+      _writeFailed ||
+      _entries.keys
+          .any((k) => k == albumKey(albumId) || k.startsWith('m:$albumId:'));
 
   // Coalesce a burst of puts (eg a batch of member names) into one write
   void _scheduleFlush() {
@@ -144,8 +142,10 @@ class NameCache {
         return;
       }
       await tmp.rename(_file.path);
+      _writeFailed = false;
     } catch (_) {
       // names re decrypt next session if the write failed
+      _writeFailed = true;
     }
   }
 

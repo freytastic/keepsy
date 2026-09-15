@@ -2,17 +2,13 @@ import 'package:keepsy/data/models/album_summary.dart';
 
 class AlbumModel {
   final String id;
-  // Raw base64 name_ct as stored server side (sealed under the album MK, or a
-  // legacy placeholder). Decrypted for display via resolveAlbumName : the UI
-  // reads the resolved string from AppState.albumDisplayName, never this field
+  // Raw encrypted title, never rendered directly
   final String? nameCt;
   final DateTime createdAt;
   final DateTime updatedAt;
-  // memberToken : the caller's own member_token for this album, base64. Set
-  // on /albums/{id} GET (servers fills it from RequireMember context) and on
-  // POST /albums (the creator's freshly minted token). Null on ListAlbums
-  // entries where the server hasnt resolved per album member context yet
+  // Caller token when returned by an album-scoped endpoint
   final String? memberToken;
+  final String? myRole;
 
   final int mediaCount;
   final int activeMemberCount;
@@ -23,6 +19,8 @@ class AlbumModel {
 
   // False when summary values are unknown rather than zero
   final bool hasSummary;
+  // Uploads stay frozen until the album's next epoch commits
+  final bool rotationRequired;
 
   AlbumModel({
     required this.id,
@@ -30,6 +28,7 @@ class AlbumModel {
     required this.createdAt,
     required this.updatedAt,
     this.memberToken,
+    this.myRole,
     this.mediaCount = 0,
     this.activeMemberCount = 0,
     this.latestActivityAt,
@@ -37,6 +36,7 @@ class AlbumModel {
     this.previewMedia = const [],
     this.memberPreviews = const [],
     this.hasSummary = false,
+    this.rotationRequired = false,
   });
 
   AlbumModel copyWith({
@@ -46,6 +46,7 @@ class AlbumModel {
     int? mediaGeneration,
     List<PreviewMedia>? previewMedia,
     bool? hasSummary,
+    bool? rotationRequired,
   }) =>
       AlbumModel(
         id: id,
@@ -53,6 +54,7 @@ class AlbumModel {
         createdAt: createdAt,
         updatedAt: updatedAt,
         memberToken: memberToken,
+        myRole: myRole,
         mediaCount: mediaCount ?? this.mediaCount,
         activeMemberCount: activeMemberCount,
         latestActivityAt: latestActivityAt ?? this.latestActivityAt,
@@ -60,6 +62,7 @@ class AlbumModel {
         previewMedia: previewMedia ?? this.previewMedia,
         memberPreviews: memberPreviews,
         hasSummary: hasSummary ?? this.hasSummary,
+        rotationRequired: rotationRequired ?? this.rotationRequired,
       );
 
   factory AlbumModel.fromJson(Map<String, dynamic> json) {
@@ -73,6 +76,7 @@ class AlbumModel {
           ? DateTime.parse(json['updated_at'])
           : DateTime.now(),
       memberToken: json['member_token'] as String?,
+      myRole: json['role'] as String?,
       hasSummary: json.containsKey('media_generation'),
       mediaCount: json['media_count'] as int? ?? 0,
       activeMemberCount: json['active_member_count'] as int? ?? 0,
@@ -82,6 +86,7 @@ class AlbumModel {
       mediaGeneration: (json['media_generation'] as num?)?.toInt() ?? 0,
       previewMedia: _list(json['preview_media'], PreviewMedia.tryFromJson),
       memberPreviews: _list(json['member_previews'], MemberPreview.tryFromJson),
+      rotationRequired: json['rotation_required'] as bool? ?? false,
     );
   }
 
@@ -92,12 +97,14 @@ class AlbumModel {
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
         'member_token': memberToken,
+        'role': myRole,
         'media_count': mediaCount,
         'active_member_count': activeMemberCount,
         'latest_activity_at': latestActivityAt?.toIso8601String(),
         if (hasSummary) 'media_generation': mediaGeneration,
         'preview_media': [for (final p in previewMedia) p.toJson()],
         'member_previews': [for (final m in memberPreviews) m.toJson()],
+        'rotation_required': rotationRequired,
       };
 
   // Drop malformed summary rows without failing the album list

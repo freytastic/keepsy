@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/models/member_model.dart';
 import 'package:keepsy/data/api/api_client.dart';
+import 'package:keepsy/data/api/api_error.dart';
+import 'package:keepsy/domain/albums/album_cleanup.dart';
 
 class AlbumService {
   final ApiClient _client = ApiClient();
@@ -20,6 +22,23 @@ class AlbumService {
     }
   }
 
+  // Only a typed refusal counts as gone: anything else may be transient
+  Future<AlbumPresence> probeAlbum(String id) async {
+    try {
+      final response = await _client.get('/albums/$id');
+      return response.statusCode == 200
+          ? AlbumPresence.member
+          : AlbumPresence.unknown;
+    } on ApiError catch (e) {
+      return switch (e.code) {
+        'E_NOT_MEMBER' || 'E_MEMBER_REVOKED' => AlbumPresence.gone,
+        _ => AlbumPresence.unknown,
+      };
+    } catch (_) {
+      return AlbumPresence.unknown;
+    }
+  }
+
   Future<AlbumModel?> getAlbum(String id) async {
     try {
       final response = await _client.get('/albums/$id');
@@ -32,11 +51,8 @@ class AlbumService {
     }
   }
 
-  // The real title is sealed under the album MK and PATCHed in only after
-  // epoch 0 bootstrap installs that MK (see create_album_screen). This POST
-  // just needs a non empty placeholder name_ct : bytes that decrypt to nothing
-  // and arent legacy plaintext, so resolveAlbumName shows "Untitled Album" in
-  // the unlikely case the follow up PATCH never lands
+  // Epoch 0 must install before the real encrypted title can be written
+  // This invalid ciphertext safely falls back to Untitled Album
   static const _placeholderNameCt = '////'; // base64 of 0xFF 0xFF 0xFF
 
   Future<AlbumModel?> createAlbum() async {
@@ -54,7 +70,6 @@ class AlbumService {
     }
   }
 
-  // PATCH the album's encrypted title (admin/co admin only, server enforced)
   Future<bool> updateAlbumNameCt(String albumId, String nameCtB64) async {
     try {
       final response = await _client.patch(

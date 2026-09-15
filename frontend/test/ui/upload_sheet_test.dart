@@ -194,7 +194,7 @@ void main() {
     await tester.pump(Duration.zero);
     await pumpSheet(tester, id);
 
-    expect(find.textContaining('finish updating its keys'), findsOneWidget);
+    expect(find.textContaining('Waiting for secure sync'), findsOneWidget);
     expect(find.text('Try again'), findsNothing);
   });
 }

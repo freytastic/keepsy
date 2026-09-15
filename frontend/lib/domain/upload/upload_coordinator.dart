@@ -21,6 +21,7 @@ class UploadCoordinator {
   final MediaPreparer _preparer;
   final StagedUploader _uploader;
   final UploadSink _sink;
+  final void Function(String albumId)? _onRotationPending;
   final DateTime Function() _now;
   final Future<void> Function(Duration) _sleep;
   final Duration Function(int) _backoff;
@@ -53,6 +54,7 @@ class UploadCoordinator {
     required MediaPreparer preparer,
     required StagedUploader uploader,
     required UploadSink sink,
+    void Function(String albumId)? onRotationPending,
     DateTime Function()? now,
     Future<void> Function(Duration)? sleep,
     Duration Function(int)? backoff,
@@ -64,6 +66,7 @@ class UploadCoordinator {
         _preparer = preparer,
         _uploader = uploader,
         _sink = sink,
+        _onRotationPending = onRotationPending,
         _now = now ?? DateTime.now,
         _sleep = sleep ?? Future<void>.delayed,
         _backoff = backoff ?? _defaultBackoff;
@@ -95,13 +98,11 @@ class UploadCoordinator {
     return batchId;
   }
 
-  // Moves picks into managed staging before enqueue
   Future<List<PickedSource>> stage(List<PickedSource> sources) async => [
         for (final s in sources)
           PickedSource(path: await _sources.adopt(s.path), mimeType: s.mimeType)
       ];
 
-  // Removes plaintext picker copies that were not enqueued
   Future<void> discardUnused(Iterable<String> paths) async {
     for (final path in paths) {
       await _discard(path);
@@ -114,6 +115,68 @@ class UploadCoordinator {
     _emitNow();
     unawaited(_pump());
   }
+
+  // Serialized so overlapping restores cannot queue one sealed photo twice
+  Future<void>? _restoring;
+  Future<void> restore() => _restoring ??= _restore().whenComplete(() {
+        _restoring = null;
+      });
+
+  Future<void> _restore() async {
+    final List<SealedUpload> sealed;
+    try {
+      sealed = await _preparer.restore();
+    } catch (_) {
+      return;
+    }
+    if (_closed) return;
+    final known = {for (final i in _items) i.id};
+    final fresh = [
+      for (final s in sealed)
+        if (!known.contains(s.itemId)) s
+    ];
+    if (fresh.isEmpty) return;
+    final batches = <String, String>{};
+    for (final s in fresh) {
+      final batchId = batches.putIfAbsent(s.albumId, () {
+        final id = const Uuid().v4();
+        _mimeTypes[id] = {};
+        _batchEta[id] = EtaEstimator();
+        return id;
+      });
+      _items.add(UploadItem(
+        id: s.itemId,
+        batchId: batchId,
+        albumId: s.albumId,
+        mediaId: s.mediaId,
+        sourcePath: '',
+        sourceDiscarded: true,
+        sealed: true,
+        payloadByteLength: s.payloadByteLength,
+      ));
+    }
+    for (final s in fresh) {
+      _sink.onPrepared(s.albumId, s.mediaId, s.thumbPreview);
+    }
+    _emitNow();
+    unawaited(_pump());
+  }
+
+  // Returns picker files for the caller to verify after best effort deletion
+  Future<List<String>> forgetAlbum(String albumId) async {
+    final picks = <String>[];
+    for (final item in _items.where((i) => i.albumId == albumId).toList()) {
+      if (!(_byId(item.id) ?? item).sourceDiscarded) picks.add(item.sourcePath);
+      // The server already refuses this device, so no abort is sent
+      await _removeItem(item, emit: false, abort: false);
+    }
+    await _guard(() => _preparer.discardAlbum(albumId));
+    _paused.remove(albumId);
+    _emitNow();
+    return picks;
+  }
+
+  bool holdsAlbum(String albumId) => _items.any((i) => i.albumId == albumId);
 
   void retry(String itemId) {
     final i = _indexOf(itemId);
@@ -147,7 +210,6 @@ class UploadCoordinator {
     _emitNow();
   }
 
-  // Abandoning retryable items must discard their picked files
   Future<void> removeFailed(String batchId) async {
     final doomed = _items
         .where((i) => i.batchId == batchId && i.phase == UploadPhase.failed)
@@ -164,7 +226,6 @@ class UploadCoordinator {
     await _removeItem(_items[i], emit: true);
   }
 
-  // Removes only settled batches and any retained sources
   Future<void> dismissBatch(String batchId) async {
     if (_items.any((i) => i.batchId == batchId && !i.isFinished)) return;
     final dropped = _items.where((i) => i.batchId == batchId).toList();
@@ -176,6 +237,7 @@ class UploadCoordinator {
     for (final item in dropped) {
       await _settleAbort(item.id);
       if (!item.sourceDiscarded) await _discard(item.sourcePath);
+      await _guard(() => _preparer.discardSealed(item.id));
     }
   }
 
@@ -186,7 +248,27 @@ class UploadCoordinator {
     await _out.close();
   }
 
-  Future<void> _removeItem(UploadItem item, {required bool emit}) async {
+  // Refuses wipe success while work may still hold or write plaintext
+  Future<void> shutdown({Duration wait = const Duration(seconds: 20)}) async {
+    _closed = true;
+    _throttleTimer?.cancel();
+    _activeCancel?.cancel();
+    final run = _activeRun;
+    if (run != null) {
+      await run.then((_) {}, onError: (_) {}).timeout(wait);
+    }
+    _items.clear();
+    _paused.clear();
+    _startedAt.clear();
+    _batchEta.clear();
+    _pendingAborts.clear();
+    _batchGeneration.clear();
+    _mimeTypes.clear();
+    if (!_out.isClosed) _out.add(_buildState());
+  }
+
+  Future<void> _removeItem(UploadItem item,
+      {required bool emit, bool abort = true}) async {
     if (item.id == _activeItemId) {
       if (_byId(item.id)?.phase == UploadPhase.confirming) {
         // Confirmation cannot be canceled, so wait before removal
@@ -194,14 +276,15 @@ class UploadCoordinator {
       } else {
         _set(item.id, phase: UploadPhase.canceling);
         _activeCancel?.cancel();
-        _beginAbort(item);
+        if (abort) _beginAbort(item);
       }
     }
     // Wait before forgetting the media ID
     await _settleAbort(item.id);
-    if (!item.sourceDiscarded) {
+    if (!(_byId(item.id) ?? item).sourceDiscarded) {
       await _discard(item.sourcePath);
     }
+    await _guard(() => _preparer.discardSealed(item.id));
     _items.removeWhere((i) => i.id == item.id);
     _forgetEmptyBatch(item.batchId);
     _releaseEmptyAlbum(item.albumId);
@@ -215,7 +298,6 @@ class UploadCoordinator {
     _mimeTypes.remove(batchId);
   }
 
-  // Clear pauses after the album queue empties
   void _releaseEmptyAlbum(String albumId) {
     if (_items.any((i) => i.albumId == albumId)) return;
     _paused.remove(albumId);
@@ -238,6 +320,7 @@ class UploadCoordinator {
     UploadFailure? failure,
     bool clearFailure = false,
     bool? sourceDiscarded,
+    bool? sealed,
   }) {
     final i = _indexOf(itemId);
     if (i < 0) return;
@@ -250,13 +333,15 @@ class UploadCoordinator {
       failure: failure,
       clearFailure: clearFailure,
       sourceDiscarded: sourceDiscarded,
+      sealed: sealed,
     );
   }
 
   UploadItem? _nextRunnable() {
     for (final item in _items) {
       if (item.phase != UploadPhase.queued) continue;
-      if (_paused.containsKey(item.albumId)) continue;
+      // Sealing needs no album key, so a paused album still locks new photos
+      if (item.sealed && _paused.containsKey(item.albumId)) continue;
       return item;
     }
     return null;
@@ -323,17 +408,40 @@ class UploadCoordinator {
           logicalBytesSent: 0);
       _emitNow();
 
-      final plaintext = await _sources.read(start.sourcePath);
-      final mime = _mimeTypes[start.batchId]?[start.sourcePath] ?? 'image/jpeg';
-      final env = await _preparer.prepare(
-        albumId: start.albumId,
-        mediaId: start.mediaId,
-        plaintext: plaintext,
-        mimeType: mime,
-      );
-      // Preparation cannot be canceled
+      if (!start.sealed) {
+        final plaintext = await _sources.read(start.sourcePath);
+        final mime =
+            _mimeTypes[start.batchId]?[start.sourcePath] ?? 'image/jpeg';
+        final sealed = await _preparer.seal(
+          itemId: start.id,
+          albumId: start.albumId,
+          mediaId: start.mediaId,
+          plaintext: plaintext,
+          mimeType: mime,
+        );
+        // Sealing cannot be canceled, so an entry that lands late is dropped
+        if (cancel.isCancelled || _byId(start.id) == null) {
+          await _guard(() => _preparer.discardSealed(start.id));
+          return;
+        }
+        _sink.onPrepared(start.albumId, start.mediaId, sealed.thumbPreview);
+        _set(start.id,
+            sealed: true,
+            sourceDiscarded: true,
+            payloadByteLength: sealed.payloadByteLength);
+        _emitNow();
+        // The ciphertext is durable now, so the plaintext pick can go
+        await _discard(start.sourcePath);
+        if (_paused.containsKey(start.albumId)) {
+          _set(start.id, phase: UploadPhase.queued);
+          _emitNow();
+          return;
+        }
+      }
+
+      final env =
+          await _preparer.wrap(itemId: start.id, albumId: start.albumId);
       if (cancel.isCancelled || _byId(start.id) == null) return;
-      _sink.onPrepared(start.albumId, start.mediaId, env.thumbPlaintext);
       final payload = env.blobSize + env.thumbSize;
       _set(start.id, phase: UploadPhase.reserving, payloadByteLength: payload);
       _emitNow();
@@ -447,7 +555,8 @@ class UploadCoordinator {
     if (envelope != null) {
       await _guard(() => _sink.seed(item.albumId, envelope));
     }
-    await _discard(item.sourcePath);
+    if (!item.sourceDiscarded) await _discard(item.sourcePath);
+    await _guard(() => _preparer.discardSealed(itemId));
     final payload = item.payloadByteLength ?? 0;
     final startedAt = _startedAt[itemId];
     if (startedAt != null) {
@@ -471,6 +580,9 @@ class UploadCoordinator {
           : PauseReason.noAlbumKey;
       _set(itemId, phase: UploadPhase.queued, clearFailure: true);
       _emitNow();
+      if (failure.kind == UploadFailureKind.rotationPending) {
+        _onRotationPending?.call(item.albumId);
+      }
       return;
     }
 
@@ -488,7 +600,8 @@ class UploadCoordinator {
     }
 
     if (isTerminal(failure.kind)) {
-      await _discard(item.sourcePath);
+      if (!item.sourceDiscarded) await _discard(item.sourcePath);
+      await _guard(() => _preparer.discardSealed(itemId));
       _set(itemId,
           phase: UploadPhase.failed, failure: failure, sourceDiscarded: true);
       _emitNow();
