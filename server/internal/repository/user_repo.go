@@ -25,14 +25,15 @@ func NewUserRepository(db *pgxpool.Pool) *UserRepository {
 	return &UserRepository{DB: db}
 }
 
-// GetByEmailHMAC looks up a user by HMAC of the lowercased+trimmed email.
+// GetByEmailHMAC looks up a user by HMAC of the normalized email
 // The HMAC is computed in the auth service : the repo never sees the plaintext
 func (r *UserRepository) GetByEmailHMAC(ctx context.Context, hmac []byte) (*model.User, error) {
 	var user model.User
-	query := `SELECT id, email_hmac, keepsy_id, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts FROM users WHERE email_hmac = $1`
+	query := `SELECT id, email_hmac, keepsy_id, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts, deleting_at FROM users WHERE email_hmac = $1`
 	err := r.DB.QueryRow(ctx, query, hmac).Scan(
 		&user.ID, &user.EmailHMAC, &user.KeepsyID, &user.CreatedAt, &user.UpdatedAt,
 		&user.IKPub, &user.LKPub, &user.SPKPub, &user.SPKSig, &user.SPKTs,
+		&user.DeletingAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrUserNotFound
@@ -45,10 +46,11 @@ func (r *UserRepository) GetByEmailHMAC(ctx context.Context, hmac []byte) (*mode
 
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var user model.User
-	query := `SELECT id, email_hmac, keepsy_id, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts FROM users WHERE id = $1`
+	query := `SELECT id, email_hmac, keepsy_id, created_at, updated_at, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts, deleting_at FROM users WHERE id = $1`
 	err := r.DB.QueryRow(ctx, query, id).Scan(
 		&user.ID, &user.EmailHMAC, &user.KeepsyID, &user.CreatedAt, &user.UpdatedAt,
 		&user.IKPub, &user.LKPub, &user.SPKPub, &user.SPKSig, &user.SPKTs,
+		&user.DeletingAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, ErrUserNotFound

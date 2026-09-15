@@ -105,6 +105,22 @@ func InviteConsumed(message string) *APIError {
 	return &APIError{Code: "E_INVITE_CONSUMED", HTTPStatus: http.StatusGone, Message: message}
 }
 
+func AccountDeleting(message string) *APIError {
+	return &APIError{Code: "E_ACCOUNT_DELETING", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func DeletionPlanStale(message string) *APIError {
+	return &APIError{Code: "E_DELETION_PLAN_STALE", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func DeletionAbandoned(message string) *APIError {
+	return &APIError{Code: "E_DELETION_ABANDONED", HTTPStatus: http.StatusConflict, Message: message}
+}
+
+func DeletionAccepted(message string) *APIError {
+	return &APIError{Code: "E_DELETION_ACCEPTED", HTTPStatus: http.StatusConflict, Message: message}
+}
+
 func SigInvalid(message string) *APIError {
 	return &APIError{Code: "E_SIG_INVALID", HTTPStatus: http.StatusBadRequest, Message: message}
 }

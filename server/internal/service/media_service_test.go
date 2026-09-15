@@ -32,19 +32,16 @@ func validInput() RequestUploadInput {
 }
 
 type fakeMediaRepo struct {
-	rows          map[uuid.UUID]*model.Media
-	cleanupQueue  map[string]bool
-	rescheduled   []string
-	attempts      map[string]int
-	reserveCalls  int
-	confirmCalls  int
-	generation    int64
-	deleteCalls   int
-	reserveErr    error
-	confirmErr    error
-	getErr        error
-	objectKeys    []repository.MediaObjectKeys
-	objectKeysErr error
+	rows         map[uuid.UUID]*model.Media
+	cleanupQueue map[string]bool
+	rescheduled  []string
+	attempts     map[string]int
+	reserveCalls int
+	confirmCalls int
+	generation   int64
+	reserveErr   error
+	confirmErr   error
+	getErr       error
 }
 
 func newFakeMediaRepo() *fakeMediaRepo {
@@ -168,55 +165,24 @@ func (f *fakeMediaRepo) ListConfirmed(_ context.Context, _ uuid.UUID) ([]model.M
 	return nil, nil
 }
 
-func (f *fakeMediaRepo) Delete(_ context.Context, mediaID, _ uuid.UUID) error {
-	f.deleteCalls++
+// Mirrors the repository: the row goes and its keys are queued together
+func (f *fakeMediaRepo) DeleteOwnedMedia(_ context.Context, albumID, mediaID uuid.UUID, uploaderToken []byte) (repository.MediaRemoval, error) {
+	row, ok := f.rows[mediaID]
+	if !ok || row.AlbumID != albumID || !row.Confirmed {
+		return repository.MediaRemoval{}, repository.ErrMediaNotFound
+	}
+	if !bytes.Equal(row.UploaderToken, uploaderToken) {
+		return repository.MediaRemoval{}, repository.ErrMediaNotOwned
+	}
 	delete(f.rows, mediaID)
-	return nil
-}
-
-func (f *fakeMediaRepo) ListAlbumObjectKeys(_ context.Context, _ uuid.UUID) ([]repository.MediaObjectKeys, error) {
-	return f.objectKeys, f.objectKeysErr
-}
-
-func TestPurgeAlbumObjects_DeletesBlobsAndThumbs(t *testing.T) {
-	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
-	thumb := "thumbkey1"
-	repo.objectKeys = []repository.MediaObjectKeys{
-		{StorageKey: "blob1", ThumbKey: &thumb},
-		{StorageKey: "blob2", ThumbKey: nil}, // no thumb
+	keys := []string{row.StorageKey}
+	if row.ThumbKey != nil && *row.ThumbKey != "" {
+		keys = append(keys, *row.ThumbKey)
 	}
-	if err := svc.PurgeAlbumObjects(context.Background(), uuid.New()); err != nil {
-		t.Fatalf("PurgeAlbumObjects: %v", err)
+	for _, k := range keys {
+		f.cleanupQueue[k] = true
 	}
-	// every blob and every thumb must have been deleted from object storage
-	want := map[string]bool{"blob1": true, "thumbkey1": true, "blob2": true}
-	for _, k := range s3.deleteKeys {
-		delete(want, k)
-	}
-	if len(want) != 0 {
-		t.Errorf("objects not deleted from storage: %v (deleted: %v)", want, s3.deleteKeys)
-	}
-}
-
-// Hard delete semantics: if any object delete fails, PurgeAlbumObjects must
-// report an error so the caller does NOT drop the DB rows (which are the only
-// handle for a retry). It still attempts every object first
-func TestPurgeAlbumObjects_FailsWhenObjectDeleteFails(t *testing.T) {
-	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
-	thumb := "thumbkey1"
-	repo.objectKeys = []repository.MediaObjectKeys{
-		{StorageKey: "blob1", ThumbKey: &thumb},
-		{StorageKey: "blob2", ThumbKey: nil},
-	}
-	s3.deleteErr = errors.New("minio unreachable")
-
-	if err := svc.PurgeAlbumObjects(context.Background(), uuid.New()); err == nil {
-		t.Fatal("PurgeAlbumObjects returned nil, want error when an object delete fails")
-	}
-	// still attempted every object (best effort within the failing pass)
-	if len(s3.deleteKeys) != 3 {
-		t.Errorf("attempted %d deletes, want 3", len(s3.deleteKeys))
-	}
+	return repository.MediaRemoval{MediaIDs: []uuid.UUID{mediaID}, Keys: keys}, nil
 }
 
 func TestDeleteMedia_DeletesBlobAndThumb(t *testing.T) {
@@ -242,6 +208,64 @@ func TestDeleteMedia_DeletesBlobAndThumb(t *testing.T) {
 	}
 	if _, ok := repo.rows[mediaID]; ok {
 		t.Error("media row not deleted")
+	}
+	if len(repo.cleanupQueue) != 0 {
+		t.Errorf("deleted objects left queued: %v", repo.cleanupQueue)
+	}
+}
+
+// The row is gone either way, the sweep owns whatever storage refused
+func TestDeleteMedia_KeepsUndeletedObjectsQueued(t *testing.T) {
+	svc, repo, s3 := newSvc(&fakeEpochs{cur: 0, exists: true})
+	albumID := uuid.New()
+	mediaID := uuid.New()
+	thumb := "thumbkey1"
+	uploader := []byte{0xAA}
+	repo.rows[mediaID] = &model.Media{
+		ID: mediaID, AlbumID: albumID, StorageKey: "blob1", ThumbKey: &thumb,
+		Confirmed: true, UploaderToken: uploader,
+	}
+	s3.deleteErr = errors.New("minio unreachable")
+
+	if err := svc.DeleteMedia(context.Background(), albumID, mediaID, uploader); err != nil {
+		t.Fatalf("DeleteMedia: %v", err)
+	}
+	if _, ok := repo.rows[mediaID]; ok {
+		t.Error("media row not deleted")
+	}
+	if !repo.cleanupQueue["blob1"] || !repo.cleanupQueue["thumbkey1"] {
+		t.Errorf("undeleted objects must stay queued, got %v", repo.cleanupQueue)
+	}
+	if len(repo.rescheduled) != 2 {
+		t.Errorf("rescheduled = %v, want both keys backed off", repo.rescheduled)
+	}
+}
+
+func TestDeleteMedia_TellsMembersToDropIt(t *testing.T) {
+	notif := &captureNotifier{}
+	member := uuid.New()
+	svc, repo, _ := newSvcWithFanout(&fakeEpochs{cur: 0, exists: true}, notif, &stubLookup{ids: []uuid.UUID{member}})
+	albumID := uuid.New()
+	mediaID := uuid.New()
+	uploader := []byte{0xAA}
+	repo.rows[mediaID] = &model.Media{
+		ID: mediaID, AlbumID: albumID, StorageKey: "blob1", Confirmed: true, UploaderToken: uploader,
+	}
+
+	if err := svc.DeleteMedia(context.Background(), albumID, mediaID, uploader); err != nil {
+		t.Fatalf("DeleteMedia: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(notif.snapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := notif.snapshot()
+	if len(got) != 1 || got[0].typ != ws.EventMediaDeleted {
+		t.Fatalf("emits = %+v, want one media_deleted", got)
+	}
+	payload := got[0].payload.(map[string]any)
+	if ids := payload["media_ids"].([]string); len(ids) != 1 || ids[0] != mediaID.String() {
+		t.Errorf("media_ids = %v, want [%s]", ids, mediaID)
 	}
 }
 

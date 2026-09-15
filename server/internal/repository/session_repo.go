@@ -35,9 +35,11 @@ func HashToken(token string) []byte {
 
 func (r *SessionRepository) GetByToken(ctx context.Context, token string) (*model.Session, error) {
 	var s model.Session
+	// A session created while deletion was being accepted must not outlive it
 	err := r.DB.QueryRow(ctx,
-		`SELECT id, user_id, token_hash, expires_at, created_at
-		 FROM sessions WHERE token_hash = $1`,
+		`SELECT s.id, s.user_id, s.token_hash, s.expires_at, s.created_at
+		 FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.token_hash = $1 AND u.deleting_at IS NULL`,
 		HashToken(token),
 	).Scan(&s.ID, &s.UserID, &s.TokenHash, &s.ExpiresAt, &s.CreatedAt)
 	if err != nil {

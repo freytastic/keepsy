@@ -74,6 +74,10 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 			apierr.Write(w, r, apierr.Auth("invalid or expired OTP"))
 			return
 		}
+		if errors.Is(err, service.ErrAccountDeleting) {
+			apierr.Write(w, r, apierr.AccountDeleting("this account is being deleted"))
+			return
+		}
 		apierr.Write(w, r, apierr.Internal("failed to verify OTP").WithCause(err))
 		return
 	}

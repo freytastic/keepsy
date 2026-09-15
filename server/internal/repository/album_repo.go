@@ -50,6 +50,21 @@ func (r *AlbumRepository) CreateWithAdmin(ctx context.Context, nameCT []byte, cr
 	}
 	defer tx.Rollback(ctx)
 
+	// FOR SHARE holds off the deletion job's final step until this commits
+	var deleting bool
+	err = tx.QueryRow(ctx,
+		`SELECT deleting_at IS NOT NULL FROM users WHERE id = $1 FOR SHARE`, creatorUserID,
+	).Scan(&deleting)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if deleting {
+		return nil, nil, ErrAccountDeleting
+	}
+
 	// Sequence empty albums created within the same hour
 	a := &model.Album{ID: uuid.New(), NameCT: nameCT}
 	err = tx.QueryRow(ctx,

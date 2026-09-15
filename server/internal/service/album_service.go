@@ -14,14 +14,11 @@ var (
 	ErrUnauthorized   = errors.New("unauthorized")
 	ErrLastAdmin      = errors.New("cannot remove the last remaining admin")
 	ErrMemberNotFound = errors.New("member not found in album")
-	// ErrCallerRevoked : the caller was revoked between the auth check and the
-	// locked commit. Surfaced as E_MEMBER_REVOKED so the client self wipes
+	// Surfaced as E_MEMBER_REVOKED so the client wipes local album data
 	ErrCallerRevoked = errors.New("caller was revoked mid-operation")
 )
 
-// The album member cap (MaxAlbumMembers) is enforced in the E2EE invite
-// delivery path : internal/e2ee/invite. Onboarding only happens there, so the
-// cap lives next to its only point rather than here
+// The E2EE invite transaction owns the album member cap
 
 type AlbumStore interface {
 	CreateWithAdmin(ctx context.Context, nameCT []byte, creatorUserID uuid.UUID) (*model.Album, []byte, error)
@@ -31,37 +28,29 @@ type AlbumStore interface {
 	ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error)
 	UpdateName(ctx context.Context, albumID uuid.UUID, nameCT []byte) error
 	UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error
-	Delete(ctx context.Context, id uuid.UUID) error
+	// Deletes under the album lock, re checking the caller is the active admin
+	DeleteAlbumTx(ctx context.Context, albumID uuid.UUID, callerToken []byte) (repository.AlbumRemoval, error)
 
-	// atomically revokes a member under an albums row lock (the
-	// same lock epoch rotation takes), so concurrent removals / rotations
-	// serialize. Under the lock it re checks the caller is still active, reads
-	// the target, enforces the last admin guard, and stamps revoked_at in one
-	// transaction. Returns the target's role, whether it was already revoked
-	// (idempotent no op), and repository.ErrCallerRevoked / ErrMemberNotFound /
-	// ErrLastAdmin / ErrAlbumNotFound as appropriate
+	// Shares the album lock with rotation and upload reservation
+	// Rechecks caller state and the last-admin guard before revoking
 	RevokeMemberTx(ctx context.Context, albumID uuid.UUID, callerToken, targetToken []byte) (role string, alreadyRevoked bool, err error)
 }
 
-// AlbumObjectPurger deletes an album's media objects from S3. *MediaService
-// satisfies it. Kept optional (settable) so album deletion still functions in
-// tests / minimal wirings that don't care about object cleanup
-type AlbumObjectPurger interface {
-	PurgeAlbumObjects(ctx context.Context, albumID uuid.UUID) error
+// Deletes objects already queued for durable cleanup
+type ObjectCleaner interface {
+	CleanupObjectKeys(ctx context.Context, keys []string)
 }
 
 type AlbumService struct {
 	albumRepo AlbumStore
-	purger    AlbumObjectPurger
+	cleaner   ObjectCleaner
 }
 
 func NewAlbumService(albumRepo AlbumStore) *AlbumService {
 	return &AlbumService{albumRepo: albumRepo}
 }
 
-// SetObjectPurger wires the media object cleanup used by DeleteAlbum. Set once
-// at startup, after the media service exists
-func (s *AlbumService) SetObjectPurger(p AlbumObjectPurger) { s.purger = p }
+func (s *AlbumService) SetObjectCleaner(c ObjectCleaner) { s.cleaner = c }
 
 type CreateAlbumResult struct {
 	Album       *model.Album
@@ -114,43 +103,37 @@ func (s *AlbumService) UpdateAlbum(ctx context.Context, albumID, userID uuid.UUI
 	return s.albumRepo.UpdateName(ctx, albumID, nameCT)
 }
 
-func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUID) error {
-	_, role, err := s.albumRepo.LookupMember(ctx, userID, albumID)
-	if err != nil {
-		return ErrUnauthorized
+// DeleteAlbum returns the members who must be told the album is gone
+func (s *AlbumService) DeleteAlbum(ctx context.Context, albumID, userID uuid.UUID) ([]uuid.UUID, error) {
+	token, role, err := s.albumRepo.LookupMember(ctx, userID, albumID)
+	if err != nil || role != "admin" {
+		return nil, ErrUnauthorized
 	}
-	if role != "admin" {
-		return ErrUnauthorized
+	removed, err := s.albumRepo.DeleteAlbumTx(ctx, albumID, token)
+	switch {
+	case errors.Is(err, repository.ErrCallerRevoked):
+		return nil, ErrCallerRevoked
+	case errors.Is(err, repository.ErrNotAlbumAdmin), errors.Is(err, repository.ErrAlbumNotFound):
+		return nil, ErrUnauthorized
+	case err != nil:
+		return nil, err
 	}
-	// Delete the S3 objects first : the media rows cascade away with the album
-	// row, so their storage keys must be read + purged before the DB delete or
-	// the blobs orphan in object storage. If key *listing* fails we abort (don't
-	// orphan everything):individual object delete failures are swallowed +
-	// logged inside PurgeAlbumObjects
-	if s.purger != nil {
-		if err := s.purger.PurgeAlbumObjects(ctx, albumID); err != nil {
-			return err
-		}
+	if s.cleaner != nil {
+		s.cleaner.CleanupObjectKeys(ctx, removed.Keys)
 	}
-	return s.albumRepo.Delete(ctx, albumID)
+	return removed.MemberUserIDs, nil
 }
 
 func (s *AlbumService) ListMembers(ctx context.Context, albumID uuid.UUID) ([]model.MemberWithProfile, error) {
 	return s.albumRepo.ListMembers(ctx, albumID)
 }
 
-// gives the outcome of a revoke so the handler can decide
-// whether to fan out an e2ee.member_revoked event and hand the album to the
-// admin for rotation
 type RemoveMemberResult struct {
 	TargetToken    []byte
 	AlreadyRevoked bool
 }
 
-// RemoveMember revokes targetToken from the album on behalf of callerUserID
-//	mark revoked happens before any rotation, so the removed member drops out of the active set the
-// rotation's drift check recomputes
-
+// Revocation must commit before the client's recovery rotation begins
 func (s *AlbumService) RemoveMember(ctx context.Context, albumID, callerUserID uuid.UUID, targetToken []byte) (*RemoveMemberResult, error) {
 	callerToken, callerRole, err := s.albumRepo.LookupMember(ctx, callerUserID, albumID)
 	if err != nil {
@@ -181,10 +164,7 @@ func (s *AlbumService) RemoveMember(ctx context.Context, albumID, callerUserID u
 	return &RemoveMemberResult{TargetToken: targetToken, AlreadyRevoked: alreadyRevoked}, nil
 }
 
-// UpdateMemberNameCT writes the caller's encrypted name for one album. The
-// caller's member_token is resolved by the RequireMember middleware : the
-// service only validates payload shape and forwards. Bytes are opaque to
-// the server (encrypted under the album's MK on the client)
+// The middleware resolves membership before opaque encrypted bytes arrive here
 func (s *AlbumService) UpdateMemberNameCT(ctx context.Context, albumID uuid.UUID, memberToken, nameCT []byte) error {
 	if len(memberToken) == 0 {
 		return ErrUnauthorized

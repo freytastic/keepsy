@@ -191,3 +191,33 @@ func TestRemoveAlbumMember_PlainMemberForbidden(t *testing.T) {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
+
+func TestDeleteAlbum_TellsTheOtherMembers(t *testing.T) {
+	member := uuid.New()
+	store := &mockAlbumStore{
+		lookupMemberFn: func(context.Context, uuid.UUID, uuid.UUID) ([]byte, string, error) {
+			return []byte("adminadminadminadminadminadmin32"), "admin", nil
+		},
+		removal: repository.AlbumRemoval{MemberUserIDs: []uuid.UUID{member}},
+	}
+	notifier := &mockNotifier{}
+	h := NewAlbumHandler(service.NewAlbumService(store), notifier, &mockResolver{})
+	r := mux.NewRouter()
+	r.HandleFunc("/api/v1/albums/{id}", h.DeleteAlbum).Methods(http.MethodDelete)
+
+	albumID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/albums/"+albumID.String(), nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(notifier.calls) != 1 || notifier.calls[0].typ != ws.EventAlbumDeleted {
+		t.Fatalf("emits = %+v, want one album_deleted", notifier.calls)
+	}
+	if got := notifier.calls[0].users; len(got) != 1 || got[0] != member {
+		t.Errorf("recipients = %v, want [%s]", got, member)
+	}
+}

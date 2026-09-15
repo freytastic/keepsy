@@ -21,8 +21,6 @@ type MemberNotifier interface {
 	EmitToUsers(ctx context.Context, userIDs []uuid.UUID, typ string, payload any) error
 }
 
-// MemberResolver turns member_tokens back into user_ids for WS delivery. The
-// epoch repo satisfies it (M bridge unseal)
 type MemberResolver interface {
 	UserIDsByMemberTokens(ctx context.Context, tokens [][]byte) ([]uuid.UUID, error)
 }
@@ -33,17 +31,11 @@ type AlbumHandler struct {
 	resolver     MemberResolver
 }
 
-// notifier and resolver may be nil (WS fanout is then skipped) : handler tests
-// that only exercise authz pass nil
 func NewAlbumHandler(s *service.AlbumService, notifier MemberNotifier, resolver MemberResolver) *AlbumHandler {
 	return &AlbumHandler{albumService: s, notifier: notifier, resolver: resolver}
 }
 
-// decodeMemberTokenPath decodes a member_token carried in a URL path. Tokens
-// are minted as 32 raw bytes and emitted to clients as std base64; when a
-// client puts one in a path it must re encode as base64url (the '/' and '+' of
-// std base64 break routing). We accept any of the four base64 alphabets so a
-// client that forgets to strip padding still round trips
+// Accept all padded and unpadded base64 forms used by old clients
 func decodeMemberTokenPath(s string) ([]byte, error) {
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding,
@@ -242,13 +234,22 @@ func (h *AlbumHandler) DeleteAlbum(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.Validation("invalid album id").WithCause(err))
 		return
 	}
-	if err := h.albumService.DeleteAlbum(r.Context(), albumID, userID); err != nil {
-		if errors.Is(err, service.ErrUnauthorized) {
+	members, err := h.albumService.DeleteAlbum(r.Context(), albumID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrUnauthorized):
 			apierr.Write(w, r, apierr.Forbidden("only admin can delete this album"))
-			return
+		case errors.Is(err, service.ErrCallerRevoked):
+			apierr.Write(w, r, apierr.MemberRevoked("your access to this album has been revoked"))
+		default:
+			apierr.Write(w, r, apierr.Internal("failed to delete album").WithCause(err))
 		}
-		apierr.Write(w, r, apierr.Internal("failed to delete album").WithCause(err))
 		return
+	}
+	if h.notifier != nil && len(members) > 0 {
+		_ = h.notifier.EmitToUsers(r.Context(), members, ws.EventAlbumDeleted, map[string]any{
+			"album_id": albumID.String(),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -290,10 +291,7 @@ func (h *AlbumHandler) ListAlbumMembers(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// UpdateMyProfileCT handles PUT /albums/{id}/members/me/profile-ct
-// Body: {"name_ct": base64}. Server stores the bytes opaquely : decryption
-// happens client side under the album's MK_current. Caller must already be
-// a member (RequireMember middleware enforces and resolves member_token)
+// Stores the member name as opaque client-encrypted bytes
 func (h *AlbumHandler) UpdateMyProfileCT(w http.ResponseWriter, r *http.Request) {
 	albumID, err := uuid.Parse(mux.Vars(r)["id"])
 	if err != nil {

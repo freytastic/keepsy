@@ -103,9 +103,10 @@ func main() {
 	memberInviteHandler := invite.NewHandler(inviteService, inviteRepo, hub)
 
 	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client}, hub, inviteRepo)
-	// album deletion purges the album's S3 objects (media rows cascade in the DB
-	// but the blobs don't) before dropping the row
-	albumService.SetObjectPurger(mediaService)
+	// Deletions queue their objects transactionally, this only deletes them sooner
+	albumService.SetObjectCleaner(mediaService)
+	accountDeletions := service.NewAccountDeletionService(
+		repository.NewAccountDeletionRepository(dbPool, linker), mediaService, hub)
 
 	rateLimiter := middleware.NewRateLimiter(rdb)
 
@@ -114,6 +115,7 @@ func main() {
 	albumHandler := handler.NewAlbumHandler(albumService, hub, epochRepo)
 	mediaHandler := handler.NewMediaHandler(mediaService)
 	inviteHandler := handler.NewInviteHandler()
+	accountHandler := handler.NewAccountHandler(accountDeletions)
 	wsHandler := handler.NewWSHandler(hub, ticketStore)
 
 	authMiddleware := middleware.NewAuthMiddleware(sessionRepo)
@@ -128,6 +130,8 @@ func main() {
 	apiV1.HandleFunc("/auth/otp/verify", authHandler.VerifyOTP).Methods(http.MethodPost)
 	apiV1.HandleFunc("/auth/otp/refresh", authHandler.Refresh).Methods(http.MethodPost)
 	apiV1.HandleFunc("/invite/{code}", inviteHandler.GetPreview).Methods(http.MethodGet)
+	apiV1.HandleFunc("/account-deletions/{receipt}", accountHandler.DeletionReceipt).Methods(http.MethodGet)
+	apiV1.HandleFunc("/account-deletions/{receipt}/abandon", accountHandler.AbandonDeletion).Methods(http.MethodPost)
 
 	// WS endpoint authenticates via ticket, not bearer , must be outside authed subrouter
 	apiV1.HandleFunc("/ws", wsHandler.ServeWS).Methods(http.MethodGet)
@@ -137,16 +141,15 @@ func main() {
 
 	authed.HandleFunc("/ws-ticket", wsHandler.IssueTicket).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me", userHandler.GetMe).Methods(http.MethodGet)
+	authed.HandleFunc("/users/me/deletion", accountHandler.DeletionPreflight).Methods(http.MethodGet)
+	authed.HandleFunc("/users/me/deletion", accountHandler.RequestDeletion).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/keys", prekeyHandler.UpsertIdentity).Methods(http.MethodPut)
 	// Side-effect-free self key state for publication reconciliation
 	authed.HandleFunc("/users/me/keys", prekeyHandler.GetOwnKeys).Methods(http.MethodGet)
 	authed.HandleFunc("/users/me/spk", prekeyHandler.RotateSPK).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks", prekeyHandler.ReplenishOPKs).Methods(http.MethodPost)
 	authed.HandleFunc("/users/me/opks/count", prekeyHandler.GetOPKCount).Methods(http.MethodGet)
-	// peer bundle fetch : per (requester, target) rate limit (5/min/pair)
-	// chained with a per requester distinct probe tracker (warn at >20 distinct
-	// targets/hr). The pair limit makes legitimate retries cheap : the probe
-	// tracker catches enumeration that hides under the pair limit
+	// Pair limits allow retries while the distinct-target tracker catches probing
 	authed.Handle(
 		"/users/{id}/prekey-bundle",
 		rateLimiter.Middleware(prekey.KeyByRequesterAndTarget, 5, 60*time.Second)(
@@ -174,15 +177,10 @@ func main() {
 	scoped.HandleFunc("", albumHandler.UpdateAlbum).Methods(http.MethodPatch)
 	scoped.HandleFunc("", albumHandler.DeleteAlbum).Methods(http.MethodDelete)
 	scoped.HandleFunc("/members", albumHandler.ListAlbumMembers).Methods(http.MethodGet)
-	// Member onboarding goes through the E2EE invite path only
-	// (POST /invites/existing-user). The legacy direct add-member route was
-	// removed: it inserted DB membership without X3DH MK delivery, leaving a
-	// "member without keys" state and bypassing the crypto envelope.
+	// Onboarding stays on the E2EE invite path so membership includes MK delivery
 	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
-	// by nickname prekey bundle: an admin rotating an album fetches remaining
-	// members' bundles by member_token (identity hidden). Same per pair 5/min
-	// limit as the by id route, keyed on (requester, album, token)
+	// Member-token prekey fetch keeps rotation targets pseudonymous
 	scoped.Handle(
 		"/members/{token}/prekey-bundle",
 		rateLimiter.Middleware(prekey.KeyByRequesterAndMemberToken, 5, 60*time.Second)(
@@ -238,6 +236,11 @@ func main() {
 		defer close(pendingCleanupDone)
 		mediaService.RunPendingUploadCleanup(cleanupCtx)
 	}()
+	accountDeletionsDone := make(chan struct{})
+	go func() {
+		defer close(accountDeletionsDone)
+		accountDeletions.Run(cleanupCtx)
+	}()
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -264,10 +267,12 @@ func main() {
 		// Cleanup gets a fresh budget if HTTP shutdown consumed its deadline
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelDrain()
-		select {
-		case <-pendingCleanupDone:
-		case <-drainCtx.Done():
-			log.Printf("Pending media cleanup did not stop before shutdown deadline")
+		for _, done := range []chan struct{}{pendingCleanupDone, accountDeletionsDone} {
+			select {
+			case <-done:
+			case <-drainCtx.Done():
+				log.Printf("Background workers did not stop before shutdown deadline")
+			}
 		}
 		fmt.Println("Server stopped.")
 	}

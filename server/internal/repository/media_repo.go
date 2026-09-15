@@ -25,7 +25,6 @@ type MediaRepository struct {
 	DB *pgxpool.Pool
 }
 
-// PendingCleanupBatch describes rows retired into the durable object queue
 type PendingCleanupBatch struct {
 	MediaCount int
 	Keys       []string
@@ -466,50 +465,4 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 		out = append(out, m)
 	}
 	return out, nil
-}
-
-// MediaObjectKeys is the pair of S3 keys backing one media row : the main blob
-// and its optional thumbnail. Used to purge object storage when an album is
-// deleted (the media rows themselves cascade away with the album)
-type MediaObjectKeys struct {
-	StorageKey string
-	ThumbKey   *string
-}
-
-// returns every media object key in an album, confirmed or
-// not, so the caller can delete them from S3 before the album (and its media
-// rows, via ON DELETE CASCADE) is dropped
-func (r *MediaRepository) ListAlbumObjectKeys(ctx context.Context, albumID uuid.UUID) ([]MediaObjectKeys, error) {
-	rows, err := r.DB.Query(ctx,
-		`SELECT storage_key, thumb_key FROM media WHERE album_id = $1`, albumID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []MediaObjectKeys
-	for rows.Next() {
-		var k MediaObjectKeys
-		if err := rows.Scan(&k.StorageKey, &k.ThumbKey); err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
-}
-
-// Delete removes a confirmed media row. The S3 object is dropped by the
-// service layer before this fires : a stranded row would still 404 cleanly
-// since the storage_key would point at nothing
-func (r *MediaRepository) Delete(ctx context.Context, mediaID, albumID uuid.UUID) error {
-	tag, err := r.DB.Exec(ctx,
-		`DELETE FROM media WHERE id = $1 AND album_id = $2`,
-		mediaID, albumID,
-	)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrMediaNotFound
-	}
-	return nil
 }

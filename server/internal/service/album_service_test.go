@@ -20,6 +20,8 @@ type removeMemberStore struct {
 	revokedToken []byte // captures the target token passed to RevokeMemberTx
 	revokeCalls  int
 	deleteCalls  int
+	deleteErr    error
+	removal      repository.AlbumRemoval
 }
 
 func (m *removeMemberStore) LookupMember(ctx context.Context, userID, albumID uuid.UUID) ([]byte, string, error) {
@@ -48,14 +50,19 @@ func (m *removeMemberStore) UpdateName(context.Context, uuid.UUID, []byte) error
 func (m *removeMemberStore) UpdateMemberNameCT(context.Context, uuid.UUID, []byte, []byte) error {
 	return nil
 }
-func (m *removeMemberStore) Delete(context.Context, uuid.UUID) error {
+func (m *removeMemberStore) DeleteAlbumTx(context.Context, uuid.UUID, []byte) (repository.AlbumRemoval, error) {
 	m.deleteCalls++
-	return nil
+	if m.deleteErr != nil {
+		return repository.AlbumRemoval{}, m.deleteErr
+	}
+	return m.removal, nil
 }
 
-type stubPurger struct{ err error }
+type recordingCleaner struct{ keys []string }
 
-func (p stubPurger) PurgeAlbumObjects(context.Context, uuid.UUID) error { return p.err }
+func (c *recordingCleaner) CleanupObjectKeys(_ context.Context, keys []string) {
+	c.keys = append(c.keys, keys...)
+}
 
 func okRevoke(role string) func(context.Context, uuid.UUID, []byte, []byte) (string, bool, error) {
 	return func(context.Context, uuid.UUID, []byte, []byte) (string, bool, error) { return role, false, nil }
@@ -231,39 +238,57 @@ func TestRemoveMember_AlreadyRevokedIsNoOp(t *testing.T) {
 	}
 }
 
-// Hard delete semantics: if the S3 object purge fails, the album row must NOT
-// be deleted (it's the only handle left to retry the object cleanup)
-func TestDeleteAlbum_AbortsWhenObjectPurgeFails(t *testing.T) {
+func TestDeleteAlbum_ReturnsMembersAndCleansQueuedObjects(t *testing.T) {
+	member := uuid.New()
 	store := &removeMemberStore{
 		lookupFn: func(context.Context, uuid.UUID, uuid.UUID) ([]byte, string, error) {
 			return []byte("adminadminadminadminadminadmin32"), "admin", nil
 		},
+		removal: repository.AlbumRemoval{MemberUserIDs: []uuid.UUID{member}, Keys: []string{"blob", "thumb"}},
 	}
 	svc := NewAlbumService(store)
-	svc.SetObjectPurger(stubPurger{err: errors.New("minio down")})
+	cleaner := &recordingCleaner{}
+	svc.SetObjectCleaner(cleaner)
 
-	if err := svc.DeleteAlbum(context.Background(), uuid.New(), uuid.New()); err == nil {
-		t.Fatal("DeleteAlbum returned nil, want error when purge fails")
+	members, err := svc.DeleteAlbum(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("DeleteAlbum: %v", err)
 	}
-	if store.deleteCalls != 0 {
-		t.Errorf("album row deleted despite purge failure (deleteCalls=%d)", store.deleteCalls)
+	if len(members) != 1 || members[0] != member {
+		t.Errorf("members = %v, want [%s]", members, member)
+	}
+	if len(cleaner.keys) != 2 {
+		t.Errorf("cleaned keys = %v, want both queued objects", cleaner.keys)
 	}
 }
 
-func TestDeleteAlbum_DeletesAfterSuccessfulPurge(t *testing.T) {
+func TestDeleteAlbum_OnlyTheAdmin(t *testing.T) {
+	for _, role := range []string{"member", "co-admin"} {
+		store := &removeMemberStore{
+			lookupFn: func(context.Context, uuid.UUID, uuid.UUID) ([]byte, string, error) {
+				return []byte("callercallercallercallercaller32"), role, nil
+			},
+		}
+		svc := NewAlbumService(store)
+		if _, err := svc.DeleteAlbum(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("%s: err = %v, want ErrUnauthorized", role, err)
+		}
+		if store.deleteCalls != 0 {
+			t.Fatalf("%s: delete reached the repository", role)
+		}
+	}
+}
+
+func TestDeleteAlbum_AdminRemovedMidFlight(t *testing.T) {
 	store := &removeMemberStore{
 		lookupFn: func(context.Context, uuid.UUID, uuid.UUID) ([]byte, string, error) {
 			return []byte("adminadminadminadminadminadmin32"), "admin", nil
 		},
+		deleteErr: repository.ErrCallerRevoked,
 	}
 	svc := NewAlbumService(store)
-	svc.SetObjectPurger(stubPurger{err: nil})
-
-	if err := svc.DeleteAlbum(context.Background(), uuid.New(), uuid.New()); err != nil {
-		t.Fatalf("DeleteAlbum: %v", err)
-	}
-	if store.deleteCalls != 1 {
-		t.Errorf("album delete calls = %d, want 1", store.deleteCalls)
+	if _, err := svc.DeleteAlbum(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrCallerRevoked) {
+		t.Fatalf("err = %v, want ErrCallerRevoked", err)
 	}
 }
 
