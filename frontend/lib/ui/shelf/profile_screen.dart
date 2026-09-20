@@ -97,6 +97,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           changed = true;
           continue;
         }
+        // Successful deletion replaces the route stack and returns null
+        if (result == null) return;
         setState(() => _deleting = false);
         messenger.showSnackBar(const SnackBar(
           content: Text('Your account was not deleted. Try again.'),
