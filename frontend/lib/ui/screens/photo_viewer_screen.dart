@@ -17,6 +17,9 @@ class PhotoViewerScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Decode near the screen resolution instead of the sensor resolution
+    final media = MediaQuery.of(context);
+    final cap = (media.size.longestSide * media.devicePixelRatio).round();
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -29,6 +32,7 @@ class PhotoViewerScreen extends StatelessWidget {
           record: record,
           cache: cache,
           fit: BoxFit.contain,
+          cacheWidth: cap,
         ),
       ),
     );

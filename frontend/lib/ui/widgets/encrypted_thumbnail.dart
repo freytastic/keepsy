@@ -165,13 +165,23 @@ class _EncryptedThumbnailState extends State<EncryptedThumbnail> {
         child: const Icon(Icons.broken_image_outlined, size: 20),
       );
     }
-    return Image.memory(
-      _bytes!,
-      fit: widget.fit,
-      gaplessPlayback: true,
-      frameBuilder: (context, child, frame, synchronouslyLoaded) {
-        if (frame != null) _reportFirstFrame(synchronouslyLoaded);
-        return child;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Decode the 640px thumbnail near its painted width
+        final width = constraints.maxWidth.isFinite
+            ? (constraints.maxWidth * MediaQuery.devicePixelRatioOf(context))
+                .round()
+            : null;
+        return Image.memory(
+          _bytes!,
+          fit: widget.fit,
+          gaplessPlayback: true,
+          cacheWidth: width == null || width <= 0 ? null : width,
+          frameBuilder: (context, child, frame, synchronouslyLoaded) {
+            if (frame != null) _reportFirstFrame(synchronouslyLoaded);
+            return child;
+          },
+        );
       },
     );
   }

@@ -42,3 +42,8 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Reads HEIF orientation unavailable from framework ExifInterface
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+}

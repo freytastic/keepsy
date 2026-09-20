@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:keepsy/domain/upload/upload_item.dart';
 import 'package:keepsy/domain/upload/upload_snapshot.dart';
 import 'package:keepsy/ui/providers/upload_queue_model.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 
-// Renders a picked file until its cleaned preview is ready
 class UploadTile extends StatelessWidget {
   final UploadItemView item;
   final UploadQueueModel model;
@@ -50,19 +47,11 @@ class UploadTile extends StatelessWidget {
     );
   }
 
+  // Never decode the original camera file for a pending tile
   Widget _image() {
     final preview = model.preview(item.mediaId);
-    if (preview != null) {
-      return Image.memory(preview, fit: BoxFit.cover, gaplessPlayback: true);
-    }
-    final path = item.sourcePath;
-    if (path != null) {
-      return Image.file(File(path),
-          fit: BoxFit.cover,
-          cacheWidth: 640,
-          errorBuilder: (_, __, ___) => const SizedBox.shrink());
-    }
-    return const SizedBox.shrink();
+    if (preview == null) return const SizedBox.shrink();
+    return Image.memory(preview, fit: BoxFit.cover, gaplessPlayback: true);
   }
 }
 

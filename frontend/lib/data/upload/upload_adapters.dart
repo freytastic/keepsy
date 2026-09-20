@@ -7,6 +7,7 @@ import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/api/s3_transport.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/picked_file.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/data/upload/upload_outbox.dart';
 import 'package:keepsy/domain/upload/upload_item.dart';
 import 'package:keepsy/domain/upload/upload_ports.dart';
@@ -46,12 +47,15 @@ class MediaPreparerImpl implements MediaPreparer {
   final UploadOutboxStore _outbox;
   // Prevents sealed media from crossing signed-in accounts
   final String? Function() _owner;
+  // Null when the platform has no native image bridge
+  final ImageTranscoder? _transcode;
   // Retains only the latest plaintext for immediate cache seeding
   ({String itemId, String owner, EncryptedMedia media})? _hot;
 
   MediaPreparerImpl(this._aks, this._outbox,
-      {required String? Function() owner})
-      : _owner = owner;
+      {required String? Function() owner, ImageTranscoder? transcode})
+      : _owner = owner,
+        _transcode = transcode;
 
   @override
   Future<SealedUpload> seal({
@@ -72,14 +76,19 @@ class MediaPreparerImpl implements MediaPreparer {
         mediaType: 'photo',
         mimeType: mimeType,
         mediaId: mediaId.bytes,
+        transcode: _transcode,
       );
     } on UnprocessableImageException {
       throw const UploadStageException(
           UploadFailureKind.unprocessable, 'undecodable');
     }
     try {
-      await _outbox.put(
-          itemId: itemId, albumId: albumId, owner: owner, media: media);
+      await Trace.measure<void>(
+        'media.outboxPut',
+        () => _outbox.put(
+            itemId: itemId, albumId: albumId, owner: owner, media: media),
+        fields: {'bytes': media.payloadByteLength},
+      );
     } catch (_) {
       media.zeroKeys();
       throw const UploadStageException(
