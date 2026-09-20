@@ -9,5 +9,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, KeystoreBridge.CHANNEL)
             .setMethodCallHandler(KeystoreBridge(applicationContext))
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ImageBridge.CHANNEL)
+            .setMethodCallHandler(ImageBridge())
     }
 }

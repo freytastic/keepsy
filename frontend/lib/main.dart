@@ -20,6 +20,7 @@ import 'package:keepsy/data/api/invite_json_client.dart';
 import 'package:keepsy/data/api/prekey_json_client.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
+import 'package:keepsy/data/native/image_transcoder.dart';
 import 'package:keepsy/data/upload/upload_adapters.dart';
 import 'package:keepsy/data/upload/upload_outbox.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
@@ -534,7 +535,7 @@ void main() async {
   );
   final pickedSources = PickedSourceStoreImpl();
   final mediaPreparer = MediaPreparerImpl(albumKeyStore, uploadOutbox,
-      owner: () => appState.userId);
+      owner: () => appState.userId, transcode: platformImageTranscoder);
   final uploadCoordinator = UploadCoordinator(
     sources: pickedSources,
     onRotationPending: (albumId) {

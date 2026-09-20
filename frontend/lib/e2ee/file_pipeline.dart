@@ -10,6 +10,7 @@ import 'package:keepsy/diagnostics/trace.dart';
 import 'package:uuid/uuid.dart';
 
 import 'album_keys.dart';
+import 'jpeg_sanity.dart';
 
 // File encryption pipeline (§5.1). Per file DEK + algorithm select by plaintext
 // size. Photos work now : videos slot in unchanged when the v2 picker / player
@@ -39,6 +40,44 @@ const int _thumbMinDim = 320;
 // "thumb" suffix bound into thumb cipher AAD so it cant be swapped with a
 // file blob from the same media_id
 final Uint8List _kThumbAadSuffix = Uint8List.fromList('thumb'.codeUnits);
+
+// One native decode produces metadata-free full and thumbnail JPEGs
+class TranscodedPhoto {
+  final Uint8List jpeg;
+  final Uint8List thumb;
+  final int width;
+  final int height;
+  const TranscodedPhoto({
+    required this.jpeg,
+    required this.thumb,
+    required this.width,
+    required this.height,
+  });
+}
+
+// Rejection must not fall back to the uncapped Dart decoder
+sealed class TranscodeOutcome {
+  const TranscodeOutcome();
+}
+
+class TranscodeDone extends TranscodeOutcome {
+  final TranscodedPhoto photo;
+  const TranscodeDone(this.photo);
+}
+
+// The bridge could not identify the format, so Dart may try
+class TranscodeUnavailable extends TranscodeOutcome {
+  const TranscodeUnavailable();
+}
+
+// The bridge read the header but could not decode safely
+class TranscodeRejected extends TranscodeOutcome {
+  final String reason;
+  const TranscodeRejected(this.reason);
+}
+
+// Injected because the Dart fallback isolate has no binary messenger
+typedef ImageTranscoder = Future<TranscodeOutcome> Function(Uint8List bytes);
 
 // A photo we could not decode, so we cannot guarantee its metadata was
 // stripped. Fail closed rather than upload the original bytes (EXIF/GPS intact)
@@ -153,6 +192,7 @@ abstract class FilePipeline {
     String? mimeType,
     // Stable across retries because media ID is AEAD AAD
     Uint8List? mediaId,
+    ImageTranscoder? transcode,
   }) async {
     if (albumIdBytes.length != _mediaIdLen) {
       throw ArgumentError(
@@ -169,6 +209,7 @@ abstract class FilePipeline {
         mediaType: mediaType,
         mimeType: mimeType,
         mediaId: mediaId,
+        transcode: transcode,
       );
       try {
         final env = await wrapKeys(
@@ -197,6 +238,7 @@ abstract class FilePipeline {
     required String mediaType,
     String? mimeType,
     Uint8List? mediaId,
+    ImageTranscoder? transcode,
   }) async {
     if (mediaType != 'photo' && mediaType != 'video') {
       throw ArgumentError(
@@ -219,21 +261,83 @@ abstract class FilePipeline {
       Uint8List bytesToEncrypt = plaintext;
       Uint8List? thumbPlaintext;
       if (mediaType == 'photo') {
-        final stripped = await Trace.measure<_StrippedAndThumb?>(
-          'media.imageWork',
-          () => _stripExifAndThumb(plaintext),
-          fields: {...traceFields, 'bytes': plaintext.length},
-          endFields: (result) => {'decoded': result != null},
-        );
-        if (stripped != null) {
-          _emitImageSpans(stripped, plaintext.length, traceFields);
+        // Prefer the faster bounded platform codec for phone photos
+        final outcome = transcode == null
+            ? const TranscodeUnavailable()
+            : await Trace.measure<TranscodeOutcome>(
+                'media.imageTranscode',
+                () => transcode(plaintext),
+                fields: {...traceFields, 'bytes': plaintext.length},
+                endFields: (result) => switch (result) {
+                      TranscodeDone(:final photo) => {
+                          'transcoded': true,
+                          'file_bytes': photo.jpeg.length,
+                          'thumb_bytes': photo.thumb.length,
+                          'width': photo.width,
+                          'height': photo.height,
+                        },
+                      TranscodeRejected(:final reason) => {
+                          'transcoded': false,
+                          'refused': reason,
+                        },
+                      TranscodeUnavailable() => {
+                          'transcoded': false,
+                          'refused': 'unavailable',
+                        },
+                    },
+              );
+
+        switch (outcome) {
+          case TranscodeDone(:final photo):
+            final file = Trace.measureSync<SanitizedJpeg?>(
+              'media.jpegSanitize',
+              () => JpegSanity.sanitize(photo.jpeg),
+              fields: {...traceFields, 'bytes': photo.jpeg.length},
+            );
+            final thumb = Trace.measureSync<SanitizedJpeg?>(
+              'media.jpegSanitizeThumb',
+              () => JpegSanity.sanitize(photo.thumb),
+              fields: {...traceFields, 'bytes': photo.thumb.length},
+            );
+            if (file == null || thumb == null) {
+              // Log only the marker where validation stopped
+              Trace.event('media.imageSanitizeRefused', fields: {
+                ...traceFields,
+                'file': file == null
+                    ? JpegSanity.describe(photo.jpeg)
+                    : 'ok',
+                'thumb': thumb == null
+                    ? JpegSanity.describe(photo.thumb)
+                    : 'ok',
+              });
+              throw const UnprocessableImageException(
+                  'transcoded photo is not a whole JPEG');
+            }
+            // Record metadata markers removed from platform output
+            Trace.event('media.imageSanitize', fields: {
+              ...traceFields,
+              'stripped': _markerList(file.stripped),
+              'thumb_stripped': _markerList(thumb.stripped),
+            });
+            bytesToEncrypt = file.bytes;
+            thumbPlaintext = thumb.bytes;
+          case TranscodeRejected(:final reason):
+            throw UnprocessableImageException('platform refused it: $reason');
+          case TranscodeUnavailable():
+            final stripped = await Trace.measure<_StrippedAndThumb?>(
+              'media.imageWork',
+              () => _stripExifAndThumb(plaintext),
+              fields: {...traceFields, 'bytes': plaintext.length},
+              endFields: (result) => {'decoded': result != null},
+            );
+            if (stripped == null) {
+              throw const UnprocessableImageException(
+                  'photo could not be decoded to strip metadata');
+            }
+            _emitImageSpans(stripped, plaintext.length, traceFields);
+            bytesToEncrypt = stripped.cleanJpeg;
+            thumbPlaintext = stripped.thumb;
         }
-        if (stripped == null) {
-          throw const UnprocessableImageException(
-              'photo could not be decoded to strip metadata');
-        }
-        bytesToEncrypt = stripped.cleanJpeg;
-        thumbPlaintext = stripped.thumb;
       }
 
       // Algorithm select by plaintext size only (D5) : <1 MiB → VER=0x01
@@ -267,19 +371,28 @@ abstract class FilePipeline {
       Uint8List? thumbSha256;
       if (thumbPlaintext != null) {
         dekThumb = Csprng.bytes(_dekLen);
-        thumbCipher = await Aead.encrypt(
+        final ct = await Aead.encrypt(
           version: kVerAesGcm,
           key: dekThumb,
           plaintext: thumbPlaintext,
           aad: _thumbAad(id),
         );
-        thumbSha256 = await _sha256(thumbCipher);
+        thumbCipher = ct;
+        thumbSha256 = await Trace.measure<Uint8List>(
+          'media.hashThumb',
+          () => _sha256(ct),
+          fields: {...traceFields, 'bytes': ct.length},
+        );
       }
 
       return EncryptedMedia(
         mediaId: id,
         cipherBytes: cipher,
-        blobSha256: await _sha256(cipher),
+        blobSha256: await Trace.measure<Uint8List>(
+          'media.hashFile',
+          () => _sha256(cipher),
+          fields: {...traceFields, 'bytes': cipher.length},
+        ),
         dek: dek,
         mediaType: mediaType,
         // Photos are re-encoded as JPEG regardless of their input format
@@ -536,6 +649,10 @@ void _emitImageSpans(
       fields: fields,
       endFields: {'bytes': work.thumb.length, 'quality': work.thumbQuality});
 }
+
+String _markerList(List<int> markers) => markers.isEmpty
+    ? 'none'
+    : markers.map((m) => '0x${m.toRadixString(16)}').join(',');
 
 Future<Uint8List> _sha256(Uint8List bytes) async {
   final h = await cg.Sha256().hash(bytes);
