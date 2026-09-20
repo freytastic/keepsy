@@ -975,8 +975,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final uploads = context.watch<UploadQueueModel>();
-    final overlays = uploads.overlaysFor(widget.album.id);
+    // Scope frequent queue rebuilds to the grid
     final syncing = state.isSyncing(widget.album.id);
     // A block survives failed sync attempts and disables uploads until a
     // successful catch up reaches the refused epoch
@@ -1065,20 +1064,25 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               if (_feed == AlbumFeedState.staleOffline && _items.isNotEmpty)
                 SliverToBoxAdapter(
                     child: _StaleBanner(onRetry: () => _loadMedia())),
-              if (syncing && _items.isEmpty && overlays.isEmpty)
-                const SliverFillRemaining(
-                    hasScrollBody: false, child: _SyncingPlaceholder())
-              else
-                _MediaGrid(
-                  items: shown,
-                  overlays: _filterToken == null ? overlays : const [],
-                  uploads: uploads,
-                  state: _feed,
-                  onRetry: _loadMedia,
-                  traceId: _openTraceId,
-                  onFirstThumbnailPaint: _onFirstThumbnailPaint,
-                  onPeek: _openPeek,
-                ),
+              Consumer<UploadQueueModel>(
+                builder: (context, queue, _) {
+                  final overlays = queue.overlaysFor(widget.album.id);
+                  if (syncing && _items.isEmpty && overlays.isEmpty) {
+                    return const SliverFillRemaining(
+                        hasScrollBody: false, child: _SyncingPlaceholder());
+                  }
+                  return _MediaGrid(
+                    items: shown,
+                    overlays: _filterToken == null ? overlays : const [],
+                    uploads: queue,
+                    state: _feed,
+                    onRetry: _loadMedia,
+                    traceId: _openTraceId,
+                    onFirstThumbnailPaint: _onFirstThumbnailPaint,
+                    onPeek: _openPeek,
+                  );
+                },
+              ),
               // Keep the final row above the foot bar
               const SliverToBoxAdapter(
                   child: SizedBox(height: AlbumFoot.clearance)),
@@ -1200,33 +1204,46 @@ class _MediaGrid extends StatelessWidget {
         if (!landed.contains(o.mediaId.value)) o
     ];
 
-    return SliverGrid.builder(
+    // Preserve tile elements when pending and confirmed rows shift
+    final slotOf = <String, int>{};
+    for (var i = 0; i < pending.length; i++) {
+      slotOf['p:${pending[i].id}'] = i;
+    }
+    for (var i = 0; i < items.length; i++) {
+      slotOf['m:${items[i].id}'] = pending.length + i;
+    }
+
+    return SliverGrid(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         mainAxisSpacing: 2,
         crossAxisSpacing: 2,
       ),
-      itemCount: pending.length + items.length,
-      itemBuilder: (context, i) {
-        if (i < pending.length) {
-          final item = pending[i];
-          return UploadTile(
-            item: item,
-            model: uploads,
-            onRetry: () => uploads.retry(item.id),
+      delegate: SliverChildBuilderDelegate(
+        (context, i) {
+          if (i < pending.length) {
+            final item = pending[i];
+            return UploadTile(
+              key: ValueKey('p:${item.id}'),
+              item: item,
+              model: uploads,
+              onRetry: () => uploads.retry(item.id),
+            );
+          }
+          final cache = context.read<MediaCacheManager>();
+          final record = items[i - pending.length];
+          return _MediaTile(
+            key: ValueKey('m:${record.id}'),
+            record: record,
+            cache: cache,
+            traceId: traceId,
+            onFirstThumbnailPaint: onFirstThumbnailPaint,
+            onPeek: onPeek,
           );
-        }
-        // Pending-only grids do not require the media cache
-        final cache = context.read<MediaCacheManager>();
-        final record = items[i - pending.length];
-        return _MediaTile(
-          record: record,
-          cache: cache,
-          traceId: traceId,
-          onFirstThumbnailPaint: onFirstThumbnailPaint,
-          onPeek: onPeek,
-        );
-      },
+        },
+        childCount: pending.length + items.length,
+        findChildIndexCallback: (key) => slotOf[(key as ValueKey<String>).value],
+      ),
     );
   }
 }
@@ -1239,6 +1256,7 @@ class _MediaTile extends StatefulWidget {
   final void Function(MediaRecord record, DecryptedImagePreview preview) onPeek;
 
   const _MediaTile({
+    super.key,
     required this.record,
     required this.cache,
     required this.traceId,
