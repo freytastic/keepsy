@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
@@ -12,7 +12,15 @@ import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity.dart';
+import 'package:keepsy/data/api/session_refresher.dart';
+import 'package:keepsy/main.dart' show rootNavigatorKey;
+import 'package:keepsy/domain/account/account_deletion.dart' show TerminalWipe;
+import 'package:keepsy/domain/account/account_gate.dart';
+import 'package:keepsy/domain/account/sign_in_gate.dart';
 import 'package:keepsy/e2ee/rotation_recovery.dart';
+import 'package:keepsy/ui/screens/account_conflict_screens.dart';
+import 'package:keepsy/ui/screens/erase_installation_flow.dart';
+import 'package:keepsy/ui/screens/start_deletion_flow.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
@@ -22,6 +30,30 @@ class LandingPage extends StatefulWidget {
 
   @override
   State<LandingPage> createState() => _LandingPageState();
+}
+
+// Reconcile outside the widget lifetime so refusals still discard credentials
+Future<AccountGateOutcome> reconcileAccount({
+  required SignInGate gate,
+  required String? userId,
+  required Future<void> Function() discardSession,
+}) async {
+  AccountGateOutcome outcome;
+  if (userId == null) {
+    // Nothing names the account, so nothing may vouch for the catalog
+    outcome = AccountGateOutcome.connectionRequired;
+  } else {
+    try {
+      outcome = await gate.resolve(userId);
+    } catch (_) {
+      outcome = AccountGateOutcome.connectionRequired;
+    }
+  }
+  if (!AccountGate.admitsShelf(outcome) &&
+      !AccountGate.retainsSession(outcome)) {
+    await discardSession();
+  }
+  return outcome;
 }
 
 class _LandingPageState extends State<LandingPage> {
@@ -56,6 +88,8 @@ class _LandingPageState extends State<LandingPage> {
         final epochProcessor = context.read<EpochProcessor>();
         final catalog = context.read<AlbumCatalog>();
         final rotationRecovery = context.read<RotationRecoveryScheduler>();
+        final gate = context.read<SignInGate>();
+        final wipe = context.read<TerminalWipe>();
         // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
         unawaited(_warmSession(
@@ -66,6 +100,8 @@ class _LandingPageState extends State<LandingPage> {
           identity: identity,
           epochProcessor: epochProcessor,
           rotationRecovery: rotationRecovery,
+          gate: gate,
+          wipe: wipe,
         ));
       }
     }
@@ -95,12 +131,35 @@ class _LandingPageState extends State<LandingPage> {
     required IdentityService identity,
     required EpochProcessor epochProcessor,
     required RotationRecoveryScheduler rotationRecovery,
+    required SignInGate gate,
+    required TerminalWipe wipe,
   }) async {
+    // Renew before the server considers the session expired
+    try {
+      await SessionRefresher().renewIfDue();
+    } catch (_) {
+      // Refresh is best effort during cold start
+    }
+
     final userData = await Trace.measure<Map<String, dynamic>?>(
       'coldstart.identity',
       userService.getMe,
     );
     if (userData != null) appState.setUserData(userData);
+
+    // Reconcile legacy installs on launch and fall back to the cached immutable
+    // user ID when /users/me is unavailable
+    final userId =
+        userData?['id'] as String? ?? await StorageService().getUserId();
+    final outcome = await reconcileAccount(
+      gate: gate,
+      userId: userId,
+      discardSession: StorageService().deleteAuth,
+    );
+    if (!AccountGate.admitsShelf(outcome)) {
+      _presentGateRefusal(outcome, wipe);
+      return;
+    }
 
     await loadShelf(
       catalog: catalog,
@@ -116,6 +175,29 @@ class _LandingPageState extends State<LandingPage> {
     }
     await _runCryptoHygiene(
         identity, epochProcessor, rotationRecovery, appState, albumIds);
+  }
+
+  // Use the root navigator because MainShell replaces Landing before this ends
+  void _presentGateRefusal(AccountGateOutcome outcome, TerminalWipe wipe) {
+    // Use the pushed screen's context because this route is removed
+    final Widget screen = switch (outcome) {
+      AccountGateOutcome.lostDevice => AccountKeysLostScreen(
+          onDismiss: (_) => SystemNavigator.pop(),
+          onDeleteAndStartOver: startDeletionFlow,
+        ),
+      AccountGateOutcome.connectionRequired => const ConnectionRequiredScreen(),
+      _ => AccountBelongsToAnotherScreen(
+          onUseOwnerAccount: (ctx) => Navigator.of(ctx).pushAndRemoveUntil(
+            MaterialPageRoute<void>(builder: (_) => const OnboardingScreen()),
+            (_) => false,
+          ),
+          onEraseInstallation: (ctx) => confirmAndEraseInstallation(ctx, wipe),
+        ),
+    };
+    rootNavigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => screen),
+      (_) => false,
+    );
   }
 
   // Runs cold start crypto hygiene off the navigation critical path. Album

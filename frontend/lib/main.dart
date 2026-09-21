@@ -65,6 +65,11 @@ import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/account_deletion_screen.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
+import 'package:keepsy/data/storage/account_owner.dart';
+import 'package:keepsy/data/api/session_refresher.dart';
+import 'package:keepsy/domain/account/account_gate.dart';
+import 'package:keepsy/domain/account/local_identity.dart';
+import 'package:keepsy/domain/account/sign_in_gate.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 
 // Lets the global error handler navigate and show messages
@@ -113,6 +118,8 @@ void main() async {
     api: prekeyApi,
   );
 
+  // Keep the owner beside vault keys so they share the same lifetime
+  final accountOwner = AccountOwnerStore(secureKeyStore);
   // MemberDirectory is the E2EE layer's only route to album membership data
   final albumKeyStore = AlbumKeyStore(secureKeyStore);
   // Wrapper-key initialization must precede every key-backed store
@@ -230,11 +237,56 @@ void main() async {
   try {
     pendingDeletion = await deletionMarker.read();
   } catch (_) {}
-  // Seed the shelf before the first network request
+  // Seed only the authenticated owner's shelf before the first network request
   try {
-    final localAlbums = await mediaSealedCache.loadAlbums();
-    if (localAlbums.isNotEmpty) appState.setAlbums(localAlbums);
+    final maySeed = AccountGate.maySeedShelf(
+      boundOwner: await accountOwner.read(),
+      storedUserId: await StorageService().getUserId(),
+    );
+    if (maySeed) {
+      final localAlbums = await mediaSealedCache.loadAlbums();
+      if (localAlbums.isNotEmpty) appState.setAlbums(localAlbums);
+    }
   } catch (_) {}
+
+  final signInGate = SignInGate(
+    owner: accountOwner,
+    readLocalIdentity: () => readLocalIdentity(secureKeyStore),
+    // Partial identities, album keys, and catalog entries make a vault nonempty
+    hasResidualVault: () async {
+      try {
+        final handles = await secureKeyStore.list();
+        if (handles.any((h) => h.label.startsWith(kAlbumLabelPrefix))) {
+          return true;
+        }
+        return (await mediaSealedCache.loadAlbums()).isNotEmpty;
+      } catch (_) {
+        // Fail closed when vault state cannot be read
+        return true;
+      }
+    },
+    readServerIdentity: () async {
+      try {
+        final keys = await prekeyApi.fetchOwnKeys();
+        // Empty fields mean this account has not published an identity
+        if (keys.ikPub.isEmpty || keys.lkPub.isEmpty) {
+          return (
+            state: ServerIdentityState.unpublished,
+            ik: null,
+            lk: null,
+          );
+        }
+        return (
+          state: ServerIdentityState.published,
+          ik: keys.ikPub,
+          lk: keys.lkPub,
+        );
+      } catch (_) {
+        // A network failure cannot prove that no identity is published
+        return (state: ServerIdentityState.unavailable, ik: null, lk: null);
+      }
+    },
+  );
 
   // Persist every AppState shelf mutation
   appState.attachShelfPersistence(mediaSealedCache.saveAlbums);
@@ -662,6 +714,9 @@ void main() async {
         Provider<MediaApi>.value(value: mediaApi),
         ChangeNotifierProvider<UploadQueueModel>.value(value: uploadQueue),
         Provider<AccountDeletion>.value(value: accountDeletion),
+        Provider<SignInGate>.value(value: signInGate),
+        Provider<TerminalWipe>.value(value: terminalWipe),
+        Provider<AccountOwnerStore>.value(value: accountOwner),
       ],
       child: KeepsyApp(
         mediaCacheManager: mediaCacheManager,
@@ -853,6 +908,10 @@ class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
       widget.shelfCovers.suspend();
     } else if (state == AppLifecycleState.resumed) {
       widget.shelfCovers.resume();
+      // Refresh proactively because an expired session cannot be renewed
+      unawaited(SessionRefresher().renewIfDue().catchError(
+            (_) => null,
+          ));
     }
   }
 

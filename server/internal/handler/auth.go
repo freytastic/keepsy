@@ -68,7 +68,7 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP)
+	verified, err := h.AuthService.VerifyOTP(r.Context(), payload.Email, payload.OTP)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidOTP) {
 			apierr.Write(w, r, apierr.Auth("invalid or expired OTP"))
@@ -81,12 +81,13 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, r, apierr.Internal("failed to verify OTP").WithCause(err))
 		return
 	}
-	expiresAt := time.Now().Add(30 * 24 * time.Hour).Format(time.RFC3339)
 	w.WriteHeader(http.StatusOK)
+	// The client compares user_id with the vault owner before persisting
 	json.NewEncoder(w).Encode(map[string]string{
-		"token":        token,
-		"refreshToken": token,
-		"expiresAt":    expiresAt,
+		"user_id":      verified.UserID.String(),
+		"token":        verified.Token,
+		"refreshToken": verified.Token,
+		"expiresAt":    verified.ExpiresAt.Format(time.RFC3339),
 	})
 }
 
@@ -114,7 +115,12 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	newToken, newRefreshToken, expiresAt, err := h.AuthService.RefreshSession(r.Context(), payload.RefreshToken)
 	if err != nil {
-		apierr.Write(w, r, apierr.Auth("invalid or expired refresh token").WithCause(err))
+		// Return 401 only when the client should discard credentials
+		if errors.Is(err, service.ErrSessionInvalid) {
+			apierr.Write(w, r, apierr.Auth("invalid or expired refresh token").WithCause(err))
+			return
+		}
+		apierr.Write(w, r, apierr.Internal("failed to refresh session").WithCause(err))
 		return
 	}
 
