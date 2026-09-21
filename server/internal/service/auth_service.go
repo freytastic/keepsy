@@ -15,14 +15,20 @@ import (
 	"github.com/freytastic/keepsy/internal/handle"
 	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/google/uuid"
 )
 
 const maxKeepsyIDAttempts = 5
+
+// Successful refreshes extend this sliding lifetime
+const sessionTTL = 30 * 24 * time.Hour
 
 var (
 	ErrInvalidOTP      = errors.New("invalid or expired OTP")
 	ErrAccountDeleting = errors.New("account is being deleted")
 	ErrTooManyRequests = errors.New("too many requests, please try again later")
+	// ErrSessionInvalid marks failures that may invalidate client credentials
+	ErrSessionInvalid = errors.New("invalid or expired session")
 )
 
 // repository interfaces to allow for mocking in tests
@@ -42,6 +48,7 @@ type SessionStore interface {
 	Create(ctx context.Context, session *model.Session) error
 	GetByToken(ctx context.Context, token string) (*model.Session, error)
 	DeleteByToken(ctx context.Context, token string) error
+	ExtendByToken(ctx context.Context, token string, expiresAt time.Time) error
 }
 
 type AuthService struct {
@@ -106,16 +113,23 @@ func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
 	return nil
 }
 
-func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string, error) {
+// VerifiedSession identifies the account before credentials are persisted
+type VerifiedSession struct {
+	UserID    uuid.UUID
+	Token     string
+	ExpiresAt time.Time
+}
+
+func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (VerifiedSession, error) {
 	storedOTP, err := s.OTPRepo.GetOTP(ctx, email)
 	if err != nil {
 		// Intentionally no email/otp in the log line
-		return "", ErrInvalidOTP
+		return VerifiedSession{}, ErrInvalidOTP
 	}
 
 	if storedOTP != otp {
 		// Same : no email, never the OTP value
-		return "", ErrInvalidOTP
+		return VerifiedSession{}, ErrInvalidOTP
 	}
 
 	_ = s.OTPRepo.DeleteOTP(ctx, email)
@@ -127,34 +141,38 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (string,
 			user = &model.User{EmailHMAC: emailHMAC}
 			if err := s.createWithKeepsyID(ctx, user); err != nil {
 				log.Printf("VerifyOTP: user create failed: %v", err)
-				return "", err
+				return VerifiedSession{}, err
 			}
 		} else {
 			log.Printf("VerifyOTP: user fetch failed: %v", err)
-			return "", err
+			return VerifiedSession{}, err
 		}
 	}
 	if user.DeletingAt != nil {
-		return "", ErrAccountDeleting
+		return VerifiedSession{}, ErrAccountDeleting
 	}
 
 	token, err := generateToken(32)
 	if err != nil {
-		return "", err
+		return VerifiedSession{}, err
 	}
 
 	session := &model.Session{
 		UserID:    user.ID,
 		TokenHash: repository.HashToken(token),
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(sessionTTL),
 	}
 
 	if err := s.SessionRepo.Create(ctx, session); err != nil {
 		log.Printf("VerifyOTP: session create failed: %v", err)
-		return "", err
+		return VerifiedSession{}, err
 	}
 
-	return token, nil
+	return VerifiedSession{
+		UserID:    user.ID,
+		Token:     token,
+		ExpiresAt: session.ExpiresAt,
+	}, nil
 }
 
 // createWithKeepsyID assigns a fresh random keepsy_id and inserts, retrying on
@@ -177,37 +195,33 @@ func (s *AuthService) createWithKeepsyID(ctx context.Context, user *model.User) 
 	return err
 }
 
+// RefreshSession extends in place so a lost response can be retried safely
 func (s *AuthService) RefreshSession(ctx context.Context, refreshToken string) (string, string, time.Time, error) {
 	session, err := s.SessionRepo.GetByToken(ctx, refreshToken)
-	if err != nil {
-		return "", "", time.Time{}, errors.New("unauthorized")
+	if errors.Is(err, repository.ErrSessionNotFound) {
+		return "", "", time.Time{}, ErrSessionInvalid
 	}
-
-	if time.Now().After(session.ExpiresAt) {
-		return "", "", time.Time{}, errors.New("unauthorized")
-	}
-
-	_ = s.SessionRepo.DeleteByToken(ctx, refreshToken)
-
-	newToken, err := generateToken(32)
 	if err != nil {
+		// Preserve repository failures so the client keeps its credentials
+		log.Printf("RefreshSession: session read failed: %v", err)
 		return "", "", time.Time{}, err
 	}
 
-	newExpiresAt := time.Now().Add(30 * 24 * time.Hour)
-	newSession := &model.Session{
-		UserID:    session.UserID,
-		TokenHash: repository.HashToken(newToken),
-		ExpiresAt: newExpiresAt,
+	if time.Now().After(session.ExpiresAt) {
+		return "", "", time.Time{}, ErrSessionInvalid
 	}
 
-	if err := s.SessionRepo.Create(ctx, newSession); err != nil {
-		log.Printf("RefreshSession: session create failed: %v", err)
+	newExpiresAt := time.Now().Add(sessionTTL)
+	if err := s.SessionRepo.ExtendByToken(ctx, refreshToken, newExpiresAt); err != nil {
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return "", "", time.Time{}, ErrSessionInvalid
+		}
+		log.Printf("RefreshSession: session extend failed: %v", err)
 		return "", "", time.Time{}, err
 	}
 
 	// opaque token acts as both access and refresh token
-	return newToken, newToken, newExpiresAt, nil
+	return refreshToken, refreshToken, newExpiresAt, nil
 }
 
 func generateOTP(length int) (string, error) {
