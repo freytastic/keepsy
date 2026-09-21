@@ -4,10 +4,11 @@ import 'package:keepsy/data/constants.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'api_error.dart';
+import 'session_refresher.dart';
 
 class ApiClient {
   final StorageService _storage = StorageService();
-  static Future<bool>? _refreshFuture;
+  static Future<RefreshOutcome>? _refreshFuture;
 
   // Turns a missed realtime revocation into durable local cleanup
   static void Function(String albumId)? onMemberRevoked;
@@ -47,41 +48,12 @@ class ApiClient {
         .replaceAll(RegExp(r'/[A-Za-z0-9_-]{22,}'), '/{token}');
   }
 
-  Future<bool> _handleRefresh() async {
+  Future<RefreshOutcome> _handleRefresh() async {
     if (_refreshFuture != null) return await _refreshFuture!;
-    _refreshFuture = _doRefresh();
-    final success = await _refreshFuture!;
+    _refreshFuture = SessionRefresher().refresh();
+    final outcome = await _refreshFuture!;
     _refreshFuture = null;
-    return success;
-  }
-
-  Future<bool> _doRefresh() async {
-    final refreshToken = await _storage.getRefreshToken();
-    if (refreshToken == null) return false;
-
-    try {
-      final url = Uri.parse('${AppConstants.baseURL}/auth/otp/refresh');
-      final res = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
-      );
-
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final newToken = data['token'] as String?;
-        final newRefresh = data['refreshToken'] as String?;
-        final newExpires = data['expiresAt'] as String?;
-
-        if (newToken != null && newRefresh != null && newExpires != null) {
-          await _storage.saveAuth(newToken, newRefresh, newExpires);
-          return true;
-        }
-      }
-      return false;
-    } catch (_) {
-      return false;
-    }
+    return outcome;
   }
 
   Future<http.Response> _sendWithRetry(String method, String path,
@@ -96,11 +68,12 @@ class ApiClient {
 
       var refreshed = false;
       if (response.statusCode == 401) {
-        final refreshSuccess = await _handleRefresh();
-        if (refreshSuccess) {
+        final outcome = await _handleRefresh();
+        if (outcome == RefreshOutcome.renewed) {
           refreshed = true;
           response = await requestAction();
-        } else {
+        } else if (outcome == RefreshOutcome.rejected) {
+          // Clear credentials only when the server rejects the session
           await _storage.deleteAuth();
         }
       }

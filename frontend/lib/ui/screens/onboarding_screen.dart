@@ -6,6 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'package:keepsy/data/api/auth_api.dart';
+import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:keepsy/domain/account/account_deletion.dart' show TerminalWipe;
+import 'package:keepsy/domain/account/account_gate.dart';
+import 'package:keepsy/domain/account/sign_in_gate.dart';
+import 'package:keepsy/ui/screens/account_conflict_screens.dart';
+import 'package:keepsy/ui/screens/erase_installation_flow.dart';
+import 'package:keepsy/ui/screens/start_deletion_flow.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/api/user_api.dart';
 import 'package:keepsy/e2ee/identity.dart';
@@ -116,19 +123,59 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _verify() async {
     final identity = context.read<IdentityService>();
+    final gate = context.read<SignInGate>();
     setState(() => _busy = true);
     // Let the pressed state paint before the request starts
     await WidgetsBinding.instance.endOfFrame;
 
     try {
-      final ok = await AuthService().verifyOtp(_email, _code);
+      final auth = AuthService();
+      final pending = await auth.verifyOtp(_email, _code);
       if (!mounted) return;
-      if (!ok) {
+      if (pending == null) {
         _otpCtrl.clear();
         setState(() => _busy = false);
         _otpFocus.requestFocus();
         HapticFeedback.vibrate();
         _showError('That code did not match. Try again.');
+        return;
+      }
+
+      // Refuse a foreign vault before writing credentials
+      if (!await gate.admits(pending.userId)) {
+        if (!mounted) return;
+        setState(() => _busy = false);
+        _showBelongsToAnother();
+        return;
+      }
+
+      await auth.commit(pending, email: _email);
+      if (!mounted) return;
+
+      // Authentication enables the server identity lookup needed to resolve
+      final outcome = await gate.resolve(pending.userId);
+      if (!mounted) return;
+      if (!AccountGate.admitsShelf(outcome)) {
+        // Discard credentials that could reopen a refused vault offline
+        if (!AccountGate.retainsSession(outcome)) {
+          await StorageService().deleteAuth();
+        }
+        if (!mounted) return;
+        setState(() => _busy = false);
+        switch (outcome) {
+          case AccountGateOutcome.lostDevice:
+            _showKeysLost();
+          case AccountGateOutcome.blockedDifferentAccount:
+          case AccountGateOutcome.unclaimedVault:
+            _showBelongsToAnother();
+          case AccountGateOutcome.connectionRequired:
+            _showError(
+                'Keepsy could not reach the server. Try again when you are back online.');
+          case AccountGateOutcome.proceed:
+          case AccountGateOutcome.adoptUnbound:
+          case AccountGateOutcome.newAccount:
+            break;
+        }
         return;
       }
 
@@ -169,10 +216,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       await identity.bootstrap();
     } on BootstrapAccountConflictException {
+      // Late safety net without promising unavailable recovery
       messenger.showSnackBar(const SnackBar(
         content: Text(
-          "This account's encryption keys are registered on another device. "
-          'Use account recovery to continue here.',
+          "This account's photos are locked to the phone it was set up on, "
+          'and cannot be opened here.',
         ),
         duration: Duration(seconds: 6),
       ));
@@ -204,6 +252,41 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       ),
       (_) => false,
     );
+  }
+
+  // A foreign vault can only be opened by its owner or erased locally
+  void _showBelongsToAnother() {
+    final wipe = context.read<TerminalWipe>();
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AccountBelongsToAnotherScreen(
+        onUseOwnerAccount: (_) {
+          Navigator.of(context).pop();
+          _otpCtrl.clear();
+          setState(() {
+            _phase = _Phase.email;
+            _busy = false;
+          });
+        },
+        onEraseInstallation: (ctx) => confirmAndEraseInstallation(ctx, wipe),
+      ),
+    ));
+  }
+
+  // This authenticated account may delete its unrecoverable server data
+  void _showKeysLost() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => AccountKeysLostScreen(
+        onDismiss: (_) {
+          Navigator.of(context).pop();
+          _otpCtrl.clear();
+          setState(() {
+            _phase = _Phase.email;
+            _busy = false;
+          });
+        },
+        onDeleteAndStartOver: startDeletionFlow,
+      ),
+    ));
   }
 
   void _showError(String message) {
