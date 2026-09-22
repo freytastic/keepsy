@@ -215,9 +215,7 @@ abstract class Warm {
   static TextStyle get avatarInitial => _t(14, 600, color: inkSoft);
 
   // Shelf view picker
-  static TextStyle get viewLabel => _t(12.5, 560, color: inkSoft);
-  static TextStyle get viewOption =>
-      _t(13.5, 610, letterSpacing: -0.108, color: ink);
+  static TextStyle get viewSaid => _t(12.5, 560, color: inkFaint);
 
   // Activity uses a darker lower stone gradient than the app-wide token
   static const LinearGradient acStoneFill = LinearGradient(

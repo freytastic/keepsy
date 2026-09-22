@@ -301,258 +301,138 @@ class _ViewPicker extends StatefulWidget {
 }
 
 class _ViewPickerState extends State<_ViewPicker>
-    with SingleTickerProviderStateMixin {
-  final _portal = OverlayPortalController();
-  final _link = LayerLink();
-  // Created eagerly: a lazy controller would first be built inside dispose()
-  late final AnimationController _anim;
-  bool _open = false;
+    with TickerProviderStateMixin {
+  late final AnimationController _split = AnimationController(
+    vsync: this,
+    duration: Warm.springSoft,
+    value: _compact ? 1 : 0,
+  );
+  late final AnimationController _said = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1600),
+  );
+  // Fades in, holds, fades out
+  late final Animation<double> _saidOpacity = TweenSequence([
+    TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 15),
+    TweenSequenceItem(tween: ConstantTween(1.0), weight: 55),
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 30),
+  ]).animate(_said);
+  bool _pressed = false;
+
+  bool get _compact => widget.view == ShelfView.compact;
 
   @override
-  void initState() {
-    super.initState();
-    _anim = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-      reverseDuration: const Duration(milliseconds: 150),
-    );
+  void didUpdateWidget(covariant _ViewPicker old) {
+    super.didUpdateWidget(old);
+    if (old.view != widget.view) {
+      _split.animateTo(_compact ? 1 : 0, curve: Warm.easeSoft);
+    }
   }
 
   @override
   void dispose() {
-    _anim.dispose();
+    _split.dispose();
+    _said.dispose();
     super.dispose();
   }
 
-  void _toggle() => _open ? _close() : _show();
-
-  void _show() {
-    setState(() => _open = true);
-    _portal.show();
-    _anim.forward();
+  void _toggle() {
+    widget.onSelect(_compact ? ShelfView.stacked : ShelfView.compact);
+    _said.forward(from: 0);
   }
 
-  Future<void> _close() async {
-    if (!_open) return;
-    setState(() => _open = false);
-    await _anim.reverse();
-    if (mounted && !_open) _portal.hide();
-  }
-
-  void _choose(ShelfView v) {
-    widget.onSelect(v);
-    _close();
-  }
+  void _press(bool down) => setState(() => _pressed = down);
 
   @override
   Widget build(BuildContext context) {
-    // The menu is an overlay, not a route, so back would otherwise pop the
-    // shelf itself (on the root route: leave the app)
-    return PopScope(
-      canPop: !_open,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _close();
-      },
-      child: _body(context),
-    );
-  }
-
-  Widget _body(BuildContext context) {
-    return CompositedTransformTarget(
-      link: _link,
-      child: OverlayPortal(
-        controller: _portal,
-        overlayChildBuilder: (_) => Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _close,
-              ),
+    final name = _compact ? 'Compact' : 'Stacked';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedBuilder(
+          animation: _said,
+          builder: (_, child) => Opacity(
+            opacity: _saidOpacity.value,
+            child: Transform.translate(
+              offset: Offset(6 * (1 - (_said.value / 0.15).clamp(0.0, 1.0)), 0),
+              child: child,
             ),
-            CompositedTransformFollower(
-              link: _link,
-              targetAnchor: Alignment.bottomRight,
-              followerAnchor: Alignment.topRight,
-              offset: const Offset(0, 2),
-              child: AnimatedBuilder(
-                animation: _anim,
-                builder: (_, child) {
-                  final t = Curves.easeOutCubic.transform(_anim.value);
-                  return Opacity(
-                    opacity: t,
-                    child: Transform.translate(
-                      offset: Offset(0, -6 * (1 - t)),
-                      child: Transform.scale(
-                        scale: 0.97 + 0.03 * t,
-                        alignment: Alignment.topRight,
-                        child: child,
-                      ),
-                    ),
-                  );
-                },
-                child: _ViewMenu(view: widget.view, onSelect: _choose),
-              ),
-            ),
-          ],
+          ),
+          child: Text(name,
+              key: const ValueKey('view-said'), style: Warm.viewSaid),
         ),
-        child: Semantics(
+        Semantics(
           button: true,
-          expanded: _open,
-          label: 'Shelf view: '
-              '${widget.view == ShelfView.stacked ? 'Stacked' : 'Compact'}',
+          label: 'Shelf view: $name',
           excludeSemantics: true,
           child: GestureDetector(
             key: const ValueKey('view-trigger'),
             behavior: HitTestBehavior.opaque,
             onTap: _toggle,
-            // Preserve a 48px target around the 34px visual pill
+            onTapDown: (_) => _press(true),
+            onTapUp: (_) => _press(false),
+            onTapCancel: () => _press(false),
+            // 48 to tap around the avatar sized 38
             child: SizedBox(
+              width: 48,
               height: 48,
-              child: Center(
-                child: Container(
-                  height: 34,
-                  padding: const EdgeInsets.fromLTRB(11, 0, 9, 0),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(17),
-                    gradient: Warm.acStoneFill,
-                    boxShadow: [
-                      BoxShadow(
-                          color: Warm.shadow(0.05),
-                          blurRadius: 2,
-                          offset: const Offset(0, 1)),
-                      BoxShadow(
-                          color: Warm.shadow(0.045),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3)),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('View', style: Warm.viewLabel),
-                      const SizedBox(width: 5),
-                      AnimatedRotation(
-                        turns: _open ? 0.5 : 0,
-                        duration: const Duration(milliseconds: 200),
-                        child: const Icon(Icons.keyboard_arrow_down_rounded,
-                            size: 15, color: Warm.inkFaint),
-                      ),
-                    ],
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: AnimatedScale(
+                  scale: _pressed ? 0.94 : 1,
+                  duration: Warm.quick,
+                  curve: Warm.easeOut,
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: Warm.stoneFill,
+                      shape: BoxShape.circle,
+                      boxShadow: Warm.avatarShadow,
+                    ),
+                    child: CustomPaint(
+                      size: const Size.square(18),
+                      painter: _LayoutGlyph(_split),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 }
 
-class _ViewMenu extends StatelessWidget {
-  final ShelfView view;
-  final ValueChanged<ShelfView> onSelect;
+// The shelf in miniature: Compact splits the lower print in two
+class _LayoutGlyph extends CustomPainter {
+  final Animation<double> split;
 
-  const _ViewMenu({required this.view, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 158,
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(15),
-        gradient: Warm.stoneFill,
-        boxShadow: [
-          BoxShadow(
-              color: Warm.shadow(0.07),
-              blurRadius: 4,
-              offset: const Offset(0, 2)),
-          BoxShadow(
-              color: Warm.shadow(0.12),
-              blurRadius: 30,
-              offset: const Offset(0, 12)),
-          BoxShadow(
-              color: Warm.shadow(0.08),
-              blurRadius: 56,
-              offset: const Offset(0, 28)),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _ViewOption(
-            id: 'stacked',
-            title: 'Stacked',
-            selected: view == ShelfView.stacked,
-            onTap: () => onSelect(ShelfView.stacked),
-          ),
-          _ViewOption(
-            id: 'compact',
-            title: 'Compact',
-            selected: view == ShelfView.compact,
-            onTap: () => onSelect(ShelfView.compact),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ViewOption extends StatelessWidget {
-  final String id;
-  final String title;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ViewOption({
-    required this.id,
-    required this.title,
-    required this.selected,
-    required this.onTap,
-  });
+  _LayoutGlyph(this.split) : super(repaint: split);
 
   @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      selected: selected,
-      child: GestureDetector(
-        key: ValueKey('view-option-$id'),
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          height: 48,
-          padding: const EdgeInsets.fromLTRB(11, 0, 8, 0),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(11),
-            color: selected ? const Color(0x0D1C1917) : null,
-          ),
-          child: Row(
-            children: [
-              Expanded(child: Text(title, style: Warm.viewOption)),
-              Container(
-                width: 20,
-                height: 20,
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0x0D1C1917),
-                ),
-                child: selected
-                    ? Icon(Icons.check_rounded,
-                        key: ValueKey('view-check-$id'),
-                        size: 13,
-                        color: Warm.inkSoft)
-                    : null,
-              ),
-            ],
-          ),
-        ),
-      ),
+  void paint(Canvas canvas, Size size) {
+    final t = split.value;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.35
+      ..color = Warm.inkSoft;
+    RRect r(double x, double y, double w) => RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, y, w, 5.6), const Radius.circular(1.5));
+    final w = 12 - 6.8 * t;
+
+    canvas.drawRRect(r(3, 2.6, 12), paint);
+    canvas.drawRRect(r(3, 10, w), paint);
+    canvas.drawRRect(
+      r(3 + 6.8 * t, 10, w),
+      paint..color = Warm.inkSoft.withValues(alpha: Warm.inkSoft.a * t),
     );
   }
+
+  @override
+  bool shouldRepaint(_LayoutGlyph old) => old.split != split;
 }
 
 class _Say extends StatelessWidget {
