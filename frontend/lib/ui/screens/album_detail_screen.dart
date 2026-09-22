@@ -67,6 +67,7 @@ class AlbumDetailScreen extends StatefulWidget {
   final AlbumService albumService;
   final MediaApi? mediaApi;
   final MultiImagePicker? pickImages;
+  final bool openPeople;
 
   AlbumDetailScreen({
     super.key,
@@ -74,6 +75,7 @@ class AlbumDetailScreen extends StatefulWidget {
     AlbumService? albumService,
     this.mediaApi,
     this.pickImages,
+    this.openPeople = false,
   }) : albumService = albumService ?? AlbumService();
 
   @override
@@ -87,6 +89,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool _loadingMembers = true;
   AlbumFeedState _feed = AlbumFeedState.loadingNoCache;
   bool _markedOpenSeen = false;
+  bool _openedPeople = false;
 
   //  track the last (album,media) tuple we acted on so a
   // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
@@ -419,6 +422,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       });
       unawaited(_resolveMemberNames(members));
       unawaited(_reconcileTrust(members));
+      if (widget.openPeople && !_openedPeople) {
+        _openedPeople = true;
+        unawaited(_openPeople());
+      }
     }
   }
 

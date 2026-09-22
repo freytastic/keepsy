@@ -76,23 +76,23 @@ class AlbumMenu extends StatelessWidget {
         Positioned(
           top: top + 54,
           right: 20,
-          child: _MenuCard(
+          child: MenuCard(
             children: [
-              _MenuItem(
+              MenuItem(
                 label: AlbumCopy.selectPhotos,
                 onTap: () => _pick(context, onSelectPhotos),
               ),
-              _MenuItem(
+              MenuItem(
                 label: AlbumCopy.downloadAlbum,
                 onTap: () => _pick(context, onDownloadAlbum),
               ),
-              _MenuItem(
+              MenuItem(
                 label: AlbumCopy.peopleAndSafety,
                 onTap:
                     onPeople == null ? null : () => _pick(context, onPeople!),
               ),
-              const _MenuSeparator(),
-              _MenuItem(
+              const MenuSeparator(),
+              MenuItem(
                 label: AlbumCopy.albumInfo,
                 onTap: () => _pick(context, onAlbumInfo),
               ),
@@ -104,10 +104,10 @@ class AlbumMenu extends StatelessWidget {
   }
 }
 
-class _MenuCard extends StatelessWidget {
+class MenuCard extends StatelessWidget {
   final List<Widget> children;
 
-  const _MenuCard({required this.children});
+  const MenuCard({super.key, required this.children});
 
   @override
   Widget build(BuildContext context) {
@@ -132,11 +132,13 @@ class _MenuCard extends StatelessWidget {
   }
 }
 
-class _MenuItem extends StatelessWidget {
+class MenuItem extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
+  final IconData? icon;
 
-  const _MenuItem({required this.label, required this.onTap});
+  const MenuItem(
+      {super.key, required this.label, required this.onTap, this.icon});
 
   @override
   Widget build(BuildContext context) {
@@ -157,7 +159,10 @@ class _MenuItem extends StatelessWidget {
                 ),
               ),
             ),
-            if (!enabled) const _LaterBadge(),
+            if (!enabled)
+              const _LaterBadge()
+            else if (icon != null)
+              Icon(icon, size: 18, color: Warm.inkSoft),
           ],
         ),
       ),
@@ -189,8 +194,8 @@ class _LaterBadge extends StatelessWidget {
   }
 }
 
-class _MenuSeparator extends StatelessWidget {
-  const _MenuSeparator();
+class MenuSeparator extends StatelessWidget {
+  const MenuSeparator({super.key});
 
   @override
   Widget build(BuildContext context) {
