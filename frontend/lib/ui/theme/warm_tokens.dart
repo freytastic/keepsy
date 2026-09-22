@@ -373,6 +373,9 @@ abstract class Warm {
   static const double peekBlur = 18;
   static const double peekSaturation = 0.9;
   static const Color peekScrim = Color(0x85181410);
+  // Lighter than the photo peek so the shelf still reads behind it
+  static const double shelfPeekBlur = 9;
+  static const Color shelfPeekScrim = Color(0x57181410);
 
   // Luminance preserving saturation matrix
   static List<double> saturation(double s) {

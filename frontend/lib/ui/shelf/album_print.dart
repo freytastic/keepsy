@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:keepsy/data/models/album_summary.dart';
@@ -20,6 +22,7 @@ const _back1Rest = _Pose(-1.6, Offset(-0.016, 0.016), 1);
 const _back1Out = _Pose(-12, Offset(-0.052, -0.047), 0.985);
 const _back2Rest = _Pose(2.3, Offset(0.023, 0.026), 1);
 const _back2Out = _Pose(12.5, Offset(0.058, -0.031), 0.975);
+const _tucked = _Pose(0, Offset.zero, 0.97);
 
 const double _degrees = 3.141592653589793 / 180;
 
@@ -43,6 +46,10 @@ class AlbumPrint extends StatefulWidget {
   final Animation<double> develop;
   final VoidCallback? onHold;
   final VoidCallback? onTap;
+  // Global layout rect, untilted
+  final void Function(Rect from)? onPeek;
+  final bool fanned;
+  final bool tilted;
 
   const AlbumPrint({
     super.key,
@@ -61,6 +68,9 @@ class AlbumPrint extends StatefulWidget {
     this.behind = const [],
     this.onHold,
     this.onTap,
+    this.onPeek,
+    this.fanned = false,
+    this.tilted = true,
   });
 
   @override
@@ -68,7 +78,10 @@ class AlbumPrint extends StatefulWidget {
 }
 
 class _AlbumPrintState extends State<AlbumPrint> {
+  static const _peekAfter = Duration(milliseconds: 280);
+
   bool _riffled = false;
+  Timer? _peek;
 
   bool get _hasCover => widget.cover != null;
   bool get _small => widget.size == PrintSize.small;
@@ -79,14 +92,35 @@ class _AlbumPrintState extends State<AlbumPrint> {
     setState(() => _riffled = on);
   }
 
+  void _release() {
+    _peek?.cancel();
+    _setRiffled(false);
+  }
+
+  void _lift() {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return;
+    _setRiffled(false);
+    widget.onPeek!(box.localToGlobal(Offset.zero) & box.size);
+  }
+
+  @override
+  void dispose() {
+    _peek?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final edges = edgesFor(widget.mediaCount);
+    final fanned = _riffled || widget.fanned;
     // Paper depth exists before lazy riffle images load
-    final visible = [
-      for (var i = 0; i < edges; i++)
+    final backs = [
+      for (var i = 0; i < fanFor(widget.mediaCount); i++)
         i < widget.behind.length ? widget.behind[i] : null,
     ];
+    _Pose pose(int i, _Pose out, _Pose rest) =>
+        fanned ? out : (i < edges ? rest : _tucked);
 
     return RawGestureDetector(
       gestures: {
@@ -105,30 +139,33 @@ class _AlbumPrintState extends State<AlbumPrint> {
             r.onLongPressStart = (_) {
               widget.onHold?.call();
               _setRiffled(true);
+              if (widget.onPeek != null) _peek = Timer(_peekAfter, _lift);
             };
-            r.onLongPressEnd = (_) => _setRiffled(false);
-            r.onLongPressCancel = () => _setRiffled(false);
+            r.onLongPressEnd = (_) => _release();
+            r.onLongPressCancel = _release;
           },
         ),
       },
       child: Transform.rotate(
-        angle: tiltFor(widget.albumId, small: _small) * _degrees,
+        angle: widget.tilted
+            ? tiltFor(widget.albumId, small: _small) * _degrees
+            : 0,
         child: AspectRatio(
           aspectRatio: 300 / 372,
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (visible.length > 1)
+              if (backs.length > 1)
                 _BackPrint(
-                  pose: _riffled ? _back2Out : _back2Rest,
+                  pose: pose(1, _back2Out, _back2Rest),
                   small: _small,
-                  child: visible[1],
+                  child: backs[1],
                 ),
-              if (visible.isNotEmpty)
+              if (backs.isNotEmpty)
                 _BackPrint(
-                  pose: _riffled ? _back1Out : _back1Rest,
+                  pose: pose(0, _back1Out, _back1Rest),
                   small: _small,
-                  child: visible[0],
+                  child: backs[0],
                 ),
               PrintCard(
                 develop: _hasCover ? widget.develop : null,

@@ -10,6 +10,7 @@ abstract final class AlbumCopy {
   static const downloadAlbum = 'Download album';
   static const peopleAndSafety = 'People & safety numbers';
   static const albumInfo = 'Album info';
+  static const openAlbum = 'Open album';
 
   // Keeps unfinished actions visible without pretending they work
   static const laterBadge = 'Soon';
@@ -33,6 +34,11 @@ abstract final class AlbumCopy {
   static const infoPhotos = 'Photos';
   static const infoSize = 'Size';
   static const infoPeople = 'People';
+  static const infoLast = 'Last photo';
+  static const infoNone = 'None yet';
+  static const infoKey =
+      'Only its members hold the key, so the server stores it without being '
+      'able to open it';
   static const infoStorage = 'Who added what';
   static const infoStorageEmpty = 'Nothing has been added yet.';
   static const infoExactBytes = 'Exact, because sizes are stored alongside '
