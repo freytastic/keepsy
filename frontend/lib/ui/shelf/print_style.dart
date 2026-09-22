@@ -21,5 +21,8 @@ double tiltFor(String albumId, {bool small = false}) {
 int edgesFor(int mediaCount) =>
     mediaCount >= 20 ? 2 : (mediaCount >= 4 ? 1 : 0);
 
+// Holding fans every preview behind the cover, even where no edge rests
+int fanFor(int mediaCount) => (mediaCount - 1).clamp(0, 2);
+
 Color hueFor(String memberToken) =>
     Warm.orbPalette[fnv1a32(memberToken) % Warm.orbPalette.length];

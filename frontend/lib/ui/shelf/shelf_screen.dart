@@ -7,9 +7,11 @@ import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/album_print.dart';
 import 'package:keepsy/ui/shelf/develop_store.dart';
+import 'package:keepsy/ui/shelf/print_style.dart';
 import 'package:keepsy/ui/shelf/shelf_copy.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/shelf/shelf_layout.dart';
+import 'package:keepsy/ui/shelf/shelf_peek.dart';
 import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/foot_bar.dart';
@@ -19,6 +21,7 @@ import 'package:keepsy/ui/widgets/upload_pill.dart';
 class ShelfScreen extends StatefulWidget {
   final VoidCallback? onOpenProfile;
   final Future<void> Function(AlbumModel album)? onOpenAlbum;
+  final Future<void> Function(AlbumModel album)? onOpenPeople;
   final VoidCallback? onCreateAlbum;
   final VoidCallback? onOpenActivity;
 
@@ -26,6 +29,7 @@ class ShelfScreen extends StatefulWidget {
     super.key,
     this.onOpenProfile,
     this.onOpenAlbum,
+    this.onOpenPeople,
     this.onCreateAlbum,
     this.onOpenActivity,
   });
@@ -93,10 +97,10 @@ class _ShelfScreenState extends State<ShelfScreen>
     );
   }
 
-  Future<void> _open(AlbumModel album) async {
+  Future<void> _open(AlbumModel album, {bool people = false}) async {
     await _seen?.markSeen(album.id, album.mediaGeneration);
     if (!mounted) return;
-    await widget.onOpenAlbum?.call(album);
+    await (people ? widget.onOpenPeople : widget.onOpenAlbum)?.call(album);
   }
 
   @override
@@ -138,6 +142,7 @@ class _ShelfScreenState extends State<ShelfScreen>
               onSetView: _setView,
               onOpenProfile: widget.onOpenProfile,
               onOpenAlbum: _open,
+              onOpenPeople: (a) => _open(a, people: true),
               onCreateAlbum: widget.onCreateAlbum,
             ),
             const _BarScrim(),
@@ -186,6 +191,7 @@ class _Scroll extends StatelessWidget {
   final ValueChanged<ShelfView> onSetView;
   final VoidCallback? onOpenProfile;
   final void Function(AlbumModel) onOpenAlbum;
+  final void Function(AlbumModel) onOpenPeople;
   final VoidCallback? onCreateAlbum;
 
   const _Scroll({
@@ -198,6 +204,7 @@ class _Scroll extends StatelessWidget {
     required this.onSetView,
     required this.onOpenProfile,
     required this.onOpenAlbum,
+    required this.onOpenPeople,
     required this.onCreateAlbum,
   });
 
@@ -230,6 +237,7 @@ class _Scroll extends StatelessWidget {
               develop: develop,
               entered: entered,
               onOpenAlbum: onOpenAlbum,
+              onOpenPeople: onOpenPeople,
             ),
             const SliverToBoxAdapter(child: _FootMark()),
           ],
@@ -588,6 +596,7 @@ class _Grid extends StatelessWidget {
   final DevelopStore develop;
   final Set<String> entered;
   final void Function(AlbumModel) onOpenAlbum;
+  final void Function(AlbumModel) onOpenPeople;
 
   const _Grid({
     required this.plan,
@@ -596,6 +605,7 @@ class _Grid extends StatelessWidget {
     required this.develop,
     required this.entered,
     required this.onOpenAlbum,
+    required this.onOpenPeople,
   });
 
   List<List<ShelfSlot<AlbumModel>>> _rows() {
@@ -666,6 +676,7 @@ class _Grid extends StatelessWidget {
       hasEntered: entered.contains(a.id),
       onEntered: () => entered.add(a.id),
       onTap: () => onOpenAlbum(a),
+      onPeople: () => onOpenPeople(a),
     );
   }
 }
@@ -679,6 +690,7 @@ class _ShelfCard extends StatefulWidget {
   final bool hasEntered;
   final VoidCallback onEntered;
   final VoidCallback onTap;
+  final VoidCallback onPeople;
 
   const _ShelfCard({
     super.key,
@@ -690,6 +702,7 @@ class _ShelfCard extends StatefulWidget {
     required this.hasEntered,
     required this.onEntered,
     required this.onTap,
+    required this.onPeople,
   });
 
   @override
@@ -699,6 +712,7 @@ class _ShelfCard extends StatefulWidget {
 class _ShelfCardState extends State<_ShelfCard> {
   late bool _entered = widget.hasEntered;
   Timer? _enter;
+  bool _lifted = false;
 
   ShelfCovers? get _covers {
     try {
@@ -752,18 +766,74 @@ class _ShelfCardState extends State<_ShelfCard> {
     return Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true);
   }
 
+  Widget _print({
+    required PrintSize size,
+    bool fanned = false,
+    bool tilted = true,
+    VoidCallback? onHold,
+    VoidCallback? onTap,
+    void Function(Rect)? onPeek,
+  }) {
+    final state = context.read<AppState>();
+    return AlbumPrint(
+      albumId: widget.album.id,
+      title: state.albumDisplayName(widget.album.id),
+      mediaCount: widget.album.mediaCount,
+      unseen: widget.unseen,
+      lastActivity: widget.album.latestActivityAt,
+      members: widget.album.memberPreviews,
+      totalMembers: widget.album.activeMemberCount,
+      nameOf: (m) => state.memberDisplayName(widget.album.id, m.memberToken),
+      develop: widget.develop,
+      size: size,
+      cover: _image(0),
+      behind: [_image(1), _image(2)].nonNulls.toList(),
+      fanned: fanned,
+      tilted: tilted,
+      onHold: onHold,
+      onTap: onTap,
+      onPeek: onPeek,
+    );
+  }
+
+  Future<void> _peek(Rect from) async {
+    HapticFeedback.selectionClick();
+    final route = ShelfPeek.route(
+      album: widget.album,
+      from: from,
+      tilt: tiltFor(widget.album.id, small: widget.size == PrintSize.small),
+      print: ({required fanned}) {
+        Widget print() =>
+            _print(size: PrintSize.large, fanned: fanned, tilted: false);
+        final covers = _covers;
+        // Riffle images may still be decrypting when the peek opens
+        return covers == null
+            ? print()
+            : ListenableBuilder(
+                listenable: covers, builder: (_, __) => print());
+      },
+    );
+    setState(() => _lifted = true);
+    // Stay hidden until the print has flown back or tucked away
+    unawaited(route.completed.then((_) {
+      if (mounted) setState(() => _lifted = false);
+    }));
+    final action = await Navigator.of(context, rootNavigator: true).push(route);
+    switch (action) {
+      case ShelfPeekAction.open:
+        widget.onTap();
+      case ShelfPeekAction.people:
+        widget.onPeople();
+      case null:
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final covers = _covers;
     if (covers != null) context.watch<ShelfCovers>();
-
-    final behind = <Widget>[];
-    for (final slot in [1, 2]) {
-      final img = _image(slot);
-      if (img != null) behind.add(img);
-    }
-
-    final state = context.watch<AppState>();
+    context.watch<AppState>();
 
     return AnimatedSlide(
       offset: _entered ? Offset.zero : const Offset(0, 0.07),
@@ -773,23 +843,15 @@ class _ShelfCardState extends State<_ShelfCard> {
         opacity: _entered ? 1 : 0,
         duration: Warm.springSoft,
         curve: Warm.easeSoft,
-        child: AlbumPrint(
-          albumId: widget.album.id,
-          title: state.albumDisplayName(widget.album.id),
-          mediaCount: widget.album.mediaCount,
-          unseen: widget.unseen,
-          lastActivity: widget.album.latestActivityAt,
-          members: widget.album.memberPreviews,
-          totalMembers: widget.album.activeMemberCount,
-          nameOf: (m) =>
-              state.memberDisplayName(widget.album.id, m.memberToken),
-          develop: widget.develop,
-          size: widget.size,
-          cover: _image(0),
-          behind: behind,
-          onHold: () =>
-              covers?.ensureRiffle(widget.album.id, widget.album.previewMedia),
-          onTap: widget.onTap,
+        child: Opacity(
+          opacity: _lifted ? 0 : 1,
+          child: _print(
+            size: widget.size,
+            onHold: () => covers?.ensureRiffle(
+                widget.album.id, widget.album.previewMedia),
+            onTap: widget.onTap,
+            onPeek: _peek,
+          ),
         ),
       ),
     );
