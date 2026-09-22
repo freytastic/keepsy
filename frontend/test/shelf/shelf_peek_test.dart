@@ -24,7 +24,6 @@ void main() {
       );
 
   late List<String> opened;
-  late List<String> people;
 
   Future<void> pump(WidgetTester tester, {int photos = 7}) async {
     tester.view.physicalSize = const Size(800, 1400);
@@ -32,7 +31,6 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     opened = [];
-    people = [];
 
     final state = AppState()
       ..setAlbums([album('a', photos: photos), album('b', photos: photos)]);
@@ -45,7 +43,6 @@ void main() {
       child: MaterialApp(
         home: ShelfScreen(
           onOpenAlbum: (a) async => opened.add(a.id),
-          onOpenPeople: (a) async => people.add(a.id),
         ),
       ),
     ));
@@ -83,8 +80,8 @@ void main() {
 
     expect(find.text('Open album'), findsOneWidget);
     expect(find.text('People & safety numbers'), findsOneWidget);
-    expect(find.text('Soon'), findsOneWidget,
-        reason: 'download is not built, so it must not look actionable');
+    expect(find.text('Soon'), findsNWidgets(2),
+        reason: 'unbuilt actions must not look actionable');
     expect(shelfOpacity(tester), 0,
         reason: 'the lifted print leaves its space on the shelf');
   });
@@ -153,15 +150,16 @@ void main() {
     expect(shelfOpacity(tester), 1);
   });
 
-  testWidgets('people opens the album on its people sheet', (tester) async {
+  testWidgets('people and safety numbers is not offered yet', (tester) async {
     await pump(tester);
     await hold(tester);
 
+    expect(find.text('Soon'), findsNWidgets(2),
+        reason: 'download and people both wait for their screens');
     await tester.tap(find.text('People & safety numbers'));
-    await tester.pump(const Duration(milliseconds: 900));
-
-    expect(people, ['a']);
+    await tester.pump(const Duration(milliseconds: 600));
     expect(opened, isEmpty);
+    expect(find.text('Open album'), findsOneWidget);
   });
 
   testWidgets('back dismisses without acting', (tester) async {
@@ -175,7 +173,6 @@ void main() {
 
     expect(find.text('Open album'), findsNothing);
     expect(opened, isEmpty);
-    expect(people, isEmpty);
     expect(shelfOpacity(tester), 1);
   });
 }
