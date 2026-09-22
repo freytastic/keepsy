@@ -442,7 +442,7 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 		SELECT id, album_id, uploader_token, storage_key, thumb_key, wrap_nonce,
 			wrap_tag_ct, epoch_tag, blob_size, blob_sha256, media_type, mime_type,
 			confirmed, created_at, thumb_wrap_nonce, thumb_wrap_tag_ct, thumb_size,
-			thumb_sha256
+			thumb_sha256, album_seq
 		FROM media WHERE album_id = $1 AND confirmed = TRUE
 		ORDER BY album_seq DESC NULLS LAST, created_at DESC, id DESC`,
 		albumID,
@@ -459,6 +459,7 @@ func (r *MediaRepository) ListConfirmed(ctx context.Context, albumID uuid.UUID) 
 			&m.WrapNonce, &m.WrapTagCT, &m.EpochTag, &m.BlobSize, &m.BlobSHA256,
 			&m.MediaType, &m.MimeType, &m.Confirmed, &m.CreatedAt,
 			&m.ThumbWrapNonce, &m.ThumbWrapTagCT, &m.ThumbSize, &m.ThumbSHA256,
+			&m.AlbumSeq,
 		); err != nil {
 			return nil, err
 		}

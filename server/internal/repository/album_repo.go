@@ -226,6 +226,9 @@ func (r *AlbumRepository) previewMediaFor(ctx context.Context, handle []byte, id
 	return out, rows.Err()
 }
 
+// Clients treat previews as a roster, so the limit must cover the invite cap
+const MemberPreviewLimit = 10
+
 // Stable join order avoids ranking members by activity
 func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, ids []uuid.UUID) (map[uuid.UUID][]model.MemberPreview, error) {
 	rows, err := r.DB.Query(ctx, `
@@ -239,10 +242,10 @@ func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, 
 		    JOIN album_member_identities xi ON xi.member_token = x.member_token
 		    WHERE x.album_id = a.id AND x.revoked_at IS NULL
 		    ORDER BY xi.joined_at ASC, x.member_token ASC
-		    LIMIT 4
+		    LIMIT $3
 		) p ON TRUE
 		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL AND a.id = ANY($2)`,
-		handle, ids)
+		handle, ids, MemberPreviewLimit)
 	if err != nil {
 		return nil, err
 	}

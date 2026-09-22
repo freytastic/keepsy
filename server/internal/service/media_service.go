@@ -350,6 +350,7 @@ func (s *MediaService) ConfirmUpload(ctx context.Context, albumID, mediaID, uplo
 				"media_type":     row.MediaType,
 				"mime_type":      row.MimeType,
 				"created_at":     row.CreatedAt,
+				"album_seq":      generation,
 			}
 			if row.ThumbSize != nil {
 				rec["thumb_wrap_nonce"] = base64.StdEncoding.EncodeToString(row.ThumbWrapNonce)

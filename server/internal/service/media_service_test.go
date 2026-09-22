@@ -1223,6 +1223,10 @@ func TestConfirmUpload_FanoutEmitsMediaAdded(t *testing.T) {
 	if _, ok := rec["wrap_nonce"].(string); !ok {
 		t.Errorf("record.wrap_nonce missing or not base64 string")
 	}
+	// Live records and ListMedia must expose the same confirm sequence
+	if rec["album_seq"] != m["media_generation"] {
+		t.Errorf("record.album_seq = %v, want media_generation %v", rec["album_seq"], m["media_generation"])
+	}
 }
 
 func TestConfirmUpload_FanoutSkipsWhenUploaderIsOnlyMember(t *testing.T) {
