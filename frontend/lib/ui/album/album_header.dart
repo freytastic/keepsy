@@ -14,6 +14,7 @@ class AlbumHeader extends StatelessWidget {
   final int filterCount;
   final ValueChanged<String> onTapMember;
   final VoidCallback onClearFilter;
+  final VoidCallback? onAdd;
 
   const AlbumHeader({
     super.key,
@@ -25,6 +26,7 @@ class AlbumHeader extends StatelessWidget {
     this.filterToken,
     this.filterName,
     this.filterCount = 0,
+    this.onAdd,
   });
 
   @override
@@ -38,12 +40,13 @@ class AlbumHeader extends StatelessWidget {
           const SizedBox(height: 7),
           Text(summary,
               style: const TextStyle(fontSize: 12.5, color: Warm.inkSoft)),
-          if (members.isNotEmpty) ...[
+          if (members.isNotEmpty || onAdd != null) ...[
             const SizedBox(height: 17),
             MemberAvatars(
               members: members,
               selectedToken: filterToken,
               onTap: onTapMember,
+              onAdd: onAdd,
             ),
           ],
           if (filterToken != null) ...[

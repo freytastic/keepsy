@@ -11,6 +11,36 @@ abstract final class AlbumCopy {
   static const peopleAndSafety = 'People & safety numbers';
   static const albumInfo = 'Album info';
   static const openAlbum = 'Open album';
+  static const addSomeone = 'Add someone';
+
+  static const addTitle = 'Add someone';
+  static String addTo(String album) => 'to $album';
+  static const addHelp =
+      "Ask for their keepsy ID. It's on their profile, under their name.";
+  static const addPaste = 'Paste';
+  static const addGo = 'Add to album';
+  static const addFinding = 'Finding them…';
+  static const addYours = 'They need yours? ';
+  static const addCopy = 'Copy';
+  static const addCopied = 'Copied';
+  static const addUnknown =
+      'Nobody has this ID. Check it with them, one letter at a time.';
+  static const addSelf = "That's your own ID. Theirs is on their profile.";
+  static const addAlready = "They're already in this album.";
+  static const addFull = 'This album is full. It can hold 10 people.';
+  static const addRotating =
+      "This album's key is being updated. Try again in a minute.";
+  static const addFailed = "Couldn't add them right now. Try again.";
+  static const addDoneTitle = 'Invited';
+  static String addDoneBody(String album) =>
+      ' can open $album the next time they open Keepsy, with every photo '
+      'already in it.';
+  static const addDoneNote =
+      "The album's key went to their phone, locked so only that phone can "
+      'open it. Their name shows up here once they do.';
+  static const addAnother = 'Add another';
+  static const addDone = 'Done';
+  static const invitedPending = "Invited, hasn't opened it yet";
 
   // Keeps unfinished actions visible without pretending they work
   static const laterBadge = 'Soon';

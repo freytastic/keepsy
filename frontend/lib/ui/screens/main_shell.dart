@@ -38,11 +38,9 @@ class MainShell extends StatelessWidget {
     await _refresh(appState);
   }
 
-  Future<void> _openAlbum(BuildContext context, AlbumModel album,
-      {bool people = false}) async {
+  Future<void> _openAlbum(BuildContext context, AlbumModel album) async {
     final appState = context.read<AppState>();
-    await Navigator.of(context)
-        .push(_slide(AlbumDetailScreen(album: album, openPeople: people)));
+    await Navigator.of(context).push(_slide(AlbumDetailScreen(album: album)));
     // Refresh without delaying shelf development
     unawaited(_refresh(appState));
   }
@@ -69,7 +67,6 @@ class MainShell extends StatelessWidget {
       onOpenProfile: () => Navigator.of(context)
           .push(_slide(const ProfileScreen(), from: const Offset(-1, 0))),
       onOpenAlbum: (album) => _openAlbum(context, album),
-      onOpenPeople: (album) => _openAlbum(context, album, people: true),
       onCreateAlbum: () => _create(context),
       onOpenActivity: () => _openActivity(context),
     );
