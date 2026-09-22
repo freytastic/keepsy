@@ -164,7 +164,8 @@ class _LandingPageState extends State<LandingPage> {
     await loadShelf(
       catalog: catalog,
       fetch: albumService.getMyAlbums,
-      apply: appState.setAlbums,
+      restore: appState.setAlbums,
+      apply: appState.applyListing,
     );
 
     // Crypto hygiene uses the best shelf available including offline state

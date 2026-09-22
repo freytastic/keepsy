@@ -10,6 +10,7 @@ import 'package:keepsy/ui/shelf/develop_store.dart';
 import 'package:keepsy/ui/shelf/shelf_copy.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/shelf/shelf_layout.dart';
+import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/foot_bar.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
@@ -35,7 +36,25 @@ class ShelfScreen extends StatefulWidget {
 
 class _ShelfScreenState extends State<ShelfScreen>
     with TickerProviderStateMixin {
-  ShelfView _view = ShelfView.rows;
+  // Used only when no saved preference is provided, as in widget tests
+  ShelfView _localView = ShelfView.stacked;
+
+  ShelfViewPreference? get _viewPref {
+    try {
+      return context.read<ShelfViewPreference>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _setView(ShelfView v) {
+    final pref = _viewPref;
+    if (pref != null) {
+      unawaited(pref.set(v));
+    } else {
+      setState(() => _localView = v);
+    }
+  }
 
   late final DevelopStore _develop =
       DevelopStore(vsync: this, duration: Warm.develop);
@@ -84,6 +103,8 @@ class _ShelfScreenState extends State<ShelfScreen>
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     _watch<SeenStore>(context);
+    _watch<ShelfViewPreference>(context);
+    final view = _viewPref?.view ?? _localView;
     final albums = state.albums;
 
     final entries = <ShelfEntry>[];
@@ -108,13 +129,13 @@ class _ShelfScreenState extends State<ShelfScreen>
           children: [
             const _Ground(),
             _Scroll(
-              view: _view,
+              view: view,
               albums: albums,
               headline: headline,
               unseenFor: _unseenFor,
               develop: _develop,
               entered: _entered,
-              onSetView: (v) => setState(() => _view = v),
+              onSetView: _setView,
               onOpenProfile: widget.onOpenProfile,
               onOpenAlbum: _open,
               onCreateAlbum: widget.onCreateAlbum,
@@ -235,7 +256,8 @@ class _Header extends StatelessWidget {
     final initial = name.trim().isEmpty ? '' : name.trim()[0].toUpperCase();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 26, Warm.pagePad, 0),
+      // Keep the 48px target centred on the previous 38px header row
+      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 21, Warm.pagePad, 0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -253,22 +275,216 @@ class _Header extends StatelessWidget {
               child: Text(initial, style: Warm.avatarInitial),
             ),
           ),
-          Transform.translate(
-            offset: const Offset(8, 0),
-            child: Row(
-              children: [
-                _ViewButton(
-                  on: view == ShelfView.rows,
-                  bento: false,
-                  onTap: () => onSetView(ShelfView.rows),
-                ),
-                _ViewButton(
-                  on: view == ShelfView.bento,
-                  bento: true,
-                  onTap: () => onSetView(ShelfView.bento),
-                ),
-              ],
+          _ViewPicker(view: view, onSelect: onSetView),
+        ],
+      ),
+    );
+  }
+}
+
+class _ViewPicker extends StatefulWidget {
+  final ShelfView view;
+  final ValueChanged<ShelfView> onSelect;
+
+  const _ViewPicker({required this.view, required this.onSelect});
+
+  @override
+  State<_ViewPicker> createState() => _ViewPickerState();
+}
+
+class _ViewPickerState extends State<_ViewPicker>
+    with SingleTickerProviderStateMixin {
+  final _portal = OverlayPortalController();
+  final _link = LayerLink();
+  // Created eagerly: a lazy controller would first be built inside dispose()
+  late final AnimationController _anim;
+  bool _open = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      reverseDuration: const Duration(milliseconds: 150),
+    );
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  void _toggle() => _open ? _close() : _show();
+
+  void _show() {
+    setState(() => _open = true);
+    _portal.show();
+    _anim.forward();
+  }
+
+  Future<void> _close() async {
+    if (!_open) return;
+    setState(() => _open = false);
+    await _anim.reverse();
+    if (mounted && !_open) _portal.hide();
+  }
+
+  void _choose(ShelfView v) {
+    widget.onSelect(v);
+    _close();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // The menu is an overlay, not a route, so back would otherwise pop the
+    // shelf itself (on the root route: leave the app)
+    return PopScope(
+      canPop: !_open,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _close();
+      },
+      child: _body(context),
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    return CompositedTransformTarget(
+      link: _link,
+      child: OverlayPortal(
+        controller: _portal,
+        overlayChildBuilder: (_) => Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _close,
+              ),
             ),
+            CompositedTransformFollower(
+              link: _link,
+              targetAnchor: Alignment.bottomRight,
+              followerAnchor: Alignment.topRight,
+              offset: const Offset(0, 2),
+              child: AnimatedBuilder(
+                animation: _anim,
+                builder: (_, child) {
+                  final t = Curves.easeOutCubic.transform(_anim.value);
+                  return Opacity(
+                    opacity: t,
+                    child: Transform.translate(
+                      offset: Offset(0, -6 * (1 - t)),
+                      child: Transform.scale(
+                        scale: 0.97 + 0.03 * t,
+                        alignment: Alignment.topRight,
+                        child: child,
+                      ),
+                    ),
+                  );
+                },
+                child: _ViewMenu(view: widget.view, onSelect: _choose),
+              ),
+            ),
+          ],
+        ),
+        child: Semantics(
+          button: true,
+          expanded: _open,
+          label: 'Shelf view: '
+              '${widget.view == ShelfView.stacked ? 'Stacked' : 'Compact'}',
+          excludeSemantics: true,
+          child: GestureDetector(
+            key: const ValueKey('view-trigger'),
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggle,
+            // Preserve a 48px target around the 34px visual pill
+            child: SizedBox(
+              height: 48,
+              child: Center(
+                child: Container(
+                  height: 34,
+                  padding: const EdgeInsets.fromLTRB(11, 0, 9, 0),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(17),
+                    gradient: Warm.acStoneFill,
+                    boxShadow: [
+                      BoxShadow(
+                          color: Warm.shadow(0.05),
+                          blurRadius: 2,
+                          offset: const Offset(0, 1)),
+                      BoxShadow(
+                          color: Warm.shadow(0.045),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3)),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('View', style: Warm.viewLabel),
+                      const SizedBox(width: 5),
+                      AnimatedRotation(
+                        turns: _open ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: const Icon(Icons.keyboard_arrow_down_rounded,
+                            size: 15, color: Warm.inkFaint),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ViewMenu extends StatelessWidget {
+  final ShelfView view;
+  final ValueChanged<ShelfView> onSelect;
+
+  const _ViewMenu({required this.view, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 158,
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(15),
+        gradient: Warm.stoneFill,
+        boxShadow: [
+          BoxShadow(
+              color: Warm.shadow(0.07),
+              blurRadius: 4,
+              offset: const Offset(0, 2)),
+          BoxShadow(
+              color: Warm.shadow(0.12),
+              blurRadius: 30,
+              offset: const Offset(0, 12)),
+          BoxShadow(
+              color: Warm.shadow(0.08),
+              blurRadius: 56,
+              offset: const Offset(0, 28)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ViewOption(
+            id: 'stacked',
+            title: 'Stacked',
+            selected: view == ShelfView.stacked,
+            onTap: () => onSelect(ShelfView.stacked),
+          ),
+          _ViewOption(
+            id: 'compact',
+            title: 'Compact',
+            selected: view == ShelfView.compact,
+            onTap: () => onSelect(ShelfView.compact),
           ),
         ],
       ),
@@ -276,74 +492,59 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _ViewButton extends StatelessWidget {
-  final bool on;
-  final bool bento;
+class _ViewOption extends StatelessWidget {
+  final String id;
+  final String title;
+  final bool selected;
   final VoidCallback onTap;
 
-  const _ViewButton(
-      {required this.on, required this.bento, required this.onTap});
+  const _ViewOption({
+    required this.id,
+    required this.title,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: AnimatedContainer(
-          duration: Warm.quick,
-          curve: Warm.easeOut,
-          width: 19,
-          height: 19,
-          child: CustomPaint(
-            painter: _ViewGlyph(
-              bento: bento,
-              color: on ? Warm.ink : Warm.inkFaint,
-            ),
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: GestureDetector(
+        key: ValueKey('view-option-$id'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.fromLTRB(11, 0, 8, 0),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(11),
+            color: selected ? const Color(0x0D1C1917) : null,
+          ),
+          child: Row(
+            children: [
+              Expanded(child: Text(title, style: Warm.viewOption)),
+              Container(
+                width: 20,
+                height: 20,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Color(0x0D1C1917),
+                ),
+                child: selected
+                    ? Icon(Icons.check_rounded,
+                        key: ValueKey('view-check-$id'),
+                        size: 13,
+                        color: Warm.inkSoft)
+                    : null,
+              ),
+            ],
           ),
         ),
       ),
     );
   }
-}
-
-class _ViewGlyph extends CustomPainter {
-  final bool bento;
-  final Color color;
-
-  const _ViewGlyph({required this.bento, required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final k = size.width / 19;
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.35
-      ..color = color;
-
-    void box(double x, double y, double w, double h) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x * k, y * k, w * k, h * k),
-          Radius.circular(1.5 * k),
-        ),
-        paint,
-      );
-    }
-
-    box(2.9, 2.4, 13.2, 5.9);
-    if (bento) {
-      box(2.9, 10.3, 5.9, 5.9);
-      box(10.2, 10.3, 5.9, 5.9);
-    } else {
-      box(2.9, 10.3, 13.2, 5.9);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_ViewGlyph old) =>
-      old.bento != bento || old.color != color;
 }
 
 class _Say extends StatelessWidget {
@@ -354,7 +555,7 @@ class _Say extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 32, Warm.pagePad, 0),
+      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 27, Warm.pagePad, 0),
       child: AnimatedSwitcher(
         duration: Warm.crossfade,
         switchInCurve: Warm.easeSoft,
@@ -418,7 +619,7 @@ class _Grid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rowGap = view == ShelfView.bento ? 16.0 : 30.0;
+    final rowGap = view == ShelfView.compact ? 16.0 : 30.0;
     final rows = _rows();
     var seen = 0;
     final starts = [for (final r in rows) (seen += r.length) - r.length];

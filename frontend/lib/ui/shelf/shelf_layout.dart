@@ -1,6 +1,6 @@
 import 'package:keepsy/ui/shelf/album_print.dart';
 
-enum ShelfView { rows, bento }
+enum ShelfView { stacked, compact }
 
 class ShelfSlot<T> {
   final T album;
@@ -10,7 +10,7 @@ class ShelfSlot<T> {
 }
 
 List<ShelfSlot<T>> planFor<T>(List<T> albums, ShelfView view) {
-  if (view == ShelfView.rows || albums.isEmpty) {
+  if (view == ShelfView.stacked || albums.isEmpty) {
     return [for (final a in albums) ShelfSlot(a, PrintSize.large)];
   }
 

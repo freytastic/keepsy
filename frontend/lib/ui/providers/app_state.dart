@@ -182,6 +182,15 @@ class AppState extends ChangeNotifier {
   void attachAlbumsVanished(void Function(List<String> albumIds) f) =>
       _onAlbumsVanished = f;
 
+  // Announces server listings without treating local restores as evidence
+  void Function()? _onListingApplied;
+  void attachListingApplied(void Function() f) => _onListingApplied = f;
+
+  void applyListing(List<AlbumModel> listing) {
+    setAlbums(listing);
+    _onListingApplied?.call();
+  }
+
   void setAlbums(List<AlbumModel> newAlbums) {
     final incoming = {for (final a in newAlbums) a.id};
     final vanished = [
@@ -283,7 +292,7 @@ class AppState extends ChangeNotifier {
     try {
       final all = await service.getMyAlbums();
       if (all != null) {
-        setAlbums(all);
+        applyListing(all);
         return;
       }
       final a = await service.getAlbum(albumIdStr);

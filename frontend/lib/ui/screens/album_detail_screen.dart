@@ -513,8 +513,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         // verifies the key the user was ACTUALLY SHOWN, not whatever the
         // roster happens to say by the time they tap
         onVerify: () async {
-          await trust.markVerified(
-              albumId: albumIdBytes, memberToken: m.memberToken, peerIkPub: ik);
+          try {
+            await trust.markVerified(
+                albumId: albumIdBytes,
+                memberToken: m.memberToken,
+                peerIkPub: ik);
+          } on VerificationNotSaved {
+            // Session trust survives, but a restart restores the alarm
+          }
           await _reconcileTrust(_members);
         },
       ),
@@ -566,8 +572,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         digits: digits,
         state: TrustState.changed,
         onVerify: () async {
-          await trust.markVerified(
-              albumId: albumIdBytes, memberToken: tokenB64, peerIkPub: ik);
+          try {
+            await trust.markVerified(
+                albumId: albumIdBytes, memberToken: tokenB64, peerIkPub: ik);
+          } on VerificationNotSaved {
+            // Session-only; a restart restores the alarm
+          }
           // Verifying only AUTHORIZES the retry : the block lifts when the
           // install actually succeeds
           await _retryKeySync();
@@ -1242,7 +1252,8 @@ class _MediaGrid extends StatelessWidget {
           );
         },
         childCount: pending.length + items.length,
-        findChildIndexCallback: (key) => slotOf[(key as ValueKey<String>).value],
+        findChildIndexCallback: (key) =>
+            slotOf[(key as ValueKey<String>).value],
       ),
     );
   }

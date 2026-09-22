@@ -26,6 +26,8 @@ class MediaRecord {
   final Uint8List? thumbWrapTagCT;
   final int? thumbSize;
   final Uint8List? thumbSha256;
+  // media_generation at confirmation; null for legacy or omitted values
+  final int? albumSeq;
 
   const MediaRecord({
     required this.id,
@@ -43,6 +45,7 @@ class MediaRecord {
     this.thumbWrapTagCT,
     this.thumbSize,
     this.thumbSha256,
+    this.albumSeq,
   });
 
   bool get hasThumb => thumbWrapNonce != null;
@@ -68,6 +71,7 @@ class MediaRecord {
           'thumb_wrap_tag_ct': base64Encode(thumbWrapTagCT!),
         if (thumbSize != null) 'thumb_size': thumbSize,
         if (thumbSha256 != null) 'thumb_sha256': base64Encode(thumbSha256!),
+        if (albumSeq != null) 'album_seq': albumSeq,
       };
 
   factory MediaRecord.fromJson(Map<String, dynamic> json) {
@@ -91,6 +95,7 @@ class MediaRecord {
       thumbWrapTagCT: thumbTag == null ? null : base64Decode(thumbTag),
       thumbSize: thumbSz == null ? null : (thumbSz as num).toInt(),
       thumbSha256: thumbSha == null ? null : base64Decode(thumbSha),
+      albumSeq: (json['album_seq'] as num?)?.toInt(),
     );
   }
 

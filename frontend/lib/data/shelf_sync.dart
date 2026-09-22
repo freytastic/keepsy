@@ -6,11 +6,13 @@ import 'package:keepsy/data/storage/media_catalog.dart';
 Future<void> loadShelf({
   required AlbumCatalog catalog,
   required Future<List<AlbumModel>?> Function() fetch,
+  // Local restores are not authoritative listings
+  required void Function(List<AlbumModel>) restore,
   required void Function(List<AlbumModel>) apply,
 }) async {
   try {
     final local = await catalog.loadAlbums();
-    if (local.isNotEmpty) apply(local);
+    if (local.isNotEmpty) restore(local);
   } catch (_) {
     // Keep refreshing if the local catalog is unreadable
   }

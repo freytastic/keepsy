@@ -214,6 +214,38 @@ abstract class Warm {
       _t(13, 560, letterSpacing: 0.052, color: inkFaint);
   static TextStyle get avatarInitial => _t(14, 600, color: inkSoft);
 
+  // Shelf view picker
+  static TextStyle get viewLabel => _t(12.5, 560, color: inkSoft);
+  static TextStyle get viewOption =>
+      _t(13.5, 610, letterSpacing: -0.108, color: ink);
+
+  // Activity uses a darker lower stone gradient than the app-wide token
+  static const LinearGradient acStoneFill = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [stoneTop, Color(0xFFEFEBE3)],
+  );
+  static TextStyle get acTabLabel =>
+      _t(13.5, 620, letterSpacing: -0.081, color: ink);
+  static TextStyle get acTabMeta => _t(10.5, 480, color: inkFaint);
+  static TextStyle get acCardTitle =>
+      _t(14.5, 600, letterSpacing: -0.174, color: ink);
+  static TextStyle get acWhere => _t(12.5, 450, color: inkFaint);
+  static TextStyle get acCardBody => _t(13, 400, color: inkSoft, height: 1.5);
+  static TextStyle get acBtnGo => _t(13.5, 560, color: ctaInk);
+  static TextStyle get acBtnQuiet => _t(13.5, 560, color: inkSoft);
+  static TextStyle get acLine =>
+      _t(14, 420, letterSpacing: -0.084, color: inkSoft, height: 1.35);
+  static TextStyle get acLead =>
+      _t(14, 620, letterSpacing: -0.084, color: ink, height: 1.35);
+  static TextStyle get acAside => _t(12.5, 400, color: inkFaint, height: 1.45);
+  static TextStyle get acDay =>
+      _t(10, 620, letterSpacing: 0.85, color: inkFaint);
+  static TextStyle get acFoot => _t(12.5, 400, color: inkFaint, height: 1.55);
+  static TextStyle get acBlank => _t(13.5, 400, color: inkSoft, height: 1.45);
+  static TextStyle get acFace => _t(12.5, 640, color: const Color(0xA81C1917));
+  static TextStyle get acMore => _t(10.5, 640, color: const Color(0xF0FFFFFF));
+
   static TextStyle get sectionLabel =>
       _t(10, 600, letterSpacing: 0.85, color: inkFaint);
 
