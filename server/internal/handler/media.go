@@ -7,6 +7,7 @@ import (
 
 	"github.com/freytastic/keepsy/internal/apierr"
 	"github.com/freytastic/keepsy/internal/middleware"
+	"github.com/freytastic/keepsy/internal/model"
 	"github.com/freytastic/keepsy/internal/service"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -209,32 +210,39 @@ func (h *MediaHandler) ListMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, len(rows))
 	for i, m := range rows {
-		row := map[string]any{
-			"id":             m.ID,
-			"album_id":       m.AlbumID,
-			"uploader_token": base64.StdEncoding.EncodeToString(m.UploaderToken),
-			"wrap_nonce":     base64.StdEncoding.EncodeToString(m.WrapNonce),
-			"wrap_tag_ct":    base64.StdEncoding.EncodeToString(m.WrapTagCT),
-			"epoch_tag":      m.EpochTag,
-			"blob_size":      m.BlobSize,
-			"blob_sha256":    base64.StdEncoding.EncodeToString(m.BlobSHA256),
-			"media_type":     m.MediaType,
-			"mime_type":      m.MimeType,
-			"created_at":     m.CreatedAt,
-		}
-		//thumb fields emitted only when the row has a thumb. Client
-		// uses presence to decide between EncryptedThumbnail (fast grid) and
-		// falling back to EncryptedImage (no thumb available)
-		if m.ThumbSize != nil {
-			row["thumb_wrap_nonce"] = base64.StdEncoding.EncodeToString(m.ThumbWrapNonce)
-			row["thumb_wrap_tag_ct"] = base64.StdEncoding.EncodeToString(m.ThumbWrapTagCT)
-			row["thumb_size"] = *m.ThumbSize
-			row["thumb_sha256"] = base64.StdEncoding.EncodeToString(m.ThumbSHA256)
-		}
-		out[i] = row
+		out[i] = mediaRow(m)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func mediaRow(m model.Media) map[string]any {
+	row := map[string]any{
+		"id":             m.ID,
+		"album_id":       m.AlbumID,
+		"uploader_token": base64.StdEncoding.EncodeToString(m.UploaderToken),
+		"wrap_nonce":     base64.StdEncoding.EncodeToString(m.WrapNonce),
+		"wrap_tag_ct":    base64.StdEncoding.EncodeToString(m.WrapTagCT),
+		"epoch_tag":      m.EpochTag,
+		"blob_size":      m.BlobSize,
+		"blob_sha256":    base64.StdEncoding.EncodeToString(m.BlobSHA256),
+		"media_type":     m.MediaType,
+		"mime_type":      m.MimeType,
+		"created_at":     m.CreatedAt,
+	}
+	// Confirm sequence lets clients identify rows added since their last listing
+	if m.AlbumSeq != nil {
+		row["album_seq"] = *m.AlbumSeq
+	}
+	// Thumb presence selects EncryptedThumbnail for fast grids
+	// Missing thumbs fall back to EncryptedImage
+	if m.ThumbSize != nil {
+		row["thumb_wrap_nonce"] = base64.StdEncoding.EncodeToString(m.ThumbWrapNonce)
+		row["thumb_wrap_tag_ct"] = base64.StdEncoding.EncodeToString(m.ThumbWrapTagCT)
+		row["thumb_size"] = *m.ThumbSize
+		row["thumb_sha256"] = base64.StdEncoding.EncodeToString(m.ThumbSHA256)
+	}
+	return row
 }
 
 // RequestDownloadURL handles POST /albums/{id}/media/{mid}/download-url

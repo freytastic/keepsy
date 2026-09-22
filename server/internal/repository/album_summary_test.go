@@ -492,3 +492,69 @@ func TestListForUser_OrdersEmptyAlbumsByCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestListConfirmed_CarriesAlbumSeq(t *testing.T) {
+	env := newSummaryEnv(t)
+	ctx := context.Background()
+	owner := env.seedUser(t)
+	album, token, err := env.repo.CreateWithAdmin(ctx, []byte("seq"), owner)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	first, g1 := env.addPhotoID(t, album.ID, token, false)
+	second, g2 := env.addPhotoID(t, album.ID, token, false)
+
+	rows, err := env.media.ListConfirmed(ctx, album.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	got := map[uuid.UUID]int64{}
+	for _, r := range rows {
+		if r.AlbumSeq == nil {
+			t.Fatalf("row %v has no album_seq", r.ID)
+		}
+		got[r.ID] = *r.AlbumSeq
+	}
+	if got[first] != g1 || got[second] != g2 {
+		t.Fatalf("album_seq = %v, want %v:%d %v:%d", got, first, g1, second, g2)
+	}
+}
+
+// A capped preview once made a hidden member look newly joined after a departure
+func TestMemberPreviews_CoverAFullAlbum(t *testing.T) {
+	env := newSummaryEnv(t)
+	ctx := context.Background()
+
+	owner := env.seedUser(t)
+	album, _, err := env.repo.CreateWithAdmin(ctx, []byte("full"), owner)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.pool.Exec(ctx, `DELETE FROM albums WHERE id = $1`, album.ID)
+	})
+	for i := 1; i < repository.MemberPreviewLimit; i++ {
+		tok := make([]byte, 32)
+		_, _ = rand.Read(tok)
+		if _, err := env.pool.Exec(ctx,
+			`INSERT INTO album_member_identities (member_token, user_handle, user_id_enc, album_id)
+			 VALUES ($1,$2,$3,$4)`, tok, tok, tok, album.ID); err != nil {
+			t.Fatalf("seed identity: %v", err)
+		}
+		if _, err := env.pool.Exec(ctx,
+			`INSERT INTO album_members (album_id, member_token, role) VALUES ($1,$2,'member')`,
+			album.ID, tok); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+
+	got, err := env.repo.ListForUser(ctx, owner)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	s := got[0].Summary
+	if len(s.MemberPreviews) != s.ActiveMemberCount || s.ActiveMemberCount != repository.MemberPreviewLimit {
+		t.Fatalf("previews = %d, active = %d, want both %d",
+			len(s.MemberPreviews), s.ActiveMemberCount, repository.MemberPreviewLimit)
+	}
+}
