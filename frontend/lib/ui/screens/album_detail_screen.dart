@@ -12,6 +12,7 @@ import 'package:keepsy/data/storage/media_catalog.dart';
 import 'package:keepsy/data/storage/name_cache.dart';
 import 'package:keepsy/domain/upload/upload_ports.dart';
 import 'package:keepsy/domain/upload/upload_snapshot.dart';
+import 'package:keepsy/ui/album/add_people_sheet.dart';
 import 'package:keepsy/ui/album/album_copy.dart';
 import 'package:keepsy/ui/album/album_foot.dart';
 import 'package:keepsy/ui/album/album_header.dart';
@@ -35,14 +36,12 @@ import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/e2ee/member_removal.dart';
 import 'package:keepsy/e2ee/rotation_recovery.dart';
 import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/add_member_dialog.dart';
 import 'package:keepsy/ui/widgets/decrypted_image_preview.dart';
 import 'package:keepsy/ui/widgets/encrypted_image.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
@@ -67,7 +66,6 @@ class AlbumDetailScreen extends StatefulWidget {
   final AlbumService albumService;
   final MediaApi? mediaApi;
   final MultiImagePicker? pickImages;
-  final bool openPeople;
 
   AlbumDetailScreen({
     super.key,
@@ -75,7 +73,6 @@ class AlbumDetailScreen extends StatefulWidget {
     AlbumService? albumService,
     this.mediaApi,
     this.pickImages,
-    this.openPeople = false,
   }) : albumService = albumService ?? AlbumService();
 
   @override
@@ -86,10 +83,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   late final MediaApi _media;
   List<AlbumMember> _members = [];
   List<MediaRecord> _items = [];
-  bool _loadingMembers = true;
   AlbumFeedState _feed = AlbumFeedState.loadingNoCache;
   bool _markedOpenSeen = false;
-  bool _openedPeople = false;
 
   //  track the last (album,media) tuple we acted on so a
   // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
@@ -147,78 +142,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         onSelectPhotos: _notYet,
         onDownloadAlbum: _notYet,
         onAlbumInfo: _openAlbumInfo,
-        onPeople: _openPeople,
+        onAddSomeone: _viewerIsAdmin ? _openAddMember : null,
       );
-
-  // Keeps safety and removal available until the people screen lands
-  Future<void> _openPeople() async {
-    final names = <String, String>{};
-    for (final m in _members) {
-      final e = _memberNames[m.memberToken];
-      if (e != null && e.ct == m.profile.nameCt) names[m.memberToken] = e.name;
-    }
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Warm.paper,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (sheet) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 18, 8, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: Text(AlbumCopy.peopleAndSafety,
-                    style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: Warm.ink)),
-              ),
-              const SizedBox(height: 8),
-              _MemberChipsRow(
-                members: _members,
-                loading: _loadingMembers,
-                resolvedNames: names,
-                trust: _trust,
-                onTapMember: (m) {
-                  Navigator.of(sheet).pop();
-                  _openSafetyNumber(m);
-                },
-                onRemove: _viewerIsAdmin ? _kick : null,
-                myToken: widget.album.memberToken,
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: () {
-                      Navigator.of(sheet).pop();
-                      _openAddMember();
-                    },
-                    icon: const Icon(Icons.person_add_outlined, size: 18),
-                    label: const Text('Add member'),
-                  ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(sheet).pop();
-                      _leave();
-                    },
-                    child: const Text('Leave album',
-                        style: TextStyle(color: Warm.warn)),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   void _notYet() {
     if (!mounted) return;
@@ -412,7 +337,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (mounted) {
       setState(() {
         _members = members;
-        _loadingMembers = false;
         // Filtering by someone no longer listed empties the grid with no
         // avatar left to tap to get back
         if (_filterToken != null &&
@@ -422,10 +346,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       });
       unawaited(_resolveMemberNames(members));
       unawaited(_reconcileTrust(members));
-      if (widget.openPeople && !_openedPeople) {
-        _openedPeople = true;
-        unawaited(_openPeople());
-      }
     }
   }
 
@@ -669,14 +589,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // The dormant co-admin role grants nothing in Beta V1
   bool get _viewerIsAdmin => _me?.role == 'admin';
 
-  // Mirrors the server's last admin guard: only role=='admin' counts (a
-  // co admin can't rotate a keyless album), revoked rows dont
-  int get _activeAdminCount =>
-      _members.where((m) => !m.revoked && m.role == 'admin').length;
-
-  bool get _hasOtherActiveMembers => _members
-      .any((m) => !m.revoked && m.memberToken != widget.album.memberToken);
-
   Future<void> _retryRotation() async {
     final albumIdBytes = uuidToBytes(widget.album.id);
     if (albumIdBytes == null) return;
@@ -689,148 +601,47 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     await scheduler.request(albumIdBytes);
   }
 
-  Future<void> _kick(AlbumMember m) async {
-    final albumIdBytes = _uuidStringToBytes(widget.album.id);
-    if (albumIdBytes == null) return;
-    final messenger = ScaffoldMessenger.of(context);
-    final coord = context.read<MemberRemovalCoordinator>();
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Remove member'),
-        content: Text(
-            'Remove ${_memberName(m)}? They lose access to photos added after now.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Remove')),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    final token = base64.decode(base64.normalize(m.memberToken));
-    try {
-      await coord.kick(albumIdBytes, token);
-      if (mounted) {
-        await _loadMembers();
-        messenger.showSnackBar(_note('Member removed'));
-      }
-    } catch (_) {
-      messenger.showSnackBar(_note('Could not remove member'));
-    }
-  }
-
-  Future<void> _leave() async {
-    final albumIdBytes = _uuidStringToBytes(widget.album.id);
-    final myToken = widget.album.memberToken;
-    if (albumIdBytes == null || myToken == null) return;
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    final coord = context.read<MemberRemovalCoordinator>();
-
-    // The sole admin cant just leave (an admin less album cant rotate)
-    // with other members present, block and explain, alone, offer
-    // to delete the album instead
-    final soleAdmin = _me?.role == 'admin' && _activeAdminCount <= 1;
-    if (soleAdmin && _hasOtherActiveMembers) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text("You're the only admin"),
-          content: const Text(
-              'Remove the other members first, or keep the album : an album '
-              'needs at least one admin.'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-          ],
-        ),
-      );
-      return;
-    }
-    if (soleAdmin && !_hasOtherActiveMembers) {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Delete album'),
-          content: const Text(
-              "You're the only member. Leaving deletes this album and its "
-              'photos for good.'),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete')),
-          ],
-        ),
-      );
-      if (confirm != true) return;
-      final ok = await widget.albumService.deleteAlbum(widget.album.id);
-      if (!ok) {
-        messenger.showSnackBar(_note('Could not delete album'));
-        return;
-      }
-      _accessLost = true; // suppress the removal listener : we pop ourselves
-      await coord.onSelfRemoved(albumIdBytes); // wipe local keys + cache + tile
-      if (mounted) navigator.pop();
-      return;
-    }
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Leave album'),
-        content: const Text(
-            'Leave this album? You lose access to it on this device.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Leave')),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    final token = base64.decode(base64.normalize(myToken));
-    _accessLost = true; // suppress the removal listener : we pop ourselves
-    try {
-      await coord.leave(albumIdBytes, token);
-      if (mounted) navigator.pop(); // album already dropped from the home grid
-    } catch (_) {
-      _accessLost =
-          false; // leave failed : stay, and let a real removal exit us
-      messenger.showSnackBar(_note('Could not leave album'));
-    }
-  }
-
   // §6.1 : invite an existing keepsy user by their keepsy_id. The server gates
-  // the actual add to the admin : a non-admin caller surfaces the generic
-  // error in the dialog
+  // the actual add to the admin
   Future<void> _openAddMember() async {
     final albumIdBytes = _uuidStringToBytes(widget.album.id);
     if (albumIdBytes == null) return;
     final initiator = context.read<InviteInitiator>();
-    final messenger = ScaffoldMessenger.of(context);
-    final added = await showDialog<bool>(
-      context: context,
-      builder: (_) => AddMemberDialog(
-        onInvite: (keepsyId) async {
-          await initiator.inviteExistingUser(
-              keepsyId: keepsyId, albumId: albumIdBytes);
-        },
-      ),
+    final state = context.read<AppState>();
+    final added = await AddPeopleSheet.show(
+      context,
+      albumTitle: state.albumDisplayName(widget.album.id) ?? 'this album',
+      members: [
+        for (final a in _avatars())
+          if (!a.pending) a
+      ],
+      myKeepsyId: state.keepsyId,
+      onInvite: (keepsyId) => initiator.inviteExistingUser(
+          keepsyId: keepsyId, albumId: albumIdBytes),
     );
-    if (added == true && mounted) {
-      await _loadMembers();
-      messenger.showSnackBar(_note('Invite sent'));
-    }
+    if (added && mounted) await _loadMembers();
+  }
+
+  Map<String, String> _resolvedNames() => {
+        for (final m in _members)
+          if (_memberNames[m.memberToken] case final e?
+              when e.ct == m.profile.nameCt)
+            m.memberToken: e.name,
+      };
+
+  // A member who has not published a name has not opened the album yet
+  List<AvatarMember> _avatars() {
+    final names = _resolvedNames();
+    return [
+      for (final m in _members)
+        if (!m.revoked)
+          AvatarMember(
+            token: m.memberToken,
+            name: names[m.memberToken],
+            pending: m.profile.nameCt == null &&
+                m.memberToken != widget.album.memberToken,
+          ),
+    ];
   }
 
   // A failed refresh must not blank cached rows
@@ -1001,25 +812,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
     // Only surface a resolved name whose fingerprint still matches the member's
     // current name_ct : a renamed member falls back to "Member" until re resolved
-    final memberDisplayNames = <String, String>{};
-    for (final m in _members) {
-      final e = _memberNames[m.memberToken];
-      if (e != null && e.ct == m.profile.nameCt) {
-        memberDisplayNames[m.memberToken] = e.name;
-      }
-    }
-
+    final memberDisplayNames = _resolvedNames();
     final title = state.albumDisplayName(widget.album.id) ?? 'Album';
-    final avatars = [
-      for (final m in _members)
-        if (!m.revoked)
-          AvatarMember(
-              token: m.memberToken, name: memberDisplayNames[m.memberToken]),
-    ];
+    final avatars = _avatars();
+    final invited = avatars.where((a) => a.pending).length;
     final shown = _filterToken == null
         ? _items
         : _items.where((r) => r.uploaderToken == _filterToken).toList();
-    final stats = AlbumStats.of(_items, peopleCount: avatars.length);
+    final stats = AlbumStats.of(_items, peopleCount: avatars.length - invited);
 
     return Scaffold(
       backgroundColor: Warm.ground,
@@ -1040,7 +840,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       ),
                       AlbumHeader(
                         title: title,
-                        summary: stats.summary(),
+                        summary: stats.summary(invited: invited),
                         members: avatars,
                         filterToken: _filterToken,
                         filterName: _filterToken == null
@@ -1050,6 +850,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         onTapMember: _toggleFilter,
                         onClearFilter: () =>
                             setState(() => _filterToken = null),
+                        onAdd: _viewerIsAdmin ? _openAddMember : null,
                       ),
                     ],
                   ),
@@ -1436,165 +1237,6 @@ class _MediaEmpty extends StatelessWidget {
   }
 }
 
-class _MemberChipsRow extends StatelessWidget {
-  final List<AlbumMember> members;
-  final bool loading;
-  // Non null only for an admin viewer : long pressing a removable chip calls it
-  final void Function(AlbumMember)? onRemove;
-  // The viewer's own token, so their chip never shows a remove button
-  final String? myToken;
-  // memberToken -> decrypted display name (missing entries fall back to a slice)
-  final Map<String, String> resolvedNames;
-  // memberToken -> TOFU state. Absent = not computed yet (no badge)
-  final Map<String, TrustState> trust;
-  final void Function(AlbumMember) onTapMember;
-
-  const _MemberChipsRow({
-    required this.members,
-    required this.loading,
-    required this.resolvedNames,
-    required this.trust,
-    required this.onTapMember,
-    this.onRemove,
-    this.myToken,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (loading) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: SizedBox(
-          height: 32,
-          child: Center(
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child:
-                  CircularProgressIndicator(strokeWidth: 2, color: Warm.ctaTop),
-            ),
-          ),
-        ),
-      );
-    }
-    // Revoked members are no longer part of the album : hide them so a kicked
-    // user disappears from everyone's roster
-    final visible = members.where((m) => !m.revoked).toList();
-    return SizedBox(
-      height: 56,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        itemCount: visible.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) {
-          final m = visible[i];
-          final removable = onRemove != null && m.memberToken != myToken;
-          final isMe = m.memberToken == myToken;
-          return _MemberChip(
-            member: m,
-            displayName: resolvedNames[m.memberToken] ?? 'Member',
-            // no safety number with yourself
-            trust: isMe ? null : trust[m.memberToken],
-            onTap: isMe ? null : () => onTapMember(m),
-            onRemove: removable ? () => onRemove!(m) : null,
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _MemberChip extends StatelessWidget {
-  final AlbumMember member;
-  final String displayName;
-  // null for our own chip, or before the roster has been reconciled
-  final TrustState? trust;
-  final VoidCallback? onTap;
-  final VoidCallback? onRemove;
-
-  const _MemberChip(
-      {required this.member,
-      required this.displayName,
-      this.trust,
-      this.onTap,
-      this.onRemove});
-
-  @override
-  Widget build(BuildContext context) {
-    final changed = trust == TrustState.changed;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: EdgeInsets.only(
-            left: 10, right: onRemove != null ? 2 : 10, top: 4, bottom: 4),
-        decoration: BoxDecoration(
-          color: Warm.stoneBottom,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: changed ? const Color(0xFFF87171) : Warm.inkGhost),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircleAvatar(
-              radius: 10,
-              backgroundColor: Warm.orbSage,
-              child: Text(
-                displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                style: const TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              // resolved global name : "Member" for anyone who hasnt published
-              // a name_ct yet (never the raw token)
-              displayName,
-              style: const TextStyle(
-                  color: Warm.ink, fontSize: 12, fontWeight: FontWeight.w500),
-            ),
-            // verified gets a mark, a changed key gets a loud one. An
-            // unverified peer gets NOTHING : an icon there would read as a
-            // safety claim we cannot make about a key nobody has compared
-            if (trust == TrustState.verified) ...[
-              const SizedBox(width: 3),
-              const Icon(Icons.verified_user, size: 11, color: Warm.ctaTop),
-            ] else if (changed) ...[
-              const SizedBox(width: 3),
-              const Icon(Icons.error, size: 11, color: Color(0xFFF87171)),
-            ],
-            const SizedBox(width: 4),
-            Text(
-              member.role,
-              style: const TextStyle(color: Warm.inkFaint, fontSize: 10),
-            ),
-            // Visible remove affordance for admins : a tappable × on each
-            // removable member (replaces the old undiscoverable long-press)
-            if (onRemove != null) ...[
-              const SizedBox(width: 2),
-              InkResponse(
-                onTap: onRemove,
-                radius: 16,
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child:
-                      const Icon(Icons.close, size: 14, color: Warm.inkFaint),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Album level "someone's key changed" strip. A chip badge alone is too easy to
-// miss, and this is the one state that warrants interrupting the user
 class _KeyChangeBanner extends StatelessWidget {
   final List<AlbumMember> members;
   final String Function(AlbumMember) nameOf;

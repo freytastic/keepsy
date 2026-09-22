@@ -10,8 +10,6 @@ import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/blur_scrim.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
 
-enum ShelfPeekAction { open, people }
-
 typedef PeekPrint = Widget Function({required bool fanned});
 
 const double _degrees = math.pi / 180;
@@ -32,13 +30,14 @@ class ShelfPeek extends StatefulWidget {
     this.entry = kAlwaysCompleteAnimation,
   });
 
-  static PageRoute<ShelfPeekAction> route({
+  // Resolves true when the album should open
+  static PageRoute<bool> route({
     required AlbumModel album,
     required Rect from,
     required double tilt,
     required PeekPrint print,
   }) =>
-      PageRouteBuilder<ShelfPeekAction>(
+      PageRouteBuilder<bool>(
         opaque: false,
         barrierColor: Colors.transparent,
         transitionDuration: const Duration(milliseconds: 520),
@@ -91,7 +90,7 @@ class _ShelfPeekState extends State<ShelfPeek> {
 
   // This route leaves at once, so the print tucks away in an overlay entry
   // that stays above the screen being opened
-  void _go(ShelfPeekAction action) {
+  void _open() {
     late final OverlayEntry tuck;
     tuck = OverlayEntry(
       builder: (_) => _Tuck(
@@ -102,7 +101,7 @@ class _ShelfPeekState extends State<ShelfPeek> {
     );
     Overlay.of(context, rootOverlay: true).insert(tuck);
     setState(() => _leaving = true);
-    Navigator.of(context).pop(action);
+    Navigator.of(context).pop(true);
   }
 
   Rect _targetFor(Size size, EdgeInsets pad) {
@@ -154,7 +153,7 @@ class _ShelfPeekState extends State<ShelfPeek> {
                     );
                   },
                   child: GestureDetector(
-                    onTap: () => _go(ShelfPeekAction.open),
+                    onTap: _open,
                     child: widget.print(fanned: _fanned),
                   ),
                 ),
@@ -187,14 +186,10 @@ class _ShelfPeekState extends State<ShelfPeek> {
           MenuItem(
             label: AlbumCopy.openAlbum,
             icon: Icons.arrow_outward_rounded,
-            onTap: () => _go(ShelfPeekAction.open),
+            onTap: _open,
           ),
           const MenuItem(label: AlbumCopy.downloadAlbum, onTap: null),
-          MenuItem(
-            label: AlbumCopy.peopleAndSafety,
-            icon: Icons.people_outline_rounded,
-            onTap: () => _go(ShelfPeekAction.people),
-          ),
+          const MenuItem(label: AlbumCopy.peopleAndSafety, onTap: null),
           const MenuSeparator(),
           MenuItem(
             label: AlbumCopy.albumInfo,

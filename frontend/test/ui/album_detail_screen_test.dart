@@ -48,11 +48,12 @@ Future<AlbumKeyStore> _emptyAks() async {
   return aks;
 }
 
-AlbumModel _fakeAlbum() => AlbumModel(
+AlbumModel _fakeAlbum({String? me}) => AlbumModel(
       id: 'album-1',
       nameCt: null,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
+      memberToken: me,
     );
 
 AlbumMember _fakeMember(String token, String role) => AlbumMember(
@@ -74,12 +75,13 @@ Widget _wrap(Widget child, AlbumKeyStore aks) => MultiProvider(
     );
 
 void main() {
+  // Without a published name, a peer has not opened the album yet
   testWidgets('AlbumDetailScreen shows members as avatars, never as tokens',
       (tester) async {
     final aks = await _emptyAks();
     await tester.pumpWidget(_wrap(
       AlbumDetailScreen(
-        album: _fakeAlbum(),
+        album: _fakeAlbum(me: 'alicetoken123'),
         albumService: _MockAlbumService([
           _fakeMember('alicetoken123', 'admin'),
           _fakeMember('bobtoken456', 'member'),
@@ -93,10 +95,52 @@ void main() {
     expect(find.text('alicetok'), findsNothing);
     expect(find.text('bobtoken'), findsNothing);
     expect(find.byType(MemberAvatars), findsOneWidget);
-    expect(find.text('·'), findsNWidgets(2));
+    expect(find.text('·'), findsOneWidget);
+    expect(find.byType(DashedCircle), findsOneWidget);
   });
 
-  testWidgets('roles and safety numbers stay reachable through the menu',
+  testWidgets('an invited member is counted as invited, not as a person',
+      (tester) async {
+    final aks = await _emptyAks();
+    await tester.pumpWidget(_wrap(
+      AlbumDetailScreen(
+        album: _fakeAlbum(me: 'alicetoken123'),
+        albumService: _MockAlbumService([
+          _fakeMember('alicetoken123', 'admin'),
+          _fakeMember('bobtoken456', 'member'),
+        ]),
+        mediaApi: _StubMediaApi(const []),
+      ),
+      aks,
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('1 person, 1 invited'), findsOneWidget);
+  });
+
+  for (final (me, admin) in [('alicetoken123', true), ('bobtoken456', false)]) {
+    testWidgets('add someone is offered only to the admin ($me)',
+        (tester) async {
+      final aks = await _emptyAks();
+      await tester.pumpWidget(_wrap(
+        AlbumDetailScreen(
+          album: _fakeAlbum(me: me),
+          albumService: _MockAlbumService([
+            _fakeMember('alicetoken123', 'admin'),
+            _fakeMember('bobtoken456', 'member'),
+          ]),
+          mediaApi: _StubMediaApi(const []),
+        ),
+        aks,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('add-someone')),
+          admin ? findsOneWidget : findsNothing);
+    });
+  }
+
+  testWidgets('people and safety numbers waits for the new screen',
       (tester) async {
     final aks = await _emptyAks();
     await tester.pumpWidget(_wrap(
@@ -117,9 +161,8 @@ void main() {
     await tester.tap(find.text(AlbumCopy.peopleAndSafety));
     await tester.pumpAndSettle();
 
-    expect(find.text('Member'), findsNWidgets(2));
-    expect(find.text('admin'), findsOneWidget);
-    expect(find.text('member'), findsOneWidget);
+    expect(find.text(AlbumCopy.laterBadge), findsOneWidget);
+    expect(find.text('Leave album'), findsNothing);
   });
 
   testWidgets(

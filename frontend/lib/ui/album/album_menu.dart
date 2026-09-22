@@ -11,6 +11,8 @@ class AlbumMenu extends StatelessWidget {
 
   // Null while the people screen is unavailable
   final VoidCallback? onPeople;
+  // Null unless the viewer may invite
+  final VoidCallback? onAddSomeone;
 
   const AlbumMenu({
     super.key,
@@ -18,6 +20,7 @@ class AlbumMenu extends StatelessWidget {
     required this.onDownloadAlbum,
     required this.onAlbumInfo,
     this.onPeople,
+    this.onAddSomeone,
   });
 
   static Future<void> show(
@@ -26,6 +29,7 @@ class AlbumMenu extends StatelessWidget {
     required VoidCallback onDownloadAlbum,
     required VoidCallback onAlbumInfo,
     VoidCallback? onPeople,
+    VoidCallback? onAddSomeone,
   }) =>
       Navigator.of(context).push(PageRouteBuilder<void>(
         opaque: false,
@@ -37,6 +41,7 @@ class AlbumMenu extends StatelessWidget {
           onDownloadAlbum: onDownloadAlbum,
           onAlbumInfo: onAlbumInfo,
           onPeople: onPeople,
+          onAddSomeone: onAddSomeone,
         ),
         transitionsBuilder: (_, a, __, child) {
           final curve = CurvedAnimation(parent: a, curve: Warm.easeOut);
@@ -86,6 +91,11 @@ class AlbumMenu extends StatelessWidget {
                 label: AlbumCopy.downloadAlbum,
                 onTap: () => _pick(context, onDownloadAlbum),
               ),
+              if (onAddSomeone != null)
+                MenuItem(
+                  label: AlbumCopy.addSomeone,
+                  onTap: () => _pick(context, onAddSomeone!),
+                ),
               MenuItem(
                 label: AlbumCopy.peopleAndSafety,
                 onTap:

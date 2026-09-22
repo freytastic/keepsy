@@ -21,7 +21,6 @@ import 'package:keepsy/ui/widgets/upload_pill.dart';
 class ShelfScreen extends StatefulWidget {
   final VoidCallback? onOpenProfile;
   final Future<void> Function(AlbumModel album)? onOpenAlbum;
-  final Future<void> Function(AlbumModel album)? onOpenPeople;
   final VoidCallback? onCreateAlbum;
   final VoidCallback? onOpenActivity;
 
@@ -29,7 +28,6 @@ class ShelfScreen extends StatefulWidget {
     super.key,
     this.onOpenProfile,
     this.onOpenAlbum,
-    this.onOpenPeople,
     this.onCreateAlbum,
     this.onOpenActivity,
   });
@@ -97,10 +95,10 @@ class _ShelfScreenState extends State<ShelfScreen>
     );
   }
 
-  Future<void> _open(AlbumModel album, {bool people = false}) async {
+  Future<void> _open(AlbumModel album) async {
     await _seen?.markSeen(album.id, album.mediaGeneration);
     if (!mounted) return;
-    await (people ? widget.onOpenPeople : widget.onOpenAlbum)?.call(album);
+    await widget.onOpenAlbum?.call(album);
   }
 
   @override
@@ -142,7 +140,6 @@ class _ShelfScreenState extends State<ShelfScreen>
               onSetView: _setView,
               onOpenProfile: widget.onOpenProfile,
               onOpenAlbum: _open,
-              onOpenPeople: (a) => _open(a, people: true),
               onCreateAlbum: widget.onCreateAlbum,
             ),
             const _BarScrim(),
@@ -191,7 +188,6 @@ class _Scroll extends StatelessWidget {
   final ValueChanged<ShelfView> onSetView;
   final VoidCallback? onOpenProfile;
   final void Function(AlbumModel) onOpenAlbum;
-  final void Function(AlbumModel) onOpenPeople;
   final VoidCallback? onCreateAlbum;
 
   const _Scroll({
@@ -204,7 +200,6 @@ class _Scroll extends StatelessWidget {
     required this.onSetView,
     required this.onOpenProfile,
     required this.onOpenAlbum,
-    required this.onOpenPeople,
     required this.onCreateAlbum,
   });
 
@@ -237,7 +232,6 @@ class _Scroll extends StatelessWidget {
               develop: develop,
               entered: entered,
               onOpenAlbum: onOpenAlbum,
-              onOpenPeople: onOpenPeople,
             ),
             const SliverToBoxAdapter(child: _FootMark()),
           ],
@@ -476,7 +470,6 @@ class _Grid extends StatelessWidget {
   final DevelopStore develop;
   final Set<String> entered;
   final void Function(AlbumModel) onOpenAlbum;
-  final void Function(AlbumModel) onOpenPeople;
 
   const _Grid({
     required this.plan,
@@ -485,7 +478,6 @@ class _Grid extends StatelessWidget {
     required this.develop,
     required this.entered,
     required this.onOpenAlbum,
-    required this.onOpenPeople,
   });
 
   List<List<ShelfSlot<AlbumModel>>> _rows() {
@@ -556,7 +548,6 @@ class _Grid extends StatelessWidget {
       hasEntered: entered.contains(a.id),
       onEntered: () => entered.add(a.id),
       onTap: () => onOpenAlbum(a),
-      onPeople: () => onOpenPeople(a),
     );
   }
 }
@@ -570,7 +561,6 @@ class _ShelfCard extends StatefulWidget {
   final bool hasEntered;
   final VoidCallback onEntered;
   final VoidCallback onTap;
-  final VoidCallback onPeople;
 
   const _ShelfCard({
     super.key,
@@ -582,7 +572,6 @@ class _ShelfCard extends StatefulWidget {
     required this.hasEntered,
     required this.onEntered,
     required this.onTap,
-    required this.onPeople,
   });
 
   @override
@@ -698,15 +687,8 @@ class _ShelfCardState extends State<_ShelfCard> {
     unawaited(route.completed.then((_) {
       if (mounted) setState(() => _lifted = false);
     }));
-    final action = await Navigator.of(context, rootNavigator: true).push(route);
-    switch (action) {
-      case ShelfPeekAction.open:
-        widget.onTap();
-      case ShelfPeekAction.people:
-        widget.onPeople();
-      case null:
-        break;
-    }
+    final open = await Navigator.of(context, rootNavigator: true).push(route);
+    if (open == true) widget.onTap();
   }
 
   @override
