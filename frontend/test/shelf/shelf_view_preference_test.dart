@@ -94,31 +94,18 @@ void main() {
       return pref;
     }
 
-    testWidgets('offers Stacked and Compact behind View', (tester) async {
-      await pump(tester);
-      expect(find.text('Compact'), findsNothing);
+    double saidOpacity(WidgetTester tester) => tester
+        .widget<Opacity>(find
+            .ancestor(
+                of: find.byKey(const ValueKey('view-said')),
+                matching: find.byType(Opacity))
+            .first)
+        .opacity;
 
-      await tester.tap(find.text('View'));
-      await settle(tester);
-
-      expect(find.text('Stacked'), findsOneWidget);
-      expect(find.text('Compact'), findsOneWidget);
-      // find.text also matches invisible text, so check it actually shows
-      final fade = tester.widget<Opacity>(find
-          .ancestor(of: find.text('Compact'), matching: find.byType(Opacity))
-          .first);
-      expect(fade.opacity, 1);
-      expect(find.byKey(const ValueKey('view-check-stacked')), findsOneWidget);
-      expect(find.byKey(const ValueKey('view-check-compact')), findsNothing);
-    });
-
-    testWidgets('choosing Compact saves it and closes the menu',
-        (tester) async {
+    testWidgets('one tap switches to Compact and saves it', (tester) async {
       final pref = await pump(tester);
 
-      await tester.tap(find.text('View'));
-      await settle(tester);
-      await tester.tap(find.text('Compact'));
+      await tester.tap(find.byKey(const ValueKey('view-trigger')));
       await settle(tester);
 
       expect(pref.view, ShelfView.compact);
@@ -126,49 +113,48 @@ void main() {
           (await SharedPreferences.getInstance())
               .getString('keepsy.shelf_view'),
           'compact');
-      expect(find.text('Stacked'), findsNothing);
     });
 
-    testWidgets('tapping outside closes without changing anything',
-        (tester) async {
+    testWidgets('a second tap goes back to Stacked', (tester) async {
       final pref = await pump(tester);
 
-      await tester.tap(find.text('View'));
+      await tester.tap(find.byKey(const ValueKey('view-trigger')));
       await settle(tester);
-      await tester.tapAt(const Offset(40, 1300));
+      await tester.tap(find.byKey(const ValueKey('view-trigger')));
       await settle(tester);
 
-      expect(find.text('Compact'), findsNothing);
       expect(pref.view, ShelfView.stacked);
     });
 
-    // Closing the root overlay must not leave the app
-    testWidgets('back closes the menu first', (tester) async {
-      await pump(tester);
-      await tester.tap(find.text('View'));
-      await settle(tester);
-
-      final handled = await tester.binding.handlePopRoute();
-      await settle(tester);
-
-      expect(handled, isTrue);
-      expect(find.text('Compact'), findsNothing);
-      expect(find.text('View'), findsOneWidget);
-    });
-
-    testWidgets('the trigger and options are full size tap targets',
+    testWidgets('the new layout is named for a moment, then fades',
         (tester) async {
       await pump(tester);
-      expect(tester.getSize(find.byKey(const ValueKey('view-trigger'))).height,
-          greaterThanOrEqualTo(48));
+      expect(saidOpacity(tester), 0);
 
-      await tester.tap(find.text('View'));
+      await tester.tap(find.byKey(const ValueKey('view-trigger')));
       await settle(tester);
-      expect(
-          tester
-              .getSize(find.byKey(const ValueKey('view-option-compact')))
-              .height,
-          greaterThanOrEqualTo(48));
+      expect(find.text('Compact'), findsOneWidget);
+      expect(saidOpacity(tester), 1);
+
+      await tester.pump(const Duration(milliseconds: 1400));
+      expect(saidOpacity(tester), 0);
+    });
+
+    testWidgets('the toggle is announced with the current layout',
+        (tester) async {
+      await pump(tester);
+      expect(find.bySemanticsLabel('Shelf view: Stacked'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('view-trigger')));
+      await settle(tester);
+      expect(find.bySemanticsLabel('Shelf view: Compact'), findsOneWidget);
+    });
+
+    testWidgets('the toggle is a full size tap target', (tester) async {
+      await pump(tester);
+      final size = tester.getSize(find.byKey(const ValueKey('view-trigger')));
+      expect(size.height, greaterThanOrEqualTo(48));
+      expect(size.width, greaterThanOrEqualTo(48));
     });
   });
 }
