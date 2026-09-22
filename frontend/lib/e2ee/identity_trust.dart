@@ -28,14 +28,29 @@ class PeerIdentity {
 String hexAlbumId(Uint8List albumId) =>
     albumId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
+// Carries the replacement key without coupling E2EE to Activity
+// A later replacement key must create a distinct alarm
+typedef TrustChanged = void Function(
+    Uint8List albumId, String memberToken, Uint8List newIkPub);
+
+// The comparison matched but the pin store could not write it. The in-memory
+// state is updated as before; after a restart the album alarms again
+class VerificationNotSaved implements Exception {
+  const VerificationNotSaved();
+}
+
 class IdentityTrust {
   final IdentityService _identity;
   final IdentityPinStore _pins;
+  final TrustChanged? _onChanged;
 
-  IdentityTrust(
-      {required IdentityService identity, required IdentityPinStore pins})
-      : _identity = identity,
-        _pins = pins;
+  IdentityTrust({
+    required IdentityService identity,
+    required IdentityPinStore pins,
+    TrustChanged? onChanged,
+  })  : _identity = identity,
+        _pins = pins,
+        _onChanged = onChanged;
 
   // Establishes first sight roster pins for display and change detection. It
   // never moves an existing pin or grants epoch signing authority
@@ -63,6 +78,7 @@ class IdentityTrust {
         pinnedAny = true;
       } else if (!_eq(pinned, peer.ikPub)) {
         out[peer.memberToken] = TrustState.changed;
+        _onChanged?.call(albumId, peer.memberToken, peer.ikPub);
         continue;
       }
       // Runs on a first sight too : the same peer in a new album shows up with
@@ -103,6 +119,22 @@ class IdentityTrust {
     _pins.pinSigner(album, memberToken, peerIkPub);
     _pins.markVerified(myIkPub: myIk, peerIkPub: peerIkPub);
     await _pins.flush();
+    if (_pins.lastWriteFailed) throw const VerificationNotSaved();
+  }
+
+  // Resolution needs global verification and this album's matching pin
+  // Otherwise this album still reports the key as changed
+  Future<bool> isResolved({
+    required Uint8List albumId,
+    required String memberToken,
+    required Uint8List peerIkPub,
+  }) async {
+    // A failed write may leave only session memory, so it cannot resolve history
+    if (_pins.lastWriteFailed) return false;
+    final pinned = _pins.pinnedIk(hexAlbumId(albumId), memberToken);
+    if (pinned == null || !_eq(pinned, peerIkPub)) return false;
+    final myIk = await _identity.currentIkPub();
+    return _pins.isVerified(myIkPub: myIk, peerIkPub: peerIkPub);
   }
 
   Future<DateTime?> verifiedAt(Uint8List peerIkPub) async {

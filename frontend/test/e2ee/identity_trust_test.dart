@@ -22,14 +22,14 @@ void main() {
   });
 
   Future<({IdentityTrust trust, IdentityPinStore store, Uint8List myIk})>
-      newTrust() async {
+      newTrust({TrustChanged? onChanged, File? file}) async {
     final me = await newResponderIdentity();
     final store = await IdentityPinStore.open(
-      file: File('${dir.path}/pins.kec'),
+      file: file ?? File('${dir.path}/pins.kec'),
       cacheRootKey: Uint8List.fromList(List<int>.filled(32, 5)),
     );
     return (
-      trust: IdentityTrust(identity: me.svc, pins: store),
+      trust: IdentityTrust(identity: me.svc, pins: store, onChanged: onChanged),
       store: store,
       myIk: await me.svc.currentIkPub(),
     );
@@ -73,6 +73,71 @@ void main() {
       expect(states['bob'], TrustState.changed);
       // and the pin must NOT quietly move : the user has to resolve it
       expect(t.store.pinnedIk(hexAlbumId(alb), 'bob'), _ik(2));
+    });
+
+    test('a changed pin is announced so it can be recorded', () async {
+      final announced = <({Uint8List album, String token})>[];
+      final t = await newTrust(
+        onChanged: (album, token, _) =>
+            announced.add((album: album, token: token)),
+      );
+      final alb = _albumId(1);
+      await t.trust
+          .reconcile(alb, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
+      await t.trust
+          .reconcile(alb, [PeerIdentity(memberToken: 'bob', ikPub: _ik(3))]);
+
+      expect(announced, hasLength(1));
+      expect(announced.single.token, 'bob');
+      expect(announced.single.album, alb);
+    });
+
+    // Verification is global, but resolution also needs this album's pin
+    test('a key verified elsewhere does not settle this album', () async {
+      final t = await newTrust();
+      final x = _albumId(1), y = _albumId(2);
+      await t.trust
+          .reconcile(x, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
+      await t.trust
+          .reconcile(y, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
+
+      // Both albums now alarm on key 3; it is verified in X only
+      await t.trust
+          .markVerified(albumId: x, memberToken: 'bob', peerIkPub: _ik(3));
+
+      expect(
+          await t.trust
+              .isResolved(albumId: x, memberToken: 'bob', peerIkPub: _ik(3)),
+          isTrue);
+      expect(
+          await t.trust
+              .isResolved(albumId: y, memberToken: 'bob', peerIkPub: _ik(3)),
+          isFalse,
+          reason: 'album Y still pins key 2 and still alarms');
+    });
+
+    test('a pinned but never compared key is not resolved', () async {
+      final t = await newTrust();
+      final x = _albumId(1);
+      await t.trust
+          .reconcile(x, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
+
+      expect(
+          await t.trust
+              .isResolved(albumId: x, memberToken: 'bob', peerIkPub: _ik(2)),
+          isFalse);
+    });
+
+    test('an unchanged roster announces nothing', () async {
+      final announced = <String>[];
+      final t =
+          await newTrust(onChanged: (_, token, __) => announced.add(token));
+      final alb = _albumId(1);
+      final roster = [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))];
+      await t.trust.reconcile(alb, roster);
+      await t.trust.reconcile(alb, roster);
+
+      expect(announced, isEmpty);
     });
 
     test('our own roster row is skipped : no safety number with ourselves',
@@ -266,5 +331,33 @@ void main() {
     await t.trust.forgetAlbum(alb);
 
     expect(t.store.pinnedIk(hexAlbumId(alb), 'bob'), isNull);
+  });
+
+  // A failed pin write may update display state but cannot resolve history
+  test('a verification that could not be saved says so', () async {
+    final t = await newTrust(file: File('${dir.path}/missing/dir/pins.kec'));
+    final alb = _albumId(1);
+
+    await expectLater(
+      t.trust.markVerified(albumId: alb, memberToken: 'bob', peerIkPub: _ik(3)),
+      throwsA(isA<VerificationNotSaved>()),
+    );
+  });
+
+  // A failed write must not let session memory resolve the alarm
+  test('an unsaved verification never reads as resolved', () async {
+    final t = await newTrust(file: File('${dir.path}/missing/dir/pins.kec'));
+    final alb = _albumId(1);
+    await t.trust
+        .reconcile(alb, [PeerIdentity(memberToken: 'bob', ikPub: _ik(2))]);
+
+    await expectLater(
+      t.trust.markVerified(albumId: alb, memberToken: 'bob', peerIkPub: _ik(3)),
+      throwsA(isA<VerificationNotSaved>()),
+    );
+    expect(
+        await t.trust
+            .isResolved(albumId: alb, memberToken: 'bob', peerIkPub: _ik(3)),
+        isFalse);
   });
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/widgets/encrypted_image.dart';
@@ -26,6 +27,8 @@ class PhotoViewerScreen extends StatelessWidget {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         elevation: 0,
+        // Override the cream theme's dark status-bar icons
+        systemOverlayStyle: Warm.overlayOnPeek,
       ),
       body: Center(
         child: EncryptedImage(

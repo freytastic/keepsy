@@ -42,6 +42,7 @@ void main() {
     await loadShelf(
       catalog: catalog,
       fetch: () async => [_album('a1'), _album('a2')],
+      restore: (albums) => applied.add([for (final a in albums) a.id]),
       apply: (albums) => applied.add([for (final a in albums) a.id]),
     );
 
@@ -58,6 +59,7 @@ void main() {
     await loadShelf(
       catalog: catalog,
       fetch: () async => throw Exception('connection refused'),
+      restore: (albums) => applied.add([for (final a in albums) a.id]),
       apply: (albums) => applied.add([for (final a in albums) a.id]),
     );
 
@@ -77,6 +79,7 @@ void main() {
     await loadShelf(
       catalog: catalog,
       fetch: () async => null,
+      restore: (albums) => applied.add([for (final a in albums) a.id]),
       apply: (albums) => applied.add([for (final a in albums) a.id]),
     );
 
@@ -93,10 +96,29 @@ void main() {
     await loadShelf(
       catalog: catalog,
       fetch: () async => <AlbumModel>[],
+      restore: (albums) => applied.add([for (final a in albums) a.id]),
       apply: (albums) => applied.add([for (final a in albums) a.id]),
     );
 
     expect(applied.last, isEmpty);
     expect(catalog.saves, 0);
+  });
+
+  // Incomplete local restores must not create false departure events
+  test('the local shelf is restored, never applied as a listing', () async {
+    final restored = <List<String>>[];
+    final listed = <List<String>>[];
+
+    await loadShelf(
+      catalog: _FakeCatalog([_album('a1')]),
+      fetch: () async => null,
+      restore: (albums) => restored.add([for (final a in albums) a.id]),
+      apply: (albums) => listed.add([for (final a in albums) a.id]),
+    );
+
+    expect(restored, [
+      ['a1']
+    ]);
+    expect(listed, isEmpty);
   });
 }

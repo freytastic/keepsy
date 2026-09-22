@@ -67,7 +67,14 @@ import 'package:keepsy/ui/screens/account_deletion_screen.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
 import 'package:keepsy/data/storage/account_owner.dart';
 import 'package:keepsy/data/api/session_refresher.dart';
+import 'package:keepsy/data/storage/activity_store.dart';
 import 'package:keepsy/domain/account/account_gate.dart';
+import 'package:keepsy/domain/activity/activity_event.dart';
+import 'package:keepsy/domain/activity/activity_recorder.dart';
+import 'package:keepsy/domain/activity/activity_sync.dart';
+import 'package:keepsy/domain/activity/trust_alarm.dart';
+import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
+import 'package:keepsy/ui/widgets/default_status_bar.dart';
 import 'package:keepsy/domain/account/local_identity.dart';
 import 'package:keepsy/domain/account/sign_in_gate.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
@@ -211,8 +218,27 @@ void main() async {
       await identityPinStore.clearCreating(albumIdStr);
     }
   }
-  final identityTrust =
-      IdentityTrust(identity: identityService, pins: identityPinStore);
+  // Reconcile cannot invoke this callback before the store opens below
+  late final ActivityStore activityStore;
+  late final ActivitySync activitySync;
+  // Recompute from storage so repeated alarms and restarts cannot desync the dot
+  Future<void> refreshUnread() async =>
+      appState.setUnreadNotifications(await activityStore.hasUnseen());
+  final identityTrust = IdentityTrust(
+    identity: identityService,
+    pins: identityPinStore,
+    onChanged: (albumId, memberToken, newIkPub) {
+      // Through the sync so opening Activity and the wipe both wait for it
+      unawaited(activitySync.alarm(() => recordTrustAlarm(
+            record: activityStore.record,
+            onRecorded: refreshUnread,
+            albumId: _uuidStringFromBytes(albumId),
+            memberToken: memberToken,
+            newIkPub: newIkPub,
+            now: DateTime.now(),
+          )));
+    },
+  );
   // look up an invitee by keepsy_id + ship all historical MKs. The pinner
   // anchors first contact TOFU on the IK we wrap to (finding #1, invite path)
   final inviteInitiator = InviteInitiator(
@@ -238,11 +264,13 @@ void main() async {
     pendingDeletion = await deletionMarker.read();
   } catch (_) {}
   // Seed only the authenticated owner's shelf before the first network request
+  var shelfSeedAllowed = false;
   try {
     final maySeed = AccountGate.maySeedShelf(
       boundOwner: await accountOwner.read(),
       storedUserId: await StorageService().getUserId(),
     );
+    shelfSeedAllowed = maySeed;
     if (maySeed) {
       final localAlbums = await mediaSealedCache.loadAlbums();
       if (localAlbums.isNotEmpty) appState.setAlbums(localAlbums);
@@ -288,6 +316,40 @@ void main() async {
     },
   );
 
+  activityStore = await ActivityStore.open(cacheRootKey: cacheRootKey);
+  final activityRecorder = ActivityRecorder(
+    record: activityStore.record,
+    readSnapshot: activityStore.readSnapshot,
+    writeSnapshot: activityStore.writeSnapshot,
+    // The server exposes uploader tokens, but names remain sealed on-device
+    fetchMedia: (albumId) async {
+      try {
+        return await mediaApi.listMedia(albumId);
+      } catch (_) {
+        return null;
+      }
+    },
+    selfTokenFor: appState.selfMemberToken,
+    settleRotation: activityStore.settleRotation,
+    commit: activityStore.commit,
+  );
+  activitySync = ActivitySync(
+    observe: activityRecorder.observe,
+    current: () => appState.albums,
+    afterEach: () async {
+      await activityStore.prune(
+          albumRowsBefore: DateTime.now().subtract(kActivityWindow));
+      await refreshUnread();
+    },
+  );
+  // Restore the dot offline only for the owner whose shelf may be shown
+  if (shelfSeedAllowed) {
+    try {
+      await refreshUnread();
+    } catch (_) {}
+  }
+  appState.attachListingApplied(() => unawaited(activitySync.listed()));
+
   // Persist every AppState shelf mutation
   appState.attachShelfPersistence(mediaSealedCache.saveAlbums);
   final mediaPlaintextCache = MediaPlaintextCache();
@@ -315,7 +377,7 @@ void main() async {
   // Reconcile gaps in realtime summary data
   appState.attachSummaryRefresh(() async {
     final fresh = await albumService.getMyAlbums();
-    if (fresh != null) appState.setAlbums(fresh);
+    if (fresh != null) appState.applyListing(fresh);
   });
 
   final mediaCacheManager = MediaCacheManager(
@@ -380,6 +442,42 @@ void main() async {
     await epochProcessor.handleEvent(albumId: albumId, epoch: cur.currentEpoch);
   }
 
+  Future<void> wipeLocalAlbum(Uint8List albumId) async {
+    final albumStr = _uuidStringFromBytes(albumId);
+    // Queued photos and their sealed keys must not outlive the album
+    final picks = await uploadQueue.forgetAlbum(albumStr);
+    await shelfCovers.forget(albumStr);
+    await mediaCacheManager.clearAlbum(albumStr);
+    await seenStore.forget(albumStr);
+    await albumKeyStore.deleteAlbumMKs(albumId);
+    // Mark gone first so in-flight resolvers cannot repopulate wiped data
+    appState.removeAlbum(albumStr);
+    await mediaSealedCache.dropAlbum(albumStr);
+    await nameCache.clearAlbum(albumStr);
+    await identityTrust.forgetAlbum(albumId);
+    rotationRecovery.forget(albumId);
+    // Several of the steps above swallow delete failures by design, so the
+    // cleanup record is only released once nothing is found
+    final left = <String>[
+      for (final path in picks)
+        if (await File(path).exists()) 'picked photo',
+      if (uploadQueue.holdsAlbum(albumStr)) 'upload queue',
+      if (await uploadOutbox.holdsAlbum(albumStr)) 'sealed uploads',
+      if ((await mediaSealedCache.listRecordsForAlbum(albumStr)).isNotEmpty)
+        'media catalog',
+      if ((await mediaSealedCache.coversFor(albumStr)).isNotEmpty) 'covers',
+      if ((await mediaSealedCache.loadAlbums()).any((a) => a.id == albumStr))
+        'shelf',
+      if (await albumKeyStore.latestEpoch(albumId) >= 0) 'album keys',
+      if (nameCache.holdsAlbum(albumStr)) 'names',
+      if (identityPinStore.holdsAlbum(hexAlbumId(albumId))) 'pins',
+      if (seenStore.holdsAlbum(albumStr)) 'seen state',
+    ];
+    if (left.isNotEmpty) {
+      throw StateError('album data left behind: ${left.join(', ')}');
+    }
+  }
+
   final memberRemoval = MemberRemovalCoordinator(
     revoke: (albumId, token) => albumService.removeMember(
         _uuidStringFromBytes(albumId), base64.encode(token)),
@@ -396,41 +494,7 @@ void main() async {
         albumIdBytes: albumId, epoch: epoch, recipients: recipients),
     expectedIk: expectedIkResolver.call,
     dropDirectory: (albumId, token) => memberDirectory.drop(albumId, token),
-    wipeLocalAlbum: (albumId) async {
-      final albumStr = _uuidStringFromBytes(albumId);
-      // Queued photos and their sealed keys must not outlive the album
-      final picks = await uploadQueue.forgetAlbum(albumStr);
-      await shelfCovers.forget(albumStr);
-      await mediaCacheManager.clearAlbum(albumStr);
-      await seenStore.forget(albumStr);
-      await albumKeyStore.deleteAlbumMKs(albumId);
-      // Mark gone first so in-flight resolvers cannot repopulate wiped data
-      appState.removeAlbum(albumStr);
-      await mediaSealedCache.dropAlbum(albumStr);
-      await nameCache.clearAlbum(albumStr);
-      await identityTrust.forgetAlbum(albumId);
-      rotationRecovery.forget(albumId);
-      // Several of the steps above swallow delete failures by design, so the
-      // cleanup record is only released once nothing is found
-      final left = <String>[
-        for (final path in picks)
-          if (await File(path).exists()) 'picked photo',
-        if (uploadQueue.holdsAlbum(albumStr)) 'upload queue',
-        if (await uploadOutbox.holdsAlbum(albumStr)) 'sealed uploads',
-        if ((await mediaSealedCache.listRecordsForAlbum(albumStr)).isNotEmpty)
-          'media catalog',
-        if ((await mediaSealedCache.coversFor(albumStr)).isNotEmpty) 'covers',
-        if ((await mediaSealedCache.loadAlbums()).any((a) => a.id == albumStr))
-          'shelf',
-        if (await albumKeyStore.latestEpoch(albumId) >= 0) 'album keys',
-        if (nameCache.holdsAlbum(albumStr)) 'names',
-        if (identityPinStore.holdsAlbum(hexAlbumId(albumId))) 'pins',
-        if (seenStore.holdsAlbum(albumStr)) 'seen state',
-      ];
-      if (left.isNotEmpty) {
-        throw StateError('album data left behind: ${left.join(', ')}');
-      }
-    },
+    wipeLocalAlbum: wipeLocalAlbum,
     isRotationRequired: isRotationRequired,
   );
   // Persists every album loss until its local wipe is verified
@@ -512,6 +576,7 @@ void main() async {
                 : null);
       }
       appState.notifyMediaAdded(albumStr, mediaStr);
+      activitySync.nudge();
     } else if (ev.type == 'e2ee.album_deleted') {
       final albumStr = ev.payload['album_id'] as String?;
       if (albumStr != null) onAlbumDeleted(albumStr);
@@ -583,7 +648,7 @@ void main() async {
 
   final summaryRefresher = AlbumSummaryRefresher(
     fetch: albumService.getMyAlbums,
-    apply: appState.setAlbums,
+    apply: appState.applyListing,
   );
   final pickedSources = PickedSourceStoreImpl();
   final mediaPreparer = MediaPreparerImpl(albumKeyStore, uploadOutbox,
@@ -637,6 +702,8 @@ void main() async {
         }
       ),
       (name: 'outbox', run: uploadOutbox.clearAll),
+      (name: 'activity sync', run: activitySync.stop),
+      (name: 'activity', run: activityStore.clearAll),
       (name: 'names', run: nameCache.clear),
       (name: 'pins', run: identityPinStore.clear),
       (name: 'seen', run: seenStore.clear),
@@ -686,6 +753,10 @@ void main() async {
         identityService, epochProcessor, appState, rotationRecovery));
   });
 
+  // Load before the first frame to avoid a visible layout jump
+  final shelfView =
+      await ShelfViewPreference.load(await SharedPreferences.getInstance());
+
   runApp(
     MultiProvider(
       providers: [
@@ -715,6 +786,10 @@ void main() async {
         ChangeNotifierProvider<UploadQueueModel>.value(value: uploadQueue),
         Provider<AccountDeletion>.value(value: accountDeletion),
         Provider<SignInGate>.value(value: signInGate),
+        Provider<ActivityFeed>.value(value: activityStore),
+        Provider<ActivityStore>.value(value: activityStore),
+        Provider<ActivitySync>.value(value: activitySync),
+        ChangeNotifierProvider<ShelfViewPreference>.value(value: shelfView),
         Provider<TerminalWipe>.value(value: terminalWipe),
         Provider<AccountOwnerStore>.value(value: accountOwner),
       ],
@@ -932,14 +1007,16 @@ class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
       routes: {
         '/login': (_) => const OnboardingScreen(),
       },
-      builder: (context, child) => Stack(
-        children: [
-          if (child != null) child,
-          if (_shielded)
-            const Positioned.fill(
-              child: ColoredBox(color: Warm.ground),
-            ),
-        ],
+      builder: (context, child) => DefaultStatusBar(
+        child: Stack(
+          children: [
+            if (child != null) child,
+            if (_shielded)
+              const Positioned.fill(
+                child: ColoredBox(color: Warm.ground),
+              ),
+          ],
+        ),
       ),
     );
   }

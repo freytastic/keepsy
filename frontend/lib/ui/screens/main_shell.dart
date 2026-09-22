@@ -48,7 +48,17 @@ class MainShell extends StatelessWidget {
   // Keep stale albums when refresh fails
   static Future<void> _refresh(AppState appState) async {
     final fresh = await AlbumService().getMyAlbums();
-    if (fresh != null) appState.setAlbums(fresh);
+    if (fresh != null) appState.applyListing(fresh);
+  }
+
+  // Activity rows reuse the shelf's album navigation
+  Future<void> _openActivity(BuildContext context) async {
+    final appState = context.read<AppState>();
+    final albumId = await Navigator.of(context)
+        .push<String>(_slide(const NotificationsScreen()));
+    if (albumId == null || !context.mounted) return;
+    final album = appState.albums.where((a) => a.id == albumId).firstOrNull;
+    if (album != null) await _openAlbum(context, album);
   }
 
   @override
@@ -58,8 +68,7 @@ class MainShell extends StatelessWidget {
           .push(_slide(const ProfileScreen(), from: const Offset(-1, 0))),
       onOpenAlbum: (album) => _openAlbum(context, album),
       onCreateAlbum: () => _create(context),
-      onOpenActivity: () =>
-          Navigator.of(context).push(_slide(const NotificationsScreen())),
+      onOpenActivity: () => _openActivity(context),
     );
   }
 }

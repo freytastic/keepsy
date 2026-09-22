@@ -175,6 +175,8 @@ class IdentityPinStore {
   }
 
   bool _writeFailed = false;
+  // Display tolerates a failed flush; verification must not claim persistence
+  bool get lastWriteFailed => _writeFailed;
 
   // Album removal treats a failed write as pins possibly still on disk
   bool holdsAlbum(String albumId) {
