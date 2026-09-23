@@ -210,6 +210,7 @@ abstract class Warm {
   static TextStyle get meta => _t(12.5, 450, color: inkSoft);
   static TextStyle get metaNew => _t(12.5, 620, color: warn);
   static TextStyle get faceInitial => _t(10, 640, color: Color(0x9E1C1917));
+  static TextStyle get faceMore => _t(11, 560, color: inkFaint);
   static TextStyle get tab =>
       _t(13, 560, letterSpacing: 0.052, color: inkFaint);
   static TextStyle get avatarInitial => _t(14, 600, color: inkSoft);
