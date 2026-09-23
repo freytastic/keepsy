@@ -186,9 +186,22 @@ func memberPreviewsJSON(in []model.MemberPreview) []map[string]any {
 		if len(m.NameCT) > 0 {
 			row["name_ct"] = base64.StdEncoding.EncodeToString(m.NameCT)
 		}
+		if m.Avatar != nil {
+			row["avatar"] = avatarJSON(m.Avatar)
+		}
 		out[i] = row
 	}
 	return out
+}
+
+// Carries no storage key, so fetching still needs an authorized download URL
+func avatarJSON(a *model.AvatarRef) map[string]any {
+	return map[string]any{
+		"avatar_id":   a.AvatarID,
+		"blob_size":   a.BlobSize,
+		"blob_sha256": base64.StdEncoding.EncodeToString(a.BlobSHA256),
+		"key_ct":      base64.StdEncoding.EncodeToString(a.KeyCT),
+	}
 }
 
 func (h *AlbumHandler) UpdateAlbum(w http.ResponseWriter, r *http.Request) {
@@ -275,16 +288,20 @@ func (h *AlbumHandler) ListAlbumMembers(w http.ResponseWriter, r *http.Request) 
 	}
 	out := make([]map[string]any, len(members))
 	for i, m := range members {
+		profile := map[string]any{
+			"ik_pub":  optBase64(m.Profile.IKPub),
+			"lk_pub":  optBase64(m.Profile.LKPub),
+			"name_ct": optBase64(m.Profile.NameCT),
+		}
+		if m.Profile.Avatar != nil {
+			profile["avatar"] = avatarJSON(m.Profile.Avatar)
+		}
 		out[i] = map[string]any{
 			"member_token": base64.StdEncoding.EncodeToString(m.MemberToken),
 			"role":         m.Role,
 			"revoked":      m.Revoked,
 			"joined_at":    m.JoinedAt,
-			"profile": map[string]any{
-				"ik_pub":  optBase64(m.Profile.IKPub),
-				"lk_pub":  optBase64(m.Profile.LKPub),
-				"name_ct": optBase64(m.Profile.NameCT),
-			},
+			"profile":      profile,
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

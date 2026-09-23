@@ -10,6 +10,7 @@ import 'package:keepsy/diagnostics/trace.dart';
 import 'package:uuid/uuid.dart';
 
 import 'album_keys.dart';
+import 'jpeg_budget.dart';
 import 'jpeg_sanity.dart';
 
 // File encryption pipeline (§5.1). Per file DEK + algorithm select by plaintext
@@ -53,6 +54,13 @@ class TranscodedPhoto {
     required this.width,
     required this.height,
   });
+}
+
+// A photo re encoded without metadata, ready to encrypt
+class CleanPhoto {
+  final Uint8List jpeg;
+  final Uint8List thumb;
+  const CleanPhoto({required this.jpeg, required this.thumb});
 }
 
 // Rejection must not fall back to the uncapped Dart decoder
@@ -232,6 +240,86 @@ abstract class FilePipeline {
     }
   }
 
+  // Metadata free full JPEG and thumbnail from one decode. Throws
+  // UnprocessableImageException rather than ever returning the original bytes
+  static Future<CleanPhoto> cleanPhoto(
+    Uint8List plaintext, {
+    ImageTranscoder? transcode,
+    Map<String, Object?> traceFields = const {},
+  }) async {
+    // Prefer the faster bounded platform codec for phone photos
+    final outcome = transcode == null
+        ? const TranscodeUnavailable()
+        : await Trace.measure<TranscodeOutcome>(
+            'media.imageTranscode',
+            () => transcode(plaintext),
+            fields: {...traceFields, 'bytes': plaintext.length},
+            endFields: (result) => switch (result) {
+              TranscodeDone(:final photo) => {
+                  'transcoded': true,
+                  'file_bytes': photo.jpeg.length,
+                  'thumb_bytes': photo.thumb.length,
+                  'width': photo.width,
+                  'height': photo.height,
+                },
+              TranscodeRejected(:final reason) => {
+                  'transcoded': false,
+                  'refused': reason,
+                },
+              TranscodeUnavailable() => {
+                  'transcoded': false,
+                  'refused': 'unavailable',
+                },
+            },
+          );
+
+    switch (outcome) {
+      case TranscodeDone(:final photo):
+        final file = Trace.measureSync<SanitizedJpeg?>(
+          'media.jpegSanitize',
+          () => JpegSanity.sanitize(photo.jpeg),
+          fields: {...traceFields, 'bytes': photo.jpeg.length},
+        );
+        final thumb = Trace.measureSync<SanitizedJpeg?>(
+          'media.jpegSanitizeThumb',
+          () => JpegSanity.sanitize(photo.thumb),
+          fields: {...traceFields, 'bytes': photo.thumb.length},
+        );
+        if (file == null || thumb == null) {
+          // Log only the marker where validation stopped
+          Trace.event('media.imageSanitizeRefused', fields: {
+            ...traceFields,
+            'file': file == null ? JpegSanity.describe(photo.jpeg) : 'ok',
+            'thumb': thumb == null ? JpegSanity.describe(photo.thumb) : 'ok',
+          });
+          throw const UnprocessableImageException(
+              'transcoded photo is not a whole JPEG');
+        }
+        // Record metadata markers removed from platform output
+        Trace.event('media.imageSanitize', fields: {
+          ...traceFields,
+          'stripped': _markerList(file.stripped),
+          'thumb_stripped': _markerList(thumb.stripped),
+        });
+        return CleanPhoto(jpeg: file.bytes, thumb: thumb.bytes);
+      case TranscodeRejected(:final reason):
+        throw UnprocessableImageException('platform refused it: $reason');
+      case TranscodeUnavailable():
+        final stripped = await Trace.measure<_StrippedAndThumb?>(
+          'media.imageWork',
+          () => _stripExifAndThumb(plaintext),
+          fields: {...traceFields, 'bytes': plaintext.length},
+          endFields: (result) => {'decoded': result != null},
+        );
+        if (stripped == null) {
+          throw const UnprocessableImageException(
+              'photo could not be decoded to strip metadata');
+        }
+        _emitImageSpans(stripped, plaintext.length, traceFields);
+        return CleanPhoto(jpeg: stripped.cleanJpeg, thumb: stripped.thumb);
+    }
+  }
+
   // Needs no album key because the file AAD is only the media id
   static Future<EncryptedMedia> encryptMedia({
     required Uint8List plaintext,
@@ -261,83 +349,10 @@ abstract class FilePipeline {
       Uint8List bytesToEncrypt = plaintext;
       Uint8List? thumbPlaintext;
       if (mediaType == 'photo') {
-        // Prefer the faster bounded platform codec for phone photos
-        final outcome = transcode == null
-            ? const TranscodeUnavailable()
-            : await Trace.measure<TranscodeOutcome>(
-                'media.imageTranscode',
-                () => transcode(plaintext),
-                fields: {...traceFields, 'bytes': plaintext.length},
-                endFields: (result) => switch (result) {
-                      TranscodeDone(:final photo) => {
-                          'transcoded': true,
-                          'file_bytes': photo.jpeg.length,
-                          'thumb_bytes': photo.thumb.length,
-                          'width': photo.width,
-                          'height': photo.height,
-                        },
-                      TranscodeRejected(:final reason) => {
-                          'transcoded': false,
-                          'refused': reason,
-                        },
-                      TranscodeUnavailable() => {
-                          'transcoded': false,
-                          'refused': 'unavailable',
-                        },
-                    },
-              );
-
-        switch (outcome) {
-          case TranscodeDone(:final photo):
-            final file = Trace.measureSync<SanitizedJpeg?>(
-              'media.jpegSanitize',
-              () => JpegSanity.sanitize(photo.jpeg),
-              fields: {...traceFields, 'bytes': photo.jpeg.length},
-            );
-            final thumb = Trace.measureSync<SanitizedJpeg?>(
-              'media.jpegSanitizeThumb',
-              () => JpegSanity.sanitize(photo.thumb),
-              fields: {...traceFields, 'bytes': photo.thumb.length},
-            );
-            if (file == null || thumb == null) {
-              // Log only the marker where validation stopped
-              Trace.event('media.imageSanitizeRefused', fields: {
-                ...traceFields,
-                'file': file == null
-                    ? JpegSanity.describe(photo.jpeg)
-                    : 'ok',
-                'thumb': thumb == null
-                    ? JpegSanity.describe(photo.thumb)
-                    : 'ok',
-              });
-              throw const UnprocessableImageException(
-                  'transcoded photo is not a whole JPEG');
-            }
-            // Record metadata markers removed from platform output
-            Trace.event('media.imageSanitize', fields: {
-              ...traceFields,
-              'stripped': _markerList(file.stripped),
-              'thumb_stripped': _markerList(thumb.stripped),
-            });
-            bytesToEncrypt = file.bytes;
-            thumbPlaintext = thumb.bytes;
-          case TranscodeRejected(:final reason):
-            throw UnprocessableImageException('platform refused it: $reason');
-          case TranscodeUnavailable():
-            final stripped = await Trace.measure<_StrippedAndThumb?>(
-              'media.imageWork',
-              () => _stripExifAndThumb(plaintext),
-              fields: {...traceFields, 'bytes': plaintext.length},
-              endFields: (result) => {'decoded': result != null},
-            );
-            if (stripped == null) {
-              throw const UnprocessableImageException(
-                  'photo could not be decoded to strip metadata');
-            }
-            _emitImageSpans(stripped, plaintext.length, traceFields);
-            bytesToEncrypt = stripped.cleanJpeg;
-            thumbPlaintext = stripped.thumb;
-        }
+        final clean = await cleanPhoto(plaintext,
+            transcode: transcode, traceFields: traceFields);
+        bytesToEncrypt = clean.jpeg;
+        thumbPlaintext = clean.thumb;
       }
 
       // Algorithm select by plaintext size only (D5) : <1 MiB → VER=0x01
@@ -567,7 +582,7 @@ _StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
   final encodeMs = watch.elapsedMilliseconds;
 
   watch.reset();
-  final thumbImg = _resizeLongEdge(decoded, _thumbMaxDim);
+  final thumbImg = resizeLongEdge(decoded, _thumbMaxDim);
   final resizeMs = watch.elapsedMilliseconds;
 
   // Preserve edge color in small thumbnails
@@ -590,47 +605,13 @@ _StrippedAndThumb? _stripExifAndThumbSync(Uint8List bytes) {
   );
 }
 
-img.Image _resizeLongEdge(img.Image src, int maxDim) {
-  final longEdge = src.width >= src.height ? src.width : src.height;
-  if (longEdge <= maxDim) return src;
-  return src.width >= src.height
-      ? img.copyResize(src,
-          width: maxDim, interpolation: img.Interpolation.average)
-      : img.copyResize(src,
-          height: maxDim, interpolation: img.Interpolation.average);
-}
-
-class _Thumb {
-  final Uint8List bytes;
-  final int width;
-  final int height;
-  final int quality;
-  const _Thumb(this.bytes, this.width, this.height, this.quality);
-}
-
-_Thumb _encodeThumbUnderBudget(img.Image src) {
-  var image = src;
-  var quality = _thumbJpegQuality;
-  while (true) {
-    final bytes = img.encodeJpg(image, quality: quality);
-    if (bytes.length <= _thumbByteBudget) {
-      return _Thumb(bytes, image.width, image.height, quality);
-    }
-    if (quality > _thumbMinQuality) {
-      quality -= 8;
-      if (quality < _thumbMinQuality) {
-        quality = _thumbMinQuality;
-      }
-      continue;
-    }
-    final longEdge = image.width >= image.height ? image.width : image.height;
-    if (longEdge <= _thumbMinDim) {
-      return _Thumb(bytes, image.width, image.height, quality);
-    }
-    image = _resizeLongEdge(image, (longEdge * 3) ~/ 4);
-    quality = _thumbJpegQuality;
-  }
-}
+BudgetedJpeg _encodeThumbUnderBudget(img.Image src) => encodeJpegUnderBudget(
+      src,
+      budget: _thumbByteBudget,
+      quality: _thumbJpegQuality,
+      minQuality: _thumbMinQuality,
+      minDim: _thumbMinDim,
+    );
 
 // Replays isolate timings on the caller trace
 void _emitImageSpans(

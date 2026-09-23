@@ -8,6 +8,7 @@ import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/blur_scrim.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
 
 import 'album_copy.dart';
@@ -16,6 +17,7 @@ import 'member_avatars.dart';
 typedef SendInvite = Future<void> Function(String keepsyId);
 
 class AddPeopleSheet extends StatefulWidget {
+  final String? albumId;
   final String albumTitle;
   final List<AvatarMember> members;
   final String? myKeepsyId;
@@ -24,6 +26,7 @@ class AddPeopleSheet extends StatefulWidget {
 
   const AddPeopleSheet({
     super.key,
+    this.albumId,
     required this.albumTitle,
     required this.members,
     required this.myKeepsyId,
@@ -34,6 +37,7 @@ class AddPeopleSheet extends StatefulWidget {
   // Resolves true once at least one invite went through
   static Future<bool> show(
     BuildContext context, {
+    String? albumId,
     required String albumTitle,
     required List<AvatarMember> members,
     required String? myKeepsyId,
@@ -45,6 +49,7 @@ class AddPeopleSheet extends StatefulWidget {
       transitionDuration: Warm.springSnappy,
       reverseTransitionDuration: Warm.springSnappy,
       pageBuilder: (_, a, __) => AddPeopleSheet(
+        albumId: albumId,
         albumTitle: albumTitle,
         members: members,
         myKeepsyId: myKeepsyId,
@@ -233,7 +238,10 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
                       children: [
                         const Center(child: _Grip()),
                         const SizedBox(height: 20),
-                        _Faces(members: widget.members, added: _added != null),
+                        _Faces(
+                            albumId: widget.albumId,
+                            members: widget.members,
+                            added: _added != null),
                         const SizedBox(height: 16),
                         AnimatedSwitcher(
                           duration: Warm.quick,
@@ -453,10 +461,12 @@ class _Grip extends StatelessWidget {
 }
 
 class _Faces extends StatelessWidget {
+  final String? albumId;
   final List<AvatarMember> members;
   final bool added;
 
-  const _Faces({required this.members, required this.added});
+  const _Faces(
+      {required this.albumId, required this.members, required this.added});
 
   static const double _size = 34;
   static const double _step = 26;
@@ -472,21 +482,15 @@ class _Faces extends StatelessWidget {
           for (var i = 0; i < shown.length; i++)
             Positioned(
               left: i * _step,
-              child: _ring(Container(
-                width: _size,
-                height: _size,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: MemberAvatars.hueFor(shown[i].token),
-                ),
-                child: Text(
-                  MemberAvatars.initialFor(shown[i].name),
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: Warm.inkSoft,
-                  ),
+              child: _ring(MemberFace(
+                albumId: albumId,
+                token: shown[i].token,
+                name: shown[i].name,
+                size: _size,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: Warm.inkSoft,
                 ),
               )),
             ),

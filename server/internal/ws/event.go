@@ -10,6 +10,7 @@ const (
 	EventManifestUpdated = "e2ee.manifest_updated"
 	EventMemberAdded     = "e2ee.member_added"
 	EventMemberRevoked   = "e2ee.member_revoked"
+	EventMemberUpdated   = "e2ee.member_updated"
 	EventMediaAdded      = "e2ee.media_added"
 	EventMediaDeleted    = "e2ee.media_deleted"
 	EventAlbumDeleted    = "e2ee.album_deleted"
@@ -21,6 +22,7 @@ var allowedEventTypes = map[string]struct{}{
 	EventManifestUpdated: {},
 	EventMemberAdded:     {},
 	EventMemberRevoked:   {},
+	EventMemberUpdated:   {},
 	EventMediaAdded:      {},
 	EventMediaDeleted:    {},
 	EventAlbumDeleted:    {},

@@ -211,3 +211,51 @@ func TestListAlbumMembers_NonMemberGetsE_NOT_MEMBER(t *testing.T) {
 		t.Errorf("code = %q, want E_NOT_MEMBER", body.Code)
 	}
 }
+
+// The roster must carry what members need to open an avatar, never its storage key
+func TestListAlbumMembers_ProfileCarriesAvatarRef(t *testing.T) {
+	callerToken := []byte("callertoken12345678901234567890ab")
+	ref := &model.AvatarRef{
+		AvatarID:   uuid.New(),
+		BlobSize:   131101,
+		BlobSHA256: bytes.Repeat([]byte{0x07}, 32),
+		KeyCT:      bytes.Repeat([]byte{0x08}, 65),
+	}
+	store := &mockAlbumStore{
+		lookupMemberFn: func(_ context.Context, _, _ uuid.UUID) ([]byte, string, error) {
+			return callerToken, "admin", nil
+		},
+		listMembersFn: func(_ context.Context, _ uuid.UUID) ([]model.MemberWithProfile, error) {
+			return []model.MemberWithProfile{{
+				MemberToken: callerToken,
+				Role:        "admin",
+				JoinedAt:    time.Now(),
+				Profile:     model.MemberProfile{Avatar: ref},
+			}}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/albums/"+uuid.New().String()+"/members", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDKey, uuid.New()))
+	rec := httptest.NewRecorder()
+	membersRouter(store).ServeHTTP(rec, req)
+
+	var body []struct {
+		Profile struct {
+			Avatar map[string]any `json:"avatar"`
+		} `json:"profile"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := body[0].Profile.Avatar
+	if got["avatar_id"] != ref.AvatarID.String() ||
+		got["blob_size"] != float64(ref.BlobSize) ||
+		got["blob_sha256"] != base64.StdEncoding.EncodeToString(ref.BlobSHA256) ||
+		got["key_ct"] != base64.StdEncoding.EncodeToString(ref.KeyCT) {
+		t.Errorf("avatar = %v", got)
+	}
+	if len(got) != 4 {
+		t.Errorf("avatar has %d fields, want exactly 4: %v", len(got), got)
+	}
+}

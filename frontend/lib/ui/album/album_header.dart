@@ -6,6 +6,7 @@ import 'album_copy.dart';
 import 'member_avatars.dart';
 
 class AlbumHeader extends StatelessWidget {
+  final String albumId;
   final String title;
   final String summary;
   final List<AvatarMember> members;
@@ -18,6 +19,7 @@ class AlbumHeader extends StatelessWidget {
 
   const AlbumHeader({
     super.key,
+    required this.albumId,
     required this.title,
     required this.summary,
     required this.members,
@@ -43,6 +45,7 @@ class AlbumHeader extends StatelessWidget {
           if (members.isNotEmpty || onAdd != null) ...[
             const SizedBox(height: 17),
             MemberAvatars(
+              albumId: albumId,
               members: members,
               selectedToken: filterToken,
               onTap: onTapMember,

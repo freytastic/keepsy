@@ -650,6 +650,7 @@ ActivityFace _face(ActivityEvent e, ActivityNames names, {bool alarm = false}) {
     _ => null,
   };
   return ActivityFace(
+    albumId: e.albumId,
     name: token == null ? null : names.memberName(e.albumId, token),
     token: token,
     alarm: alarm,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 
 import 'album_copy.dart';
 import 'album_stats.dart';
@@ -9,6 +10,7 @@ import 'member_avatars.dart';
 typedef MemberNameLookup = String? Function(String memberToken);
 
 class AlbumInfoScreen extends StatelessWidget {
+  final String? albumId;
   final String albumName;
   final DateTime createdAt;
   final AlbumStats stats;
@@ -16,6 +18,7 @@ class AlbumInfoScreen extends StatelessWidget {
 
   const AlbumInfoScreen({
     super.key,
+    this.albumId,
     required this.albumName,
     required this.createdAt,
     required this.stats,
@@ -55,6 +58,7 @@ class AlbumInfoScreen extends StatelessWidget {
           else
             for (final entry in stats.byWeight)
               _UploaderRow(
+                albumId: albumId,
                 token: entry.key,
                 name: nameOf(entry.key),
                 tally: entry.value,
@@ -119,12 +123,14 @@ class _Fact extends StatelessWidget {
 }
 
 class _UploaderRow extends StatelessWidget {
+  final String? albumId;
   final String token;
   final String? name;
   final UploaderTally tally;
   final double share;
 
   const _UploaderRow({
+    required this.albumId,
     required this.token,
     required this.name,
     required this.tally,
@@ -140,20 +146,16 @@ class _UploaderRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 22,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: MemberAvatars.hueFor(token),
-                  shape: BoxShape.circle,
-                ),
-                child: Text(MemberAvatars.initialFor(name),
-                    style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: Warm.inkSoft,
-                        height: 1)),
+              MemberFace(
+                albumId: albumId,
+                token: token,
+                name: name,
+                size: 22,
+                style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Warm.inkSoft,
+                    height: 1),
               ),
               const SizedBox(width: 10),
               Expanded(

@@ -22,6 +22,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: AlbumHeader(
+          albumId: 'album',
           title: 'Lisbon',
           summary: summary,
           members: members,

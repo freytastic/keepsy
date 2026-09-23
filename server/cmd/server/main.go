@@ -71,6 +71,7 @@ func main() {
 	sessionRepo := repository.NewSessionRepository(dbPool)
 	albumRepo := repository.NewAlbumRepository(dbPool, linker)
 	mediaRepo := repository.NewMediaRepository(dbPool)
+	avatarRepo := repository.NewAvatarRepository(dbPool)
 
 	s3Client, err := storage.NewS3Client(cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3Region, cfg.UsePathStyle)
 	if err != nil {
@@ -105,6 +106,7 @@ func main() {
 	mediaService := service.NewMediaService(mediaRepo, epochRepo, &s3Adapter{s3Client}, hub, inviteRepo)
 	// Deletions queue their objects transactionally, this only deletes them sooner
 	albumService.SetObjectCleaner(mediaService)
+	avatarService := service.NewAvatarService(avatarRepo, &s3Adapter{s3Client}, mediaService, hub, inviteRepo)
 	accountDeletions := service.NewAccountDeletionService(
 		repository.NewAccountDeletionRepository(dbPool, linker), mediaService, hub)
 
@@ -114,6 +116,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userService)
 	albumHandler := handler.NewAlbumHandler(albumService, hub, epochRepo)
 	mediaHandler := handler.NewMediaHandler(mediaService)
+	avatarHandler := handler.NewAvatarHandler(avatarService)
 	inviteHandler := handler.NewInviteHandler()
 	accountHandler := handler.NewAccountHandler(accountDeletions)
 	wsHandler := handler.NewWSHandler(hub, ticketStore)
@@ -179,6 +182,10 @@ func main() {
 	scoped.HandleFunc("/members", albumHandler.ListAlbumMembers).Methods(http.MethodGet)
 	// Onboarding stays on the E2EE invite path so membership includes MK delivery
 	scoped.HandleFunc("/members/me/profile-ct", albumHandler.UpdateMyProfileCT).Methods(http.MethodPut)
+	scoped.HandleFunc("/members/me/avatar/upload-url", avatarHandler.RequestUploadURL).Methods(http.MethodPost)
+	scoped.HandleFunc("/members/me/avatar/confirm", avatarHandler.Confirm).Methods(http.MethodPost)
+	scoped.HandleFunc("/members/me/avatar", avatarHandler.Remove).Methods(http.MethodDelete)
+	scoped.HandleFunc("/avatars/{aid}/download-url", avatarHandler.DownloadURL).Methods(http.MethodPost)
 	scoped.HandleFunc("/members/{token}", albumHandler.RemoveAlbumMember).Methods(http.MethodDelete)
 	// Member-token prekey fetch keeps rotation targets pseudonymous
 	scoped.Handle(
@@ -236,6 +243,11 @@ func main() {
 		defer close(pendingCleanupDone)
 		mediaService.RunPendingUploadCleanup(cleanupCtx)
 	}()
+	avatarCleanupDone := make(chan struct{})
+	go func() {
+		defer close(avatarCleanupDone)
+		avatarService.RunPendingCleanup(cleanupCtx)
+	}()
 	accountDeletionsDone := make(chan struct{})
 	go func() {
 		defer close(accountDeletionsDone)
@@ -267,7 +279,7 @@ func main() {
 		// Cleanup gets a fresh budget if HTTP shutdown consumed its deadline
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelDrain()
-		for _, done := range []chan struct{}{pendingCleanupDone, accountDeletionsDone} {
+		for _, done := range []chan struct{}{pendingCleanupDone, avatarCleanupDone, accountDeletionsDone} {
 			select {
 			case <-done:
 			case <-drainCtx.Done():
