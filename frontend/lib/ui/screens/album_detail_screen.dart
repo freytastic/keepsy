@@ -161,6 +161,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => AlbumInfoScreen(
+        albumId: widget.album.id,
         albumName: _appState?.albumDisplayName(widget.album.id) ?? 'Album',
         createdAt: widget.album.createdAt,
         stats: AlbumStats.of(_items, peopleCount: people),
@@ -610,6 +611,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final state = context.read<AppState>();
     final added = await AddPeopleSheet.show(
       context,
+      albumId: widget.album.id,
       albumTitle: state.albumDisplayName(widget.album.id) ?? 'this album',
       members: [
         for (final a in _avatars())
@@ -839,6 +841,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         onMore: _openMenu,
                       ),
                       AlbumHeader(
+                        albumId: widget.album.id,
                         title: title,
                         summary: stats.summary(invited: invited),
                         members: avatars,

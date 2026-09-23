@@ -1,17 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:keepsy/data/native/image_transcoder.dart';
+import 'package:keepsy/data/storage/own_avatar_store.dart';
+import 'package:keepsy/data/storage/picked_file.dart';
 import 'package:keepsy/domain/account/account_deletion.dart';
+import 'package:keepsy/domain/avatar/avatar_publisher.dart';
+import 'package:keepsy/e2ee/avatar_image.dart';
 import 'package:keepsy/e2ee/display_name.dart';
 import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/e2ee/identity.dart';
 import 'package:keepsy/e2ee/identity_trust.dart';
+import 'package:keepsy/ui/shelf/avatar_crop_screen.dart';
 import 'package:keepsy/ui/shelf/safety_summary.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/account_deletion_screen.dart';
@@ -177,17 +182,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
     unawaited(publisher.publishToAll(targets, name));
   }
 
+  bool _preparing = false;
+
+  // The photo is cleaned of metadata before the crop screen ever shows it
   Future<void> _pickPhoto() async {
-    final img = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (img != null && mounted) {
-      context.read<AppState>().setProfileAvatar(img.path);
+    final own = context.read<OwnAvatarStore?>();
+    if (own == null || _preparing) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null || !mounted) return;
+    setState(() => _preparing = true);
+    Uint8List? clean;
+    try {
+      clean = await AvatarImage.prepare(await picked.readAsBytes(),
+          transcode: platformImageTranscoder);
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text("This photo couldn't be used. Try another one."),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } finally {
+      unawaited(pickerCacheRoots()
+          .then((roots) => discardPickedFile(picked.path, roots)));
+      if (mounted) setState(() => _preparing = false);
     }
+    if (clean == null || !mounted) return;
+    final jpeg = await AvatarCropScreen.show(context, clean);
+    if (jpeg == null || !mounted) return;
+    await own.set(jpeg);
+    if (mounted) unawaited(context.read<AvatarPublisher?>()?.sync());
+  }
+
+  Future<void> _removePhoto() async {
+    final own = context.read<OwnAvatarStore?>();
+    if (own == null) return;
+    await own.remove();
+    if (mounted) unawaited(context.read<AvatarPublisher?>()?.sync());
   }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final photo = state.avatarUrl;
+    final photo = context.select<OwnAvatarStore?, Uint8List?>(
+        (o) => o?.state == OwnAvatarState.set ? o?.jpeg : null);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: Warm.overlayOnGround,
@@ -215,9 +252,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _nameFocus.requestFocus();
                     },
                     onDone: _commitName,
+                    busy: _preparing,
                     onPick: _pickPhoto,
-                    onRemove: () =>
-                        context.read<AppState>().setProfileAvatar(''),
+                    onRemove: _removePhoto,
                   ),
                   _IdBlock(handle: state.keepsyId),
                   _Section(
@@ -324,7 +361,8 @@ class _Head extends StatelessWidget {
 }
 
 class _You extends StatelessWidget {
-  final String? photo;
+  final Uint8List? photo;
+  final bool busy;
   final String name;
   final bool editing;
   final TextEditingController controller;
@@ -336,6 +374,7 @@ class _You extends StatelessWidget {
 
   const _You({
     required this.photo,
+    required this.busy,
     required this.name,
     required this.editing,
     required this.controller,
@@ -346,7 +385,7 @@ class _You extends StatelessWidget {
     required this.onRemove,
   });
 
-  bool get _hasPhoto => photo != null && photo!.isNotEmpty;
+  bool get _hasPhoto => photo != null;
 
   @override
   Widget build(BuildContext context) {
@@ -397,7 +436,13 @@ class _You extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _Link(_hasPhoto ? 'Change photo' : 'Add photo', onTap: onPick),
+                _Link(
+                    busy
+                        ? 'Preparing photo'
+                        : _hasPhoto
+                            ? 'Change photo'
+                            : 'Add photo',
+                    onTap: busy ? null : onPick),
                 if (_hasPhoto) ...[
                   const _Mid(),
                   _Link('Remove', onTap: onRemove),
@@ -410,14 +455,12 @@ class _You extends StatelessWidget {
     );
   }
 
-  Widget _photo() => Image(
-        image: _fileOrNetwork(photo!),
+  Widget _photo() => Image.memory(
+        photo!,
         fit: BoxFit.cover,
+        gaplessPlayback: true,
         errorBuilder: (_, __, ___) => const _NoFace(),
       );
-
-  static ImageProvider _fileOrNetwork(String src) =>
-      src.startsWith('http') ? NetworkImage(src) : FileImage(File(src));
 }
 
 class _NoFace extends StatelessWidget {

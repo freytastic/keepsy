@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:keepsy/data/models/album_model.dart';
+import 'package:keepsy/data/storage/own_avatar_store.dart';
+import 'package:keepsy/domain/avatar/avatar_publisher.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/album_print.dart';
 import 'package:keepsy/ui/shelf/develop_store.dart';
@@ -15,6 +17,7 @@ import 'package:keepsy/ui/shelf/shelf_peek.dart';
 import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/foot_bar.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
 import 'package:keepsy/ui/widgets/upload_pill.dart';
 
@@ -256,6 +259,8 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = context.select((AppState s) => s.profileName);
     final initial = name.trim().isEmpty ? '' : name.trim()[0].toUpperCase();
+    final photo = context.select<OwnAvatarStore?, Uint8List?>(
+        (o) => o?.state == OwnAvatarState.set ? o?.jpeg : null);
 
     return Padding(
       // Keep the 48px target centred on the previous 38px header row
@@ -265,15 +270,12 @@ class _Header extends StatelessWidget {
         children: [
           GestureDetector(
             onTap: onOpenProfile,
-            child: Container(
-              width: 38,
-              height: 38,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: Warm.stoneFill,
-                shape: BoxShape.circle,
-                boxShadow: Warm.avatarShadow,
-              ),
+            child: FaceCircle(
+              size: 38,
+              color: Warm.ground,
+              gradient: Warm.stoneFill,
+              shadow: Warm.avatarShadow,
+              photo: photo,
               child: Text(initial, style: Warm.avatarInitial),
             ),
           ),

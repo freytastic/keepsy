@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
 
 import 'album_copy.dart';
@@ -20,6 +21,8 @@ class AvatarMember {
 
 // Never derive display initials from member tokens
 class MemberAvatars extends StatelessWidget {
+  // Scopes avatar lookups; faces fall back to initials without it
+  final String? albumId;
   final List<AvatarMember> members;
   final String? selectedToken;
   final ValueChanged<String> onTap;
@@ -27,6 +30,7 @@ class MemberAvatars extends StatelessWidget {
 
   const MemberAvatars({
     super.key,
+    this.albumId,
     required this.members,
     required this.onTap,
     this.selectedToken,
@@ -88,6 +92,7 @@ class MemberAvatars extends StatelessWidget {
                       ),
                     )
                   : _Avatar(
+                      albumId: albumId,
                       member: members[i],
                       dimmed: filtering && members[i].token != selectedToken,
                       onTap: () => onTap(members[i].token),
@@ -193,11 +198,13 @@ class _Dashes extends CustomPainter {
 }
 
 class _Avatar extends StatelessWidget {
+  final String? albumId;
   final AvatarMember member;
   final bool dimmed;
   final VoidCallback onTap;
 
   const _Avatar({
+    required this.albumId,
     required this.member,
     required this.dimmed,
     required this.onTap,
@@ -210,23 +217,17 @@ class _Avatar extends StatelessWidget {
       child: AnimatedOpacity(
         opacity: dimmed ? 0.38 : 1,
         duration: Warm.quick,
-        child: Container(
-          width: MemberAvatars._size,
-          height: MemberAvatars._size,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: MemberAvatars.hueFor(member.token),
-            shape: BoxShape.circle,
-            border: Border.all(color: Warm.ground, width: MemberAvatars._ring),
-          ),
-          child: Text(
-            MemberAvatars.initialFor(member.name),
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: Warm.inkSoft,
-              height: 1,
-            ),
+        child: MemberFace(
+          albumId: albumId,
+          token: member.token,
+          name: member.name,
+          size: MemberAvatars._size,
+          border: Border.all(color: Warm.ground, width: MemberAvatars._ring),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Warm.inkSoft,
+            height: 1,
           ),
         ),
       ),

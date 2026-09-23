@@ -1,3 +1,5 @@
+import 'package:keepsy/data/models/avatar_ref.dart';
+
 class MemberProfile {
   final String? ikPub;
   // §4.2 D1 : lk_pub is required by the X3DH responder. Tolerated as null in
@@ -10,13 +12,15 @@ class MemberProfile {
   // via PUT /albums/{id}/members/me/profile-ct (full client wiring lands in
   // Phase 5 alongside the encrypted media display path)
   final String? nameCt;
+  final AvatarRef? avatar;
 
-  MemberProfile({this.ikPub, this.lkPub, this.nameCt});
+  MemberProfile({this.ikPub, this.lkPub, this.nameCt, this.avatar});
 
   factory MemberProfile.fromJson(Map<String, dynamic> json) => MemberProfile(
         ikPub: json['ik_pub'] as String?,
         lkPub: json['lk_pub'] as String?,
         nameCt: json['name_ct'] as String?,
+        avatar: AvatarRef.tryFromJson(json['avatar']),
       );
 }
 

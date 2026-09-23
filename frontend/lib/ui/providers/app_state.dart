@@ -6,6 +6,7 @@ import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/api/realtime_service.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/data/models/album_summary.dart';
+import 'package:keepsy/data/models/avatar_ref.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/diagnostics/trace.dart';
 import 'package:keepsy/e2ee/epoch_processor.dart';
@@ -89,7 +90,6 @@ class AppState extends ChangeNotifier {
     _userId = null;
     _email = null;
     _keepsyId = null;
-    _avatarKey = null;
     _profileName = 'User';
     notifyListeners();
   }
@@ -418,6 +418,17 @@ class AppState extends ChangeNotifier {
   final Map<String, String> _selfTokens = {};
   String? selfMemberToken(String albumId) => _selfTokens[albumId];
 
+  // What the latest listing shows for a member, so every face agrees
+  AvatarRef? avatarOf(String albumId, String memberToken) {
+    for (final a in _albums) {
+      if (a.id != albumId) continue;
+      for (final m in a.memberPreviews) {
+        if (m.memberToken == memberToken) return m.avatar;
+      }
+    }
+    return null;
+  }
+
   void registerSelfToken(String albumId, String memberTokenB64) {
     _selfTokens[albumId] = memberTokenB64;
   }
@@ -534,18 +545,13 @@ class AppState extends ChangeNotifier {
   String? _userId;
   String? _email;
   String? _keepsyId;
-  String? _avatarKey;
   String _profileName = 'User';
 
   String? get userId => _userId;
   String? get email => _email;
 
   String? get keepsyId => _keepsyId;
-  String? get avatarKey => _avatarKey;
   String get profileName => _profileName;
-
-  // forward proxy for the avatar explicit URL
-  String? get avatarUrl => _avatarKey;
 
   void setUserData(Map<String, dynamic> data) {
     // The server response intentionally omits email, name and avatar plaintext
@@ -579,11 +585,6 @@ class AppState extends ChangeNotifier {
     // Persist locally so the profile screen still shows the right name on
     // next cold start. Per album name_ct publishing wires up in Phase 5
     unawaited(StorageService().saveName(name));
-    notifyListeners();
-  }
-
-  void setProfileAvatar(String url) {
-    _avatarKey = url;
     notifyListeners();
   }
 

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:keepsy/data/models/avatar_ref.dart';
+
 class PreviewMedia {
   final String mediaId;
   final int epochTag;
@@ -66,18 +68,23 @@ class PreviewMedia {
 class MemberPreview {
   final String memberToken;
   final String? nameCt;
+  final AvatarRef? avatar;
 
-  const MemberPreview({required this.memberToken, this.nameCt});
+  const MemberPreview({required this.memberToken, this.nameCt, this.avatar});
 
   Map<String, dynamic> toJson() => {
         'member_token': memberToken,
         if (nameCt != null) 'name_ct': nameCt,
+        if (avatar != null) 'avatar': avatar!.toJson(),
       };
 
   static MemberPreview? tryFromJson(Map<String, dynamic> json) {
     final token = json['member_token'];
     if (token is! String || token.isEmpty) return null;
     return MemberPreview(
-        memberToken: token, nameCt: json['name_ct'] as String?);
+      memberToken: token,
+      nameCt: json['name_ct'] as String?,
+      avatar: AvatarRef.tryFromJson(json['avatar']),
+    );
   }
 }

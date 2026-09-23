@@ -67,12 +67,17 @@ import 'package:keepsy/ui/screens/account_deletion_screen.dart';
 import 'package:keepsy/ui/screens/landing_screen.dart';
 import 'package:keepsy/data/storage/account_owner.dart';
 import 'package:keepsy/data/api/session_refresher.dart';
+import 'package:keepsy/data/api/avatar_api.dart';
 import 'package:keepsy/data/storage/activity_store.dart';
+import 'package:keepsy/data/storage/avatar_cache.dart';
+import 'package:keepsy/data/storage/own_avatar_store.dart';
 import 'package:keepsy/domain/account/account_gate.dart';
 import 'package:keepsy/domain/activity/activity_event.dart';
 import 'package:keepsy/domain/activity/activity_recorder.dart';
 import 'package:keepsy/domain/activity/activity_sync.dart';
 import 'package:keepsy/domain/activity/trust_alarm.dart';
+import 'package:keepsy/domain/avatar/avatar_publisher.dart';
+import 'package:keepsy/e2ee/sealed_avatar.dart';
 import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
 import 'package:keepsy/ui/widgets/default_status_bar.dart';
 import 'package:keepsy/domain/account/local_identity.dart';
@@ -173,6 +178,41 @@ void main() async {
   final mediaApi = MediaApi(apiClient);
   final cacheRootKey = await loadOrCreateCacheRootKey(secureKeyStore);
   final nameCache = await NameCache.open(cacheRootKey: cacheRootKey);
+  final ownAvatar = await OwnAvatarStore.open(cacheRootKey: cacheRootKey);
+  final avatarApi = AvatarApi(apiClient);
+  // Faces are fetched and opened only for albums whose key this phone holds
+  final avatarCache = await AvatarCache.open(
+    cacheRootKey: cacheRootKey,
+    fetch: (albumId, token, ref) async {
+      final b = _uuidStringToBytes(albumId);
+      if (b == null) return null;
+      return AvatarCrypto.open(
+        ks: albumKeyStore,
+        albumId: b,
+        memberToken: base64.decode(base64.normalize(token)),
+        avatarId: ref.avatarId,
+        keyCt: ref.keyCt,
+        blobSha256: ref.blobSha256,
+        blob: await avatarApi.download(albumId, ref),
+      );
+    },
+  );
+  final avatarPublisher = AvatarPublisher(
+    own: ownAvatar,
+    albums: () => appState.albums,
+    seal: (albumId, token, jpeg) async {
+      final b = _uuidStringToBytes(albumId);
+      if (b == null || await albumKeyStore.latestEpoch(b) < 0) return null;
+      return AvatarCrypto.seal(
+        ks: albumKeyStore,
+        albumId: b,
+        memberToken: base64.decode(base64.normalize(token)),
+        jpeg: jpeg,
+      );
+    },
+    upload: avatarApi.upload,
+    remove: avatarApi.remove,
+  );
   // Cache only titles that decrypt successfully under an installed MK
   appState.attachAlbumNameResolver((albumId, nameCt) async {
     if (nameCt == null || nameCt.isEmpty) return 'Untitled Album';
@@ -348,7 +388,11 @@ void main() async {
       await refreshUnread();
     } catch (_) {}
   }
-  appState.attachListingApplied(() => unawaited(activitySync.listed()));
+  // Each listing says what every album shows for us, so both compare against it
+  appState.attachListingApplied(() {
+    unawaited(activitySync.listed());
+    unawaited(avatarPublisher.sync());
+  });
 
   // Persist every AppState shelf mutation
   appState.attachShelfPersistence(mediaSealedCache.saveAlbums);
@@ -454,6 +498,8 @@ void main() async {
     appState.removeAlbum(albumStr);
     await mediaSealedCache.dropAlbum(albumStr);
     await nameCache.clearAlbum(albumStr);
+    await avatarCache.clearAlbum(albumStr);
+    await ownAvatar.forgetAlbum(albumStr);
     await identityTrust.forgetAlbum(albumId);
     rotationRecovery.forget(albumId);
     // Several of the steps above swallow delete failures by design, so the
@@ -470,6 +516,7 @@ void main() async {
         'shelf',
       if (await albumKeyStore.latestEpoch(albumId) >= 0) 'album keys',
       if (nameCache.holdsAlbum(albumStr)) 'names',
+      if (await avatarCache.holdsAlbum(albumStr)) 'avatars',
       if (identityPinStore.holdsAlbum(hexAlbumId(albumId))) 'pins',
       if (seenStore.holdsAlbum(albumStr)) 'seen state',
     ];
@@ -590,7 +637,8 @@ void main() async {
         }
         appState.notifyMediaRemoved(albumStr);
       }());
-    } else if (ev.type == 'e2ee.member_added') {
+    } else if (ev.type == 'e2ee.member_added' ||
+        ev.type == 'e2ee.member_updated') {
       final albumStr = ev.payload['album_id'] as String?;
       if (albumStr == null) return;
       appState.refreshSummarySoon();
@@ -685,6 +733,7 @@ void main() async {
       (name: 'network', run: () async => ApiClient.terminate()),
       (name: 'realtime', run: realtimeService.terminate),
       (name: 'uploads', run: uploadQueue.shutdown),
+      (name: 'avatar sync', run: avatarPublisher.stop),
       (name: 'prepared photo', run: () async => mediaPreparer.wipeMemory()),
       (name: 'album cleanup', run: albumCleanup.shutdown),
       (name: 'covers', run: shelfCovers.shutdown),
@@ -705,6 +754,8 @@ void main() async {
       (name: 'activity sync', run: activitySync.stop),
       (name: 'activity', run: activityStore.clearAll),
       (name: 'names', run: nameCache.clear),
+      (name: 'avatars', run: avatarCache.clearAll),
+      (name: 'own avatar', run: ownAvatar.wipe),
       (name: 'pins', run: identityPinStore.clear),
       (name: 'seen', run: seenStore.clear),
       // Closed before the keystore goes so no late install recreates it
@@ -772,6 +823,9 @@ void main() async {
         Provider<RotationRecoveryScheduler>.value(value: rotationRecovery),
         Provider<DisplayNamePublisher>.value(value: displayNamePublisher),
         Provider<NameCache>.value(value: nameCache),
+        ChangeNotifierProvider<OwnAvatarStore>.value(value: ownAvatar),
+        ChangeNotifierProvider<AvatarCache>.value(value: avatarCache),
+        Provider<AvatarPublisher>.value(value: avatarPublisher),
         Provider<IdentityTrust>.value(value: identityTrust),
         Provider<IdentityPinStore>.value(value: identityPinStore),
         Provider<InviteInitiator>.value(value: inviteInitiator),

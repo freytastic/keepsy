@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/album/member_avatars.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 
 import 'activity_copy.dart';
 
@@ -143,32 +144,33 @@ class _Thumbs extends StatelessWidget {
 
 // Unresolved sealed names appear only as their stable album colour
 class ActivityFace extends StatelessWidget {
+  final String? albumId;
   final String? name;
   final String? token;
   final bool alarm;
-  const ActivityFace({super.key, this.name, this.token, this.alarm = false});
+  const ActivityFace(
+      {super.key, this.albumId, this.name, this.token, this.alarm = false});
 
   @override
   Widget build(BuildContext context) {
     final initial = (name == null || name!.isEmpty)
         ? ''
         : name!.characters.first.toUpperCase();
+    final t = token;
+    final photo = memberPhoto(context, t == null ? null : albumId, t ?? '');
     return SizedBox(
       width: 32,
       height: 32,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: token == null
-                  ? const Color(0x0F1C1917)
-                  : MemberAvatars.hueFor(token!).withValues(alpha: 0.95),
-            ),
+          FaceCircle(
+            size: 32,
+            color: t == null
+                ? const Color(0x0F1C1917)
+                : MemberAvatars.hueFor(t).withValues(alpha: 0.95),
+            // A changed key may be an impostor, so its card never shows a face
+            photo: alarm ? null : photo,
             child: Text(initial, style: Warm.acFace),
           ),
           if (alarm)
