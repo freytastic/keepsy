@@ -642,6 +642,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             name: names[m.memberToken],
             pending: m.profile.nameCt == null &&
                 m.memberToken != widget.album.memberToken,
+            self: m.memberToken == widget.album.memberToken,
+            verified: _trust[m.memberToken] == TrustState.verified,
           ),
     ];
   }
@@ -854,6 +856,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         onClearFilter: () =>
                             setState(() => _filterToken = null),
                         onAdd: _viewerIsAdmin ? _openAddMember : null,
+                        folded: _collapsed,
                       ),
                     ],
                   ),

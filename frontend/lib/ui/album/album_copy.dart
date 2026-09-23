@@ -41,6 +41,11 @@ abstract final class AlbumCopy {
   static const addAnother = 'Add another';
   static const addDone = 'Done';
   static const invitedPending = "Invited, hasn't opened it yet";
+  static const invitedShort = 'Invited';
+  static const addShort = 'Add';
+  static const you = 'You';
+  static String showEveryone(int people) =>
+      'Show everyone in this album, $people ${people == 1 ? 'person' : 'people'}';
 
   // Keeps unfinished actions visible without pretending they work
   static const laterBadge = 'Soon';
