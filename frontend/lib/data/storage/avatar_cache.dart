@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/data/models/avatar_ref.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 
 // Downloads and opens one member's avatar. Null when it does not verify
 typedef FetchAvatar = Future<Uint8List?> Function(
@@ -73,6 +74,8 @@ class AvatarCache extends ChangeNotifier {
       jpeg ??= await _fetch(albumId, memberToken, ref);
       if (gen != _gen) return;
       if (jpeg == null) {
+        Trace.event('avatar.open',
+            fields: {'album': Trace.id(albumId), 'result': 'refused'});
         _failedAt[ref.avatarId] = DateTime.now();
         return;
       }
@@ -81,7 +84,9 @@ class AvatarCache extends ChangeNotifier {
       _failedAt.remove(ref.avatarId);
       notifyListeners();
       if (!fromDisk) await _write(file, ref.avatarId, jpeg, gen);
-    } catch (_) {
+    } catch (e) {
+      Trace.event('avatar.open',
+          fields: {'album': Trace.id(albumId), 'result': Trace.reasonOf(e)});
       _failedAt[ref.avatarId] = DateTime.now();
     }
   }
