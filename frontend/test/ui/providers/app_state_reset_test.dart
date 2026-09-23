@@ -44,7 +44,6 @@ void main() {
     s.setUserData({'id': 'u1', 'keepsy_id': 'kid-1'});
     s.setEmail('me@example.com');
     s.setProfileName('Alice');
-    s.setProfileAvatar('avatar-key');
     s.notifyMediaAdded('alb', 'med');
     s.notifyMemberChanged('alb');
 
@@ -58,7 +57,6 @@ void main() {
     expect(s.userId, isNull);
     expect(s.email, isNull);
     expect(s.keepsyId, isNull);
-    expect(s.avatarKey, isNull);
     expect(s.profileName, 'User'); // back to the default placeholder
     // realtime one shot signals
     expect(s.lastMediaAddedAlbumId, isNull);
