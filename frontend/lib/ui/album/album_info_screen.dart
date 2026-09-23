@@ -150,9 +150,9 @@ class _UploaderRow extends StatelessWidget {
                 albumId: albumId,
                 token: token,
                 name: name,
-                size: 22,
+                size: 28,
                 style: const TextStyle(
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: Warm.inkSoft,
                     height: 1),

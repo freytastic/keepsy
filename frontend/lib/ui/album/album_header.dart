@@ -16,6 +16,8 @@ class AlbumHeader extends StatelessWidget {
   final ValueChanged<String> onTapMember;
   final VoidCallback onClearFilter;
   final VoidCallback? onAdd;
+  // True once the header has scrolled away, which folds the people row
+  final bool folded;
 
   const AlbumHeader({
     super.key,
@@ -29,6 +31,7 @@ class AlbumHeader extends StatelessWidget {
     this.filterName,
     this.filterCount = 0,
     this.onAdd,
+    this.folded = false,
   });
 
   @override
@@ -50,6 +53,7 @@ class AlbumHeader extends StatelessWidget {
               selectedToken: filterToken,
               onTap: onTapMember,
               onAdd: onAdd,
+              folded: folded,
             ),
           ],
           if (filterToken != null) ...[

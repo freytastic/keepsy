@@ -22,6 +22,7 @@ class MemberFace extends StatelessWidget {
   final TextStyle style;
   final Color? color;
   final BoxBorder? border;
+  final List<BoxShadow>? shadow;
 
   const MemberFace({
     super.key,
@@ -32,6 +33,7 @@ class MemberFace extends StatelessWidget {
     required this.style,
     this.color,
     this.border,
+    this.shadow,
   });
 
   @override
@@ -40,6 +42,7 @@ class MemberFace extends StatelessWidget {
       size: size,
       color: color ?? MemberAvatars.hueFor(token),
       border: border,
+      shadow: shadow,
       photo: memberPhoto(context, albumId, token),
       child: Text(MemberAvatars.initialFor(name), style: style),
     );

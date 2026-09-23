@@ -247,6 +247,14 @@ class ActivityStore implements ActivityFeed {
         aad: Uint8List.fromList(utf8.encode(_activityAad)),
       );
 
+  // An account with no published identity cannot belong to any album, so its
+  // empty shelf is a real baseline and its first album must be news
+  Future<void> seedEmptyBaseline() async {
+    final rows = await _db.query('snapshot', where: 'id = 0');
+    if (rows.isNotEmpty) return;
+    await writeSnapshot(const {});
+  }
+
   Future<void> writeSnapshot(Map<String, dynamic> snapshot) async {
     final sealed = await _sealSnapshot(snapshot);
     await _db.insert(

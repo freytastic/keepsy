@@ -209,6 +209,9 @@ void main() {
 
       await faces(tester, const [AvatarMember(token: 'a')],
           onAdd: () => added++);
+      // Adding lives in the open row, after everyone who is there
+      await tester.tap(find.byKey(const ValueKey('people-stack')));
+      await settle(tester);
       await tester.tap(find.byKey(const ValueKey('add-someone')));
       await settle(tester);
       expect(added, 1);

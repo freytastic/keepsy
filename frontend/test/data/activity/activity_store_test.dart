@@ -216,6 +216,19 @@ void main() {
     expect(await store.hasUnseen(), isFalse);
   });
 
+  group('a brand new account', () {
+    test('starts from an empty baseline, not from never looked', () async {
+      await store.seedEmptyBaseline();
+      expect(await store.readSnapshot(), <String, dynamic>{});
+    });
+
+    test('never overwrites a baseline it already has', () async {
+      await store.writeSnapshot({'a': 1});
+      await store.seedEmptyBaseline();
+      expect(await store.readSnapshot(), {'a': 1});
+    });
+  });
+
   test('commit writes the events and the snapshot', () async {
     await store.commit([photos('added:c')], {'a': 1});
 

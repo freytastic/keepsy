@@ -175,4 +175,15 @@ void main() {
     await h.publisher.sync();
     expect(h.uploads.map((u) => u.$1), ['a']);
   });
+
+  // A pass over an empty shelf finishes without awaiting anything, which must
+  // not leave the publisher believing a pass is still running
+  test('a sync over no albums does not block the next one', () async {
+    final h = _Harness()..own.set('r1');
+    await h.publisher.sync();
+
+    h.albums = [_album('a')];
+    await h.publisher.sync();
+    expect(h.uploads.map((u) => u.$1), ['a']);
+  });
 }

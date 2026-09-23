@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'package:keepsy/data/api/auth_api.dart';
+import 'package:keepsy/data/storage/activity_store.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/domain/account/account_deletion.dart' show TerminalWipe;
 import 'package:keepsy/domain/account/account_gate.dart';
@@ -177,6 +178,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             break;
         }
         return;
+      }
+
+      if (outcome == AccountGateOutcome.newAccount) {
+        try {
+          await context.read<ActivityStore?>()?.seedEmptyBaseline();
+        } catch (_) {}
+        if (!mounted) return;
       }
 
       final userData = await UserService().getMe();

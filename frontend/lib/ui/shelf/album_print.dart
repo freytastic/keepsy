@@ -6,6 +6,7 @@ import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/ui/shelf/print_style.dart';
 import 'package:keepsy/ui/shelf/shelf_copy.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
 
 enum PrintSize { large, small }
@@ -212,6 +213,7 @@ class _AlbumPrintState extends State<AlbumPrint> {
             ),
             const SizedBox(width: 13),
             _Faces(
+              albumId: widget.albumId,
               members: widget.members,
               total: widget.totalMembers,
               nameOf: widget.nameOf,
@@ -276,47 +278,55 @@ class _BackPrint extends StatelessWidget {
 }
 
 class _Faces extends StatelessWidget {
+  final String albumId;
   final List<MemberPreview> members;
   final int total;
   final String? Function(MemberPreview) nameOf;
 
-  const _Faces(
-      {required this.members, required this.total, required this.nameOf});
+  const _Faces({
+    required this.albumId,
+    required this.members,
+    required this.total,
+    required this.nameOf,
+  });
 
-  static const double _size = 22;
-  static const double _step = 15;
+  static const double _size = 24;
+  static const double _step = 17;
 
   @override
   Widget build(BuildContext context) {
     final shown = members.take(4).toList();
     if (shown.isEmpty) return const SizedBox.shrink();
     final rest = total - shown.length;
-    final slots = shown.length + (rest > 0 ? 1 : 0);
 
-    return SizedBox(
-      width: _size + (slots - 1) * _step,
-      height: _size,
-      child: Stack(
-        children: [
-          for (var i = 0; i < shown.length; i++)
-            Positioned(
-              left: i * _step,
-              child: _Face(
-                fill: hueFor(shown[i].memberToken),
-                initial: _initial(nameOf(shown[i])),
-              ),
-            ),
-          if (rest > 0)
-            Positioned(
-              left: shown.length * _step,
-              child: _Face(
-                fill: const Color(0x121C1917),
-                initial: '+$rest',
-                more: true,
-              ),
-            ),
-        ],
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: _size + (shown.length - 1) * _step,
+          height: _size,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (var i = 0; i < shown.length; i++)
+                Positioned(
+                  left: i * _step,
+                  child: _Face(
+                    albumId: albumId,
+                    token: shown[i].memberToken,
+                    initial: _initial(nameOf(shown[i])),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        // The count stands apart, never laid over someone's photo
+        if (rest > 0)
+          Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: Text('+$rest', style: Warm.faceMore),
+          ),
+      ],
     );
   }
 
@@ -328,24 +338,23 @@ class _Faces extends StatelessWidget {
 }
 
 class _Face extends StatelessWidget {
-  final Color fill;
+  final String albumId;
+  final String token;
   final String? initial;
-  final bool more;
 
-  const _Face({required this.fill, this.initial, this.more = false});
+  const _Face({required this.albumId, required this.token, this.initial});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 22,
-      height: 22,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: more ? fill : fill.withValues(alpha: 0.62),
-        shape: BoxShape.circle,
-        border: Border.all(color: Warm.paper, width: 2),
-      ),
-      child: initial == null ? null : Text(initial!, style: Warm.faceInitial),
+    return FaceCircle(
+      size: _Faces._size,
+      color: hueFor(token).withValues(alpha: 0.62),
+      // The ring is the paper, so the faces read as printed on the chin
+      shadow: const [BoxShadow(color: Warm.paper, spreadRadius: 2)],
+      photo: memberPhoto(context, albumId, token),
+      child: initial == null
+          ? const SizedBox.shrink()
+          : Text(initial!, style: Warm.faceInitial),
     );
   }
 }
