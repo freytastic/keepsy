@@ -301,7 +301,13 @@ func (r *AccountDeletionRepository) RemoveMembership(ctx context.Context, userID
 		return MembershipRemoval{}, err
 	}
 	out.MediaIDs = media.MediaIDs
-	out.Keys = media.Keys
+	avatars, err := removeAvatars(ctx, tx,
+		`DELETE FROM member_avatars WHERE album_id = $1 AND member_token = $2
+		 RETURNING storage_key`, albumID, m.MemberToken)
+	if err != nil {
+		return MembershipRemoval{}, err
+	}
+	out.Keys = append(media.Keys, avatars...)
 
 	if out.NotifyUserIDs, err = activeUserIDs(ctx, tx, r.linker, albumID, m.MemberToken); err != nil {
 		return MembershipRemoval{}, err

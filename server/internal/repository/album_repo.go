@@ -232,7 +232,8 @@ const MemberPreviewLimit = 10
 // Stable join order avoids ranking members by activity
 func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, ids []uuid.UUID) (map[uuid.UUID][]model.MemberPreview, error) {
 	rows, err := r.DB.Query(ctx, `
-		SELECT p.album_id, p.member_token, p.name_ct
+		SELECT p.album_id, p.member_token, p.name_ct,
+		       av.avatar_id, av.blob_size, av.blob_sha256, av.key_ct
 		FROM albums a
 		JOIN album_member_identities ami ON ami.album_id = a.id
 		JOIN album_members am ON am.album_id = a.id AND am.member_token = ami.member_token
@@ -244,6 +245,8 @@ func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, 
 		    ORDER BY xi.joined_at ASC, x.member_token ASC
 		    LIMIT $3
 		) p ON TRUE
+		LEFT JOIN member_avatars av ON av.album_id = p.album_id
+		    AND av.member_token = p.member_token AND av.confirmed = TRUE
 		WHERE ami.user_handle = $1 AND am.revoked_at IS NULL AND a.id = ANY($2)`,
 		handle, ids, MemberPreviewLimit)
 	if err != nil {
@@ -255,9 +258,12 @@ func (r *AlbumRepository) memberPreviewsFor(ctx context.Context, handle []byte, 
 	for rows.Next() {
 		var albumID uuid.UUID
 		var m model.MemberPreview
-		if err := rows.Scan(&albumID, &m.MemberToken, &m.NameCT); err != nil {
+		var av avatarColumns
+		if err := rows.Scan(&albumID, &m.MemberToken, &m.NameCT,
+			&av.id, &av.size, &av.sha, &av.keyCT); err != nil {
 			return nil, err
 		}
+		m.Avatar = av.ref()
 		out[albumID] = append(out[albumID], m)
 	}
 	return out, rows.Err()
@@ -336,9 +342,12 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			am.revoked_at IS NOT NULL,
 			ami.joined_at,
 			ami.user_id_enc,
-			am.name_ct
+			am.name_ct,
+			av.avatar_id, av.blob_size, av.blob_sha256, av.key_ct
 		FROM album_members am
 		JOIN album_member_identities ami ON ami.member_token = am.member_token
+		LEFT JOIN member_avatars av ON av.album_id = am.album_id
+		    AND av.member_token = am.member_token AND av.confirmed = TRUE
 		WHERE am.album_id = $1
 		ORDER BY ami.joined_at ASC`,
 		albumID)
@@ -354,6 +363,7 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 	for rows.Next() {
 		var m model.MemberWithProfile
 		var sealed []byte
+		var av avatarColumns
 		if err := rows.Scan(
 			&m.MemberToken,
 			&m.Role,
@@ -361,10 +371,12 @@ func (r *AlbumRepository) ListMembers(ctx context.Context, albumID uuid.UUID) ([
 			&m.JoinedAt,
 			&sealed,
 			&m.Profile.NameCT,
+			&av.id, &av.size, &av.sha, &av.keyCT,
 		); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		m.Profile.Avatar = av.ref()
 		userID, err := r.linker.Open(sealed, m.MemberToken)
 		if err != nil {
 			// Skip invalid user-link seals instead of failing the full roster
@@ -495,6 +507,13 @@ func (r *AlbumRepository) RevokeMemberTx(ctx context.Context, albumID uuid.UUID,
 	// The departed member still holds the current key until the next epoch
 	if _, err := tx.Exec(ctx,
 		`UPDATE albums SET rotation_required = TRUE WHERE id = $1`, albumID,
+	); err != nil {
+		return "", false, err
+	}
+	// The periodic sweep deletes the queued object
+	if _, err := removeAvatars(ctx, tx,
+		`DELETE FROM member_avatars WHERE album_id = $1 AND member_token = $2
+		 RETURNING storage_key`, albumID, targetToken,
 	); err != nil {
 		return "", false, err
 	}

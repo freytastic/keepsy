@@ -113,10 +113,15 @@ func removeAlbum(ctx context.Context, tx pgx.Tx, linker *userlink.Hasher, albumI
 	if err != nil {
 		return AlbumRemoval{}, err
 	}
+	avatars, err := removeAvatars(ctx, tx,
+		`DELETE FROM member_avatars WHERE album_id = $1 RETURNING storage_key`, albumID)
+	if err != nil {
+		return AlbumRemoval{}, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM albums WHERE id = $1`, albumID); err != nil {
 		return AlbumRemoval{}, err
 	}
-	return AlbumRemoval{MemberUserIDs: users, Keys: media.Keys}, nil
+	return AlbumRemoval{MemberUserIDs: users, Keys: append(media.Keys, avatars...)}, nil
 }
 
 // removeMedia runs a DELETE returning (id, storage_key, thumb_key) and queues
