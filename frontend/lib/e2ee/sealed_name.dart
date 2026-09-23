@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:keepsy/e2ee/mk_seal.dart';
 
 // Display names (album title + member name) sealed under the album MK. The MK
 // rotates per epoch and every member retains all epoch MKs, so the epoch the
@@ -64,12 +64,12 @@ class SealedName {
       } catch (_) {
         continue;
       }
-      if (wire.length < 4) continue;
-      final epoch = _readU32be(wire, 0);
+      final epoch = MkSeal.epochOf(wire);
+      if (epoch == null) continue;
       byEpoch.putIfAbsent(epoch, () => []).add((
         token: it.token,
         tokenBytes: it.tokenBytes,
-        blob: Uint8List.sublistView(wire, 4),
+        blob: MkSeal.body(wire),
       ));
     }
 
@@ -97,39 +97,17 @@ class SealedName {
 
   static Future<String> _seal(AlbumKeyStore ks, Uint8List albumId, int epoch,
       String name, Uint8List aad) async {
-    if (epoch < 0) throw ArgumentError('epoch must be >= 0, got $epoch');
     final pt = Uint8List.fromList(utf8.encode(name));
-    final blob = await ks.useMk<Uint8List>(
-        albumId,
-        epoch,
-        (mk) => Aead.encrypt(
-            version: kVerAesGcm, key: mk, plaintext: pt, aad: aad));
-    final out = Uint8List(4 + blob.length);
-    _writeU32be(out, 0, epoch);
-    out.setRange(4, out.length, blob);
-    return base64.encode(out);
+    return base64.encode(await MkSeal.seal(ks, albumId, epoch, pt, (_) => aad));
   }
 
   static Future<String?> _open(AlbumKeyStore ks, Uint8List albumId,
       String nameCtB64, Uint8List Function(int epoch) aadFor) async {
     try {
-      final wire = base64.decode(nameCtB64);
-      if (wire.length < 4) return null;
-      final epoch = _readU32be(wire, 0);
-      final blob = Uint8List.sublistView(wire, 4);
-      final aad = aadFor(epoch);
-      return await ks.useMk<String?>(albumId, epoch, (mk) async {
-        try {
-          final pt = await Aead.decrypt(wire: blob, key: mk, aad: aad);
-          return utf8.decode(pt);
-        } on AeadAuthFailed {
-          return null;
-        } on FormatException {
-          return null;
-        }
-      });
-    } catch (_) {
-      // base64 decode error, or no MK installed for that epoch (useMk throws)
+      final pt =
+          await MkSeal.open(ks, albumId, base64.decode(nameCtB64), aadFor);
+      return pt == null ? null : utf8.decode(pt);
+    } on FormatException {
       return null;
     }
   }
@@ -146,22 +124,8 @@ class SealedName {
 
 Uint8List _u32be(int v) {
   final b = Uint8List(4);
-  _writeU32be(b, 0, v);
+  ByteData.sublistView(b).setUint32(0, v, Endian.big);
   return b;
-}
-
-void _writeU32be(Uint8List out, int offset, int v) {
-  out[offset] = (v >> 24) & 0xff;
-  out[offset + 1] = (v >> 16) & 0xff;
-  out[offset + 2] = (v >> 8) & 0xff;
-  out[offset + 3] = v & 0xff;
-}
-
-int _readU32be(Uint8List b, int offset) {
-  return (b[offset] << 24) |
-      (b[offset + 1] << 16) |
-      (b[offset + 2] << 8) |
-      b[offset + 3];
 }
 
 Uint8List _concat(List<Uint8List> parts) {
