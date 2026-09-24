@@ -23,3 +23,19 @@ List<ShelfSlot<T>> planFor<T>(List<T> albums, ShelfView view) {
   }
   return slots;
 }
+
+// Never shrink the lead print past this, even if the pair below it must scroll
+const double minLeadScale = 0.84;
+
+// Scales the lead print in compact view just enough that the pair below it,
+// names included, ends above the bottom bar. Taller screens keep full size
+double leadScale({
+  required double viewHeight,
+  required double above,
+  required double leadHeight,
+  required double below,
+}) {
+  if (leadHeight <= 0) return 1;
+  final room = viewHeight - above - below;
+  return (room / leadHeight).clamp(minLeadScale, 1.0);
+}
