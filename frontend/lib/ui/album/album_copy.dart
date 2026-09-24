@@ -8,7 +8,7 @@ abstract final class AlbumCopy {
 
   static const selectPhotos = 'Select photos';
   static const downloadAlbum = 'Download album';
-  static const peopleAndSafety = 'People & safety numbers';
+  static const people = 'People';
   static const albumInfo = 'Album info';
   static const openAlbum = 'Open album';
   static const addSomeone = 'Add someone';

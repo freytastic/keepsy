@@ -41,7 +41,9 @@ import 'package:keepsy/e2ee/sealed_name.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
+import 'package:keepsy/ui/people/people_screen.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/decrypted_image_preview.dart';
 import 'package:keepsy/ui/widgets/encrypted_image.dart';
 import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
@@ -142,7 +144,58 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         onSelectPhotos: _notYet,
         onDownloadAlbum: _notYet,
         onAlbumInfo: _openAlbumInfo,
+        onPeople: _openPeople,
         onAddSomeone: _viewerIsAdmin ? _openAddMember : null,
+      );
+
+  Future<void> _openPeople() async {
+    final state = context.read<AppState>();
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PeopleScreen(
+        title: AlbumCopy.people,
+        subtitle: state.albumDisplayName(widget.album.id) ?? 'This album',
+        load: () async => _people(),
+        onOpen: (p) async {
+          final m = _members.where((m) => m.memberToken == p.id).firstOrNull;
+          if (m != null) await _openSafetyNumber(m);
+        },
+        onAdd: _viewerIsAdmin ? _openAddMember : null,
+        note: _viewerIsAdmin
+            ? null
+            : 'Only the person who made this album can add people.',
+      ),
+    ));
+  }
+
+  // Everyone but us: our own key has nothing to compare
+  List<PersonEntry> _people() {
+    final names = _resolvedNames();
+    return [
+      for (final m in _members)
+        if (!m.revoked && m.memberToken != widget.album.memberToken)
+          m.profile.nameCt == null
+              ? PersonEntry(
+                  id: m.memberToken,
+                  name: AlbumCopy.invitedShort,
+                  face: const SizedBox(),
+                  invited: true,
+                  detail: "Hasn't opened it yet",
+                )
+              : PersonEntry(
+                  id: m.memberToken,
+                  name: names[m.memberToken] ?? AlbumCopy.unknownMember,
+                  face: _face(m.memberToken, names[m.memberToken], 40),
+                  trust: _trust[m.memberToken] ?? TrustState.unverified,
+                ),
+    ];
+  }
+
+  Widget _face(String token, String? name, double size) => MemberFace(
+        albumId: widget.album.id,
+        token: token,
+        name: name,
+        size: size,
+        style: Warm.acFace.copyWith(fontSize: size * 0.36),
       );
 
   void _notYet() {
@@ -428,31 +481,38 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         await trust.safetyNumber(albumId: albumIdBytes, peerIkPub: ik);
     if (!mounted) return;
 
+    Future<void>? verifying;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Warm.ground,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
       builder: (_) => SafetyNumberSheet(
         displayName: _memberName(m),
         digits: digits,
         state: state,
+        subtitle: _appState?.albumDisplayName(widget.album.id),
+        face: _face(m.memberToken, _resolvedNames()[m.memberToken], 46),
         // verifies the key the user was ACTUALLY SHOWN, not whatever the
         // roster happens to say by the time they tap
-        onVerify: () async {
-          try {
-            await trust.markVerified(
-                albumId: albumIdBytes,
-                memberToken: m.memberToken,
-                peerIkPub: ik);
-          } on VerificationNotSaved {
-            // Session trust survives, but a restart restores the alarm
-          }
-          await _reconcileTrust(_members);
+        onVerify: () {
+          verifying = () async {
+            try {
+              await trust.markVerified(
+                  albumId: albumIdBytes,
+                  memberToken: m.memberToken,
+                  peerIkPub: ik);
+            } on VerificationNotSaved {
+              // Session trust survives, but a restart restores the alarm
+            }
+            await _reconcileTrust(_members);
+          }();
         },
       ),
     );
+    // The sheet closes before its verification writes finish
+    await verifying?.catchError((_) {});
   }
 
   // Manually re run contiguous catch up. Reconnects may retry it too: any
@@ -648,6 +708,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     ];
   }
 
+  List<AvatarMember> _previewAvatars(AppState state) => [
+        for (final m in widget.album.memberPreviews)
+          AvatarMember(
+            token: m.memberToken,
+            name: state.memberDisplayName(widget.album.id, m.memberToken),
+            self: m.memberToken == widget.album.memberToken,
+          ),
+      ];
+
   // A failed refresh must not blank cached rows
   final LatestOnly _feedRefresh = LatestOnly();
 
@@ -818,12 +887,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     // current name_ct : a renamed member falls back to "Member" until re resolved
     final memberDisplayNames = _resolvedNames();
     final title = state.albumDisplayName(widget.album.id) ?? 'Album';
-    final avatars = _avatars();
-    final invited = avatars.where((a) => a.pending).length;
+    // The shelf's previews hold the row's place until the roster arrives, so
+    // the grid does not jump down when it does
+    final loaded = _members.isNotEmpty;
+    final avatars = loaded ? _avatars() : _previewAvatars(state);
+    final invited = loaded ? avatars.where((a) => a.pending).length : 0;
     final shown = _filterToken == null
         ? _items
         : _items.where((r) => r.uploaderToken == _filterToken).toList();
-    final stats = AlbumStats.of(_items, peopleCount: avatars.length - invited);
+    final stats = AlbumStats.of(_items,
+        peopleCount: loaded
+            ? avatars.length - invited
+            : widget.album.activeMemberCount);
 
     return Scaffold(
       backgroundColor: Warm.ground,
@@ -856,6 +931,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         onClearFilter: () =>
                             setState(() => _filterToken = null),
                         onAdd: _viewerIsAdmin ? _openAddMember : null,
+                        onPeople: _openPeople,
                         folded: _collapsed,
                       ),
                     ],

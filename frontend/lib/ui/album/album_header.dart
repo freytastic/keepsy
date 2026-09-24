@@ -16,6 +16,7 @@ class AlbumHeader extends StatelessWidget {
   final ValueChanged<String> onTapMember;
   final VoidCallback onClearFilter;
   final VoidCallback? onAdd;
+  final VoidCallback? onPeople;
   // True once the header has scrolled away, which folds the people row
   final bool folded;
 
@@ -31,6 +32,7 @@ class AlbumHeader extends StatelessWidget {
     this.filterName,
     this.filterCount = 0,
     this.onAdd,
+    this.onPeople,
     this.folded = false,
   });
 
@@ -43,8 +45,7 @@ class AlbumHeader extends StatelessWidget {
         children: [
           Text(title, style: titleStyle),
           const SizedBox(height: 7),
-          Text(summary,
-              style: const TextStyle(fontSize: 12.5, color: Warm.inkSoft)),
+          _Summary(text: summary, onPeople: onPeople),
           if (members.isNotEmpty || onAdd != null) ...[
             const SizedBox(height: 17),
             MemberAvatars(
@@ -77,6 +78,49 @@ class AlbumHeader extends StatelessWidget {
   );
 }
 
+// The people part of the line is the way into the roster
+class _Summary extends StatelessWidget {
+  final String text;
+  final VoidCallback? onPeople;
+
+  const _Summary({required this.text, required this.onPeople});
+
+  static const _style = TextStyle(fontSize: 12.5, color: Warm.inkSoft);
+
+  @override
+  Widget build(BuildContext context) {
+    final people = onPeople;
+    if (people == null) return Text(text, style: _style);
+    final cut = text.lastIndexOf(' · ');
+    final lead = cut < 0 ? '' : text.substring(0, cut + 3);
+    final tail = cut < 0 ? text : text.substring(cut + 3);
+    return Semantics(
+      button: true,
+      label: tail,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: people,
+        child: Text.rich(
+          TextSpan(children: [
+            TextSpan(text: lead),
+            TextSpan(
+              text: tail,
+              style: const TextStyle(
+                color: Warm.ink,
+                fontWeight: FontWeight.w500,
+                decoration: TextDecoration.underline,
+                decorationColor: Warm.inkGhost,
+              ),
+            ),
+          ]),
+          style: _style,
+        ),
+      ),
+    );
+  }
+}
+
+// The filter as a line of text with a way out
 class _FilterChip extends StatelessWidget {
   final String label;
   final VoidCallback onClear;
@@ -89,23 +133,18 @@ class _FilterChip extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: PressableScale(
         onTap: onClear,
-        child: Container(
+        child: SizedBox(
           height: 30,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: Warm.wellEmpty,
-            borderRadius: BorderRadius.circular(15),
-          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(label,
                   style: const TextStyle(
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: Warm.ink)),
               const SizedBox(width: 6),
-              const Icon(Icons.close_rounded, size: 13, color: Warm.inkSoft),
+              const Icon(Icons.close_rounded, size: 14, color: Warm.inkFaint),
             ],
           ),
         ),
