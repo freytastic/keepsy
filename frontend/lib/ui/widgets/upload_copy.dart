@@ -1,4 +1,3 @@
-import 'package:keepsy/domain/upload/upload_item.dart';
 import 'package:keepsy/domain/upload/upload_snapshot.dart';
 
 String formatBytes(int bytes) {
@@ -25,26 +24,6 @@ String formatEta(Duration? left) {
   return 'about $m minute${m == 1 ? '' : 's'} left';
 }
 
-String phaseLabel(UploadPhase phase) {
-  switch (phase) {
-    case UploadPhase.preparing:
-      return 'Locking';
-    case UploadPhase.reserving:
-    case UploadPhase.sendingFile:
-    case UploadPhase.sendingThumb:
-    case UploadPhase.confirming:
-      return 'Sending';
-    case UploadPhase.queued:
-      return 'Waiting';
-    case UploadPhase.canceling:
-      return 'Stopping';
-    case UploadPhase.done:
-      return 'Added';
-    case UploadPhase.failed:
-      return 'Not added';
-  }
-}
-
 String sheetTitle(UploadBatchSnapshot b, String? albumName) {
   final into = albumName == null || albumName.isEmpty ? '' : ' to $albumName';
   if (b.settled) {
@@ -58,29 +37,22 @@ String sheetTitle(UploadBatchSnapshot b, String? albumName) {
 }
 
 String? pauseNote(UploadBatchSnapshot b) {
-  switch (b.paused) {
-    case PauseReason.rotationPending:
-      return 'Waiting for secure sync. Your photos are locked on this phone '
-          'and go up once this album’s keys update.';
-    case PauseReason.noAlbumKey:
-      return 'Waiting for this album’s keys to arrive on this phone. Your '
-          'photos are locked here meanwhile.';
-    case null:
-      return null;
-  }
+  if (b.paused == null) return null;
+  return 'Waiting to send. Your photos are safe on this phone and go up in a '
+      'moment.';
 }
 
 String failureHeadline(int count) =>
     '$count photo${count == 1 ? '' : 's'} didn’t send.';
 
 String failureBody(int count) => count == 1
-    ? 'The connection dropped partway. Your photo is still here, so you can try again.'
-    : 'The connection dropped partway. Your photos are still here, so you can try again.';
+    ? 'The connection dropped. Your photo is still here.'
+    : 'The connection dropped. Your photos are still here.';
 
 // The same undecodable bytes would fail every retry
 String unprocessableHeadline(int count) =>
     '$count photo${count == 1 ? '' : 's'} couldn’t be opened.';
 
 String unprocessableBody(int count) => count == 1
-    ? 'This phone can’t read that photo’s format, so it was left out. Pick a different one and it will go straight up.'
-    : 'This phone can’t read those formats, so they were left out. Pick different ones and they will go straight up.';
+    ? 'It wasn’t added. Try a different one.'
+    : 'They weren’t added. Try different ones.';
