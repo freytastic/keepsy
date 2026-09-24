@@ -281,6 +281,13 @@ class MediaCacheManager {
     await _l2.clearAlbum(albumId);
   }
 
+  Future<({int thumbs, int full})> usage() => _l2.usage();
+
+  Future<void> clearFullPhotos() async {
+    _l1.clearAll();
+    await _l2.clearFull();
+  }
+
   void onAppPaused() {
     _l1.clearAll();
   }

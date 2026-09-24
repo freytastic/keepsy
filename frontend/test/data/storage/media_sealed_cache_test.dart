@@ -140,6 +140,25 @@ void main() {
     expect(await cache.totalBytes(), 0);
   });
 
+  test('clearFull drops full photos and keeps thumbnails', () async {
+    final thumbK = MediaCacheKey(
+        albumId: 'A', mediaId: 'm1', epochTag: 0, asset: CacheAsset.thumb);
+    await cache.writeRecord(_rec('m1'));
+    await cache.writeBlob(thumbK, _bytes(60));
+    await cache.writeBlob(_fileK('m1'), _bytes(200));
+    final before = await cache.usage();
+    expect(before.thumbs, greaterThan(0));
+    expect(before.full, greaterThan(0));
+
+    await cache.clearFull();
+
+    final after = await cache.usage();
+    expect(after.full, 0);
+    expect(after.thumbs, before.thumbs);
+    expect(await cache.readBlob(_fileK('m1')), isNull);
+    expect(await cache.readBlob(thumbK), isNotNull);
+  });
+
   test('migration wipes legacy .bin blobs on first open', () async {
     final fresh = Directory.systemTemp.createTempSync('msc_mig_');
     File('${fresh.path}/old.bin').writeAsBytesSync(_bytes(40));

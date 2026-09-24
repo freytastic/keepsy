@@ -524,6 +524,18 @@ class MediaSealedCache
     }
   }
 
+  Future<({int thumbs, int full})> usage() async =>
+      (thumbs: await _sumOf('thumb_bytes'), full: await _sumOf('blob_bytes'));
+
+  // Thumbnails stay so albums still open offline
+  Future<void> clearFull() async {
+    final rows = await _db.query('media_records',
+        columns: ['media_id'], where: 'blob_bytes > 0');
+    for (final row in rows) {
+      await _dropAsset(row['media_id'] as String, CacheAsset.file);
+    }
+  }
+
   Future<int> totalBytes() async {
     final rows = await _db.rawQuery(
         'SELECT COALESCE(SUM(blob_bytes), 0) + COALESCE(SUM(thumb_bytes), 0) AS t FROM media_records');
