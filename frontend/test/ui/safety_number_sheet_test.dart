@@ -10,8 +10,8 @@ Future<void> _pump(
   WidgetTester tester, {
   required TrustState state,
   VoidCallback? onVerify,
-}) {
-  return tester.pumpWidget(MaterialApp(
+}) async {
+  await tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: SafetyNumberSheet(
         displayName: 'Sami',
@@ -21,13 +21,16 @@ Future<void> _pump(
       ),
     ),
   ));
+  // Let the digits land before anything is tapped
+  await tester.pumpAndSettle();
 }
 
 void main() {
   testWidgets('shows the digits and names the peer', (tester) async {
     await _pump(tester, state: TrustState.unverified);
 
-    expect(find.text(_digits), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel(_digits), findsOneWidget);
     expect(find.textContaining('Sami'), findsWidgets);
   });
 
@@ -37,8 +40,8 @@ void main() {
       (tester) async {
     await _pump(tester, state: TrustState.unverified);
 
-    expect(find.text('Not verified'), findsOneWidget);
-    expect(find.textContaining('Mark as verified'), findsOneWidget);
+    expect(find.text('Verified'), findsNothing);
+    expect(find.text('They match'), findsOneWidget);
 
     // what must NOT appear is a claim
     // that the connection itself is already safe / secure / verified
@@ -59,7 +62,7 @@ void main() {
     await _pump(tester,
         state: TrustState.unverified, onVerify: () => verified = true);
 
-    await tester.tap(find.textContaining('Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
 
     expect(verified, isFalse, reason: 'one tap must not be enough');
@@ -71,12 +74,36 @@ void main() {
     await _pump(tester,
         state: TrustState.unverified, onVerify: () => verified = true);
 
-    await tester.tap(find.textContaining('Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('They matched'));
     await tester.pumpAndSettle();
 
     expect(verified, isTrue);
+  });
+
+  testWidgets('They match waits until the digits have landed',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SafetyNumberSheet(
+          displayName: 'Sami',
+          digits: _digits,
+          state: TrustState.unverified,
+          onVerify: () {},
+        ),
+      ),
+    ));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    await tester.tap(find.text('They match'));
+    await tester.pump();
+    expect(find.textContaining('match exactly'), findsNothing);
+
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('They match'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('match exactly'), findsOneWidget);
   });
 
   testWidgets('dismissing the prompt leaves the key unverified',
@@ -85,7 +112,7 @@ void main() {
     await _pump(tester,
         state: TrustState.unverified, onVerify: () => verified = true);
 
-    await tester.tap(find.textContaining('Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text("They didn't"));
     await tester.pumpAndSettle();
@@ -98,7 +125,7 @@ void main() {
     await _pump(tester, state: TrustState.verified);
 
     expect(find.text('Verified'), findsOneWidget);
-    expect(find.textContaining('Mark as verified'), findsNothing);
+    expect(find.text('They match'), findsNothing);
   });
 
   // The old accept button moved trust without comparing digits. Now that
@@ -109,7 +136,7 @@ void main() {
     await _pump(tester, state: TrustState.changed);
 
     expect(find.textContaining('security key changed'), findsOneWidget);
-    expect(find.textContaining('Mark as verified'), findsOneWidget);
+    expect(find.text('They match'), findsOneWidget);
     expect(find.textContaining("It's them"), findsNothing);
     expect(find.textContaining('new phone'), findsNothing);
   });

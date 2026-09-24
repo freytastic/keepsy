@@ -112,7 +112,7 @@ void main() {
     expect(find.text('Compare'), findsOneWidget);
     expect(find.text('1 security update to review.'), findsOneWidget);
     expect(find.text("One is Noor's changed safety number."), findsOneWidget);
-    expect(find.text('1 to review'), findsOneWidget);
+    expect(find.bySemanticsLabel('Security, 1 to review'), findsOneWidget);
   });
 
   testWidgets('a membership change belongs to Security, not Albums',
@@ -152,7 +152,7 @@ void main() {
 
     expect(find.byKey(const ValueKey('attention-security')), findsNothing);
     expect(find.byKey(const ValueKey('attention-albums')), findsOneWidget);
-    expect(find.text('7 photos'), findsOneWidget);
+    expect(find.bySemanticsLabel('Albums, 7 photos'), findsOneWidget);
   });
 
   testWidgets('the albums heading counts what arrived', (tester) async {
@@ -308,7 +308,7 @@ void main() {
       (tester) async {
     await pump(tester);
     expect(find.text('No security activity yet.'), findsOneWidget);
-    expect(find.text('Up to date'), findsOneWidget);
+    expect(find.bySemanticsLabel('Security, Up to date'), findsOneWidget);
     expect(
       find.text('Nothing has changed about who can read your albums.'),
       findsOneWidget,

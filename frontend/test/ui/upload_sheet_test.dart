@@ -68,8 +68,7 @@ void main() {
     await tester.pump(Duration.zero);
     await pumpSheet(tester, id);
 
-    expect(find.text('3/3'), findsOneWidget);
-    expect(find.text('6.0 MB sent'), findsOneWidget);
+    expect(find.text('3 photos · 6.0 MB'), findsOneWidget);
     expect(find.text('Added 3 photos'), findsOneWidget);
   });
 
@@ -91,7 +90,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Try again'), findsNothing);
-    expect(find.text('1/1'), findsOneWidget);
+    expect(find.textContaining('1 photo · '), findsOneWidget);
   });
 
   testWidgets('Done hands off instead of dropping the tiles itself',
@@ -194,7 +193,7 @@ void main() {
     await tester.pump(Duration.zero);
     await pumpSheet(tester, id);
 
-    expect(find.textContaining('Waiting for secure sync'), findsOneWidget);
+    expect(find.textContaining('Waiting to send'), findsOneWidget);
     expect(find.text('Try again'), findsNothing);
   });
 }

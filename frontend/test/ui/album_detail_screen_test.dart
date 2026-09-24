@@ -11,6 +11,7 @@ import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/album/album_copy.dart';
 import 'package:keepsy/ui/album/member_avatars.dart';
+import 'package:keepsy/ui/people/people_screen.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 
@@ -140,12 +141,12 @@ void main() {
     });
   }
 
-  testWidgets('people and safety numbers waits for the new screen',
+  testWidgets('people opens the album roster without our own row',
       (tester) async {
     final aks = await _emptyAks();
     await tester.pumpWidget(_wrap(
       AlbumDetailScreen(
-        album: _fakeAlbum(),
+        album: _fakeAlbum(me: 'alicetoken123'),
         albumService: _MockAlbumService([
           _fakeMember('alicetoken123', 'admin'),
           _fakeMember('bobtoken456', 'member'),
@@ -158,11 +159,12 @@ void main() {
 
     await tester.tap(find.byTooltip(AlbumCopy.more).first);
     await tester.pumpAndSettle();
-    await tester.tap(find.text(AlbumCopy.peopleAndSafety));
+    await tester.tap(find.text(AlbumCopy.people));
     await tester.pumpAndSettle();
 
-    expect(find.text(AlbumCopy.laterBadge), findsOneWidget);
-    expect(find.text('Leave album'), findsNothing);
+    expect(find.byType(PeopleScreen), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-bobtoken456')), findsOneWidget);
+    expect(find.byKey(const ValueKey('person-alicetoken123')), findsNothing);
   });
 
   testWidgets(
