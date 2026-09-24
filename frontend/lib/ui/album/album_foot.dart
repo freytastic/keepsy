@@ -36,13 +36,23 @@ class AlbumFoot extends StatelessWidget {
           FootScrim(height: clearance + bottom),
           Padding(
             padding: EdgeInsets.only(left: 44, right: 44, bottom: 18 + bottom),
+            // Equal sides keep the add button centred whatever the labels
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                _Act(label: AlbumCopy.select, onTap: onSelect),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _Act(label: AlbumCopy.select, onTap: onSelect),
+                  ),
+                ),
                 MakeButton(onTap: onAdd, tooltip: AlbumCopy.addPhotos),
-                _Act(label: AlbumCopy.download, onTap: onDownload),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _Act(label: AlbumCopy.download, onTap: onDownload),
+                  ),
+                ),
               ],
             ),
           ),
