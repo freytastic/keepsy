@@ -208,9 +208,46 @@ class _Scroll extends StatelessWidget {
     required this.onCreateAlbum,
   });
 
+  // Header row: 21 above the 48px tap targets
+  static const double _headerHeight = 69;
+  // The bottom bar is 96 above the inset, plus air so names aren't in the fade
+  static const double _barClearance = 104;
+
+  // Compact only, and only when a pair of small prints sits under the lead
+  double _leadScale(BuildContext context, List<ShelfSlot<AlbumModel>> plan) {
+    if (view != ShelfView.compact ||
+        plan.length < 2 ||
+        plan[1].size != PrintSize.small) {
+      return 1;
+    }
+    final size = MediaQuery.sizeOf(context);
+    final pad = MediaQuery.paddingOf(context);
+    final width = size.width - Warm.pagePad * 2;
+    final scaler = MediaQuery.textScalerOf(context);
+    double textHeight(String text, TextStyle style) => (TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: TextDirection.ltr,
+          textScaler: scaler,
+        )..layout(maxWidth: width))
+            .height;
+    final say = _Say.top +
+        textHeight(headline.title, Warm.h1) +
+        (headline.sub.isEmpty
+            ? 0
+            : _Say.gap + textHeight(headline.sub, Warm.sub));
+    final small = (width - _Grid.pairGap) / 2 * _Grid.printAspect;
+    return leadScale(
+      viewHeight: size.height - pad.bottom - _barClearance,
+      above: pad.top + _headerHeight + say + _Grid.topFor(view),
+      leadHeight: width * _Grid.printAspect,
+      below: _Grid.rowGapFor(view) + small,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final plan = planFor(albums, view);
+    final lead = _leadScale(context, plan);
 
     return SafeArea(
       bottom: false,
@@ -233,6 +270,7 @@ class _Scroll extends StatelessWidget {
             _Grid(
               plan: plan,
               view: view,
+              leadScale: lead,
               unseenFor: unseenFor,
               develop: develop,
               entered: entered,
@@ -426,10 +464,13 @@ class _Say extends StatelessWidget {
 
   const _Say({required this.headline});
 
+  static const double top = 20;
+  static const double gap = 9;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 27, Warm.pagePad, 0),
+      padding: const EdgeInsets.fromLTRB(Warm.pagePad, top, Warm.pagePad, 0),
       child: AnimatedSwitcher(
         duration: Warm.crossfade,
         switchInCurve: Warm.easeSoft,
@@ -445,7 +486,7 @@ class _Say extends StatelessWidget {
           children: [
             Text(headline.title, style: Warm.h1),
             if (headline.sub.isNotEmpty) ...[
-              const SizedBox(height: 9),
+              const SizedBox(height: gap),
               Text(headline.sub, style: Warm.sub),
             ],
           ],
@@ -458,14 +499,22 @@ class _Say extends StatelessWidget {
 class _Grid extends StatelessWidget {
   final List<ShelfSlot<AlbumModel>> plan;
   final ShelfView view;
+  // Width fraction for the first print, below 1 only in compact view
+  final double leadScale;
   final int Function(AlbumModel) unseenFor;
   final DevelopStore develop;
   final Set<String> entered;
   final void Function(AlbumModel) onOpenAlbum;
 
+  static const double pairGap = 12;
+  static const double printAspect = 372 / 300;
+  static double topFor(ShelfView v) => v == ShelfView.compact ? 24 : 32;
+  static double rowGapFor(ShelfView v) => v == ShelfView.compact ? 16 : 30;
+
   const _Grid({
     required this.plan,
     required this.view,
+    this.leadScale = 1,
     required this.unseenFor,
     required this.develop,
     required this.entered,
@@ -493,25 +542,32 @@ class _Grid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rowGap = view == ShelfView.compact ? 16.0 : 30.0;
+    final rowGap = rowGapFor(view);
     final rows = _rows();
     var seen = 0;
     final starts = [for (final r in rows) (seen += r.length) - r.length];
 
     return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 32, Warm.pagePad, 0),
+      padding: EdgeInsets.fromLTRB(Warm.pagePad, topFor(view), Warm.pagePad, 0),
       sliver: SliverList.builder(
         itemCount: rows.length,
         itemBuilder: (context, r) {
           final row = rows[r];
           final gap = r > 0 ? rowGap : 0.0;
           final Widget content = row.first.size == PrintSize.large
-              ? _card(row.first, starts[r])
+              ? r == 0 && leadScale < 1
+                  ? Center(
+                      child: FractionallySizedBox(
+                        widthFactor: leadScale,
+                        child: _card(row.first, starts[r]),
+                      ),
+                    )
+                  : _card(row.first, starts[r])
               : Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(child: _card(row.first, starts[r])),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: pairGap),
                     Expanded(
                       child: row.length > 1
                           ? _card(row[1], starts[r] + 1)
