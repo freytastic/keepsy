@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
 
 import 'activity_copy.dart';
 
@@ -126,34 +126,14 @@ class _Btn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PressableScale(
-      onTap: onTap,
-      haptic: true,
-      // 48 high to tap, 38 high to look at
-      child: SizedBox(
-        key: ValueKey('card-$label'),
-        height: 48,
-        child: Center(
-          child: Container(
-            height: 38,
-            padding: const EdgeInsets.symmetric(horizontal: 17),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(19),
-              gradient: primary ? Warm.ctaFill : null,
-              color: primary ? null : const Color(0x0E1C1917),
-              boxShadow: primary
-                  ? [
-                      BoxShadow(
-                          color: Warm.shadow(0.12),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2)),
-                    ]
-                  : null,
-            ),
-            child: Text(label, style: primary ? Warm.acBtnGo : Warm.acBtnQuiet),
-          ),
-        ),
+    // 48 high to tap, 40 high to look at
+    return SizedBox(
+      key: ValueKey('card-$label'),
+      height: 48,
+      child: Center(
+        child: primary
+            ? WarmButton(label: label, small: true, onTap: onTap)
+            : WarmTextButton(label: label, onTap: onTap),
       ),
     );
   }

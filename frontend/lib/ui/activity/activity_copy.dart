@@ -62,8 +62,7 @@ CardCopy cardCopyFor(ActivityEvent e, ActivityNames names) {
     InvitedToAlbum() => CardCopy(
         title: 'You were added to $where',
         where: 'Now on your shelf',
-        body: 'The key reached your phone, so the album is yours to open. '
-            'The photographs are still arriving.',
+        body: 'You can open it now. The photos are still arriving.',
         go: 'Open',
         quiet: 'Later',
       ),
@@ -71,8 +70,8 @@ CardCopy cardCopyFor(ActivityEvent e, ActivityNames names) {
     RemovedFromAlbum() => CardCopy(
         title: 'You no longer have access to $where',
         where: 'No longer on your shelf',
-        body: 'You were removed, or the album was deleted. Its photos and keys '
-            'are being removed from this phone.',
+        body: 'You were removed, or the album was deleted. Its photos are '
+            'being removed from this phone.',
         go: 'Okay',
       ),
     _ => CardCopy(
@@ -100,12 +99,11 @@ LineCopy lineFor(ActivityEvent e, ActivityNames names) {
         where: where,
         // Removal commits before rotation, which can still fail
         aside: e.rotationPending
-            ? "The album's new key is not finished yet, so "
-                '${names.memberName(e.albumId, e.memberToken)} may still be '
-                'able to read what gets added until it is.'
-            : "The album's key was rotated. "
-                '${names.memberName(e.albumId, e.memberToken)} '
-                "can't read anything added from here on.",
+            ? 'Keepsy is still locking '
+                '${names.memberName(e.albumId, e.memberToken)} out. Until '
+                "that's done, they may see new photos."
+            : "${names.memberName(e.albumId, e.memberToken)} can't see "
+                'anything added from now on.',
         warn: e.rotationPending,
       ),
     SafetyNumberChanged() => LineCopy(
@@ -153,18 +151,16 @@ Say sayForSecurity({
 }) {
   if (needs == 0 && happened == 0) {
     return const Say('No security activity yet.',
-        'Safety and access updates will appear here.');
+        'Changes to who can see your albums will appear here.');
   }
   if (needs == 0) {
-    final one = happened == 1;
-    return Say("You're up to date.",
-        '$happened recent security update${one ? ' is' : 's are'} in your history.');
+    return const Say("You're up to date.", 'Nothing needs you right now.');
   }
   return Say(
     '$needs security update${needs == 1 ? '' : 's'} to review.',
     changedSafetyNumber != null
         ? "One is $changedSafetyNumber's changed safety number."
-        : 'Review the latest access changes to your albums.',
+        : "Someone's access to your albums changed.",
   );
 }
 
