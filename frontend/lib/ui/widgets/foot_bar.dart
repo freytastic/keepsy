@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
 
 class FootScrim extends StatelessWidget {
   final double height;
@@ -74,22 +75,34 @@ class _MakeButtonState extends State<MakeButton> {
                   child: const _MakeGlow(),
                 ),
               ),
-              DecoratedBox(
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: Warm.ctaShadow,
+                  ),
+                ),
+              ),
+              const DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: Warm.ctaFill,
                   shape: BoxShape.circle,
-                  boxShadow: Warm.ctaShadow,
                 ),
-                child: SizedBox(
-                  width: 58,
-                  height: 58,
-                  child: Icon(Icons.add_rounded,
-                      size: 21,
-                      color: widget.onTap == null
-                          ? Warm.ctaInk.withValues(alpha: 0.45)
-                          : Warm.ctaInk),
-                ),
+                child: SizedBox(width: 58, height: 58),
               ),
+              Positioned.fill(child: WarmGlow(lit: _pressed, radius: 29)),
+              const Positioned(
+                top: 1,
+                left: 1,
+                right: 1,
+                height: 58 * 0.4,
+                child: IgnorePointer(child: WarmSheen(radius: 28)),
+              ),
+              Icon(Icons.add_rounded,
+                  size: 21,
+                  color: widget.onTap == null
+                      ? Warm.ctaInk.withValues(alpha: 0.45)
+                      : Warm.ctaInk),
             ],
           ),
         ),
