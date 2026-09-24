@@ -46,6 +46,9 @@ abstract class Warm {
   static const Color ctaTop = Color(0xFF2A2622);
   static const Color ctaBottom = Color(0xFF17130F);
   static const Color ctaInk = Color(0xFFF7F3EC);
+  // The button face as the glow warms it, for marks that echo the buttons
+  static const Color cocoa = Color(0xFF4A3A30);
+  static const Color cocoaSoft = Color(0x804A3A30);
 
   static ThemeData get theme => ThemeData(
         brightness: Brightness.light,
@@ -75,7 +78,7 @@ abstract class Warm {
   static const double ctaHeight = 56;
   static const double ctaRadius = 28;
   static const double fieldHeight = 58;
-  static const double fieldRadius = 29;
+  static const double fieldRadius = 14;
   static const double otpCellWidth = 44;
   static const double otpCellHeight = 56;
   static const double otpCellRadius = 14;
@@ -166,7 +169,7 @@ abstract class Warm {
             color: shadow(0.10), blurRadius: 44, offset: const Offset(18, 0)),
       ];
 
-  static const LinearGradient fieldFill = LinearGradient(
+  static const LinearGradient recessFill = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
     colors: [Color(0xFFFFFEFC), Color(0xFFF4F0E9)],
@@ -224,6 +227,7 @@ abstract class Warm {
     end: Alignment.bottomCenter,
     colors: [stoneTop, Color(0xFFEFEBE3)],
   );
+  static TextStyle get acTab => _t(17, 620, letterSpacing: -0.255);
   static TextStyle get acTabLabel =>
       _t(13.5, 620, letterSpacing: -0.081, color: ink);
   static TextStyle get acTabMeta => _t(10.5, 480, color: inkFaint);
@@ -262,6 +266,27 @@ abstract class Warm {
   static TextStyle get idValue => _t(14.5, 600,
       letterSpacing: 1.015, features: const [FontFeature.tabularFigures()]);
   static TextStyle get version => _t(12, 450, color: inkFaint);
+
+  // Settings pages
+  static TextStyle get pageTitle => _t(30, 620, letterSpacing: -0.9);
+  static TextStyle get pageLead =>
+      _t(16, 400, letterSpacing: -0.16, height: 1.45, color: inkSoft);
+  static TextStyle get pageSoft => _t(13, 400, height: 1.5, color: inkFaint);
+  static TextStyle get pageFact => _t(14.5, 400, height: 1.45);
+  static TextStyle get storageTotal => _t(40, 640, letterSpacing: -1.2,
+      features: const [FontFeature.tabularFigures()]);
+
+  static TextStyle get pageSubhead => _t(13, 600);
+  static TextStyle get holdLabel => _t(15.5, 600, color: warn);
+  static TextStyle get sheetTitle => _t(19, 600, letterSpacing: -0.38);
+  static TextStyle get sheetRow => _t(16, 540);
+  static TextStyle get footMark => _t(12, 480, color: inkFaint);
+
+  static TextStyle get textAction => _t(14.5, 540, color: inkSoft);
+  static TextStyle get fieldText => _t(17, 460, letterSpacing: -0.17);
+  static TextStyle get fieldLabel => _t(17, 420, color: inkSoft);
+  static const Color fieldFill = Color(0x0E1C1917);
+  static const Color fieldFillFocus = Color(0xE6FDFCFA);
 
   static const TextStyle wordmark = TextStyle(
     fontSize: 66,

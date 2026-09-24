@@ -7,6 +7,7 @@ import 'package:keepsy/data/storage/activity_store.dart';
 import 'package:keepsy/domain/activity/activity_event.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
 
 import 'activity_card.dart';
 import 'activity_copy.dart';
@@ -14,7 +15,7 @@ import 'activity_row.dart';
 
 // Separates access changes from album contents; unresolved actions lead
 
-const Duration _swap = Duration(milliseconds: 280);
+const Duration _swap = Duration(milliseconds: 180);
 
 class ActivityScreen extends StatefulWidget {
   final ActivityFeed store;
@@ -153,7 +154,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
             const Align(alignment: Alignment.centerLeft, child: _Back()),
             const SizedBox(height: 27),
             _Heading(say: say),
-            const SizedBox(height: 27),
+            const SizedBox(height: 20),
             _Segmented(
               lane: _lane,
               onSelect: _select,
@@ -238,34 +239,12 @@ class _Back extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: 'Back',
-      child: GestureDetector(
-        key: const ValueKey('activity-back'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () => Navigator.of(context).maybePop(),
-        // 48 to tap, 38 to look at, pinned to the page edge like the shelf
-        child: SizedBox(
-          width: 48,
-          height: 48,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              width: 38,
-              height: 38,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: Warm.stoneFill,
-                shape: BoxShape.circle,
-                boxShadow: Warm.avatarShadow,
-              ),
-              child: const Icon(Icons.chevron_left_rounded,
-                  size: 22, color: Warm.inkSoft),
-            ),
-          ),
-        ),
-      ),
+    // 48 to tap, pinned to the page edge like the shelf
+    return const SizedBox(
+      key: ValueKey('activity-back'),
+      width: 48,
+      height: 48,
+      child: Align(alignment: Alignment.centerLeft, child: WarmBack()),
     );
   }
 }
@@ -277,7 +256,7 @@ class _Heading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 320),
+      duration: const Duration(milliseconds: 160),
       layoutBuilder: (current, previous) => Stack(
         alignment: Alignment.topLeft,
         children: [...previous, if (current != null) current],
@@ -306,6 +285,7 @@ class _Heading extends StatelessWidget {
   }
 }
 
+// Two words, not a control: the active one is ink with a short rule under it
 class _Segmented extends StatelessWidget {
   final ActivityLane lane;
   final void Function(ActivityLane lane) onSelect;
@@ -323,93 +303,28 @@ class _Segmented extends StatelessWidget {
     required this.albumsAttention,
   });
 
-  static const double _gap = 3;
-
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(19),
-        color: const Color(0x0B1C1917),
-        boxShadow: const [
-          BoxShadow(color: Color(0xB8FFFFFF), offset: Offset(0, 1)),
-        ],
-      ),
-      child: LayoutBuilder(builder: (context, box) {
-        final half = (box.maxWidth - _gap) / 2;
-        return SizedBox(
-          height: 58,
-          child: Stack(
-            children: [
-              AnimatedPositioned(
-                duration: _swap,
-                curve: Curves.easeOutCubic,
-                left: lane == ActivityLane.security ? 0 : half + _gap,
-                top: 0,
-                bottom: 0,
-                width: half,
-                child: const _Pill(),
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: _Tab(
-                      label: 'Security',
-                      meta: securityMeta,
-                      icon: Icons.verified_user_outlined,
-                      active: lane == ActivityLane.security,
-                      attention: securityAttention,
-                      attentionKey: const ValueKey('attention-security'),
-                      onTap: () => onSelect(ActivityLane.security),
-                    ),
-                  ),
-                  const SizedBox(width: _gap),
-                  Expanded(
-                    child: _Tab(
-                      label: 'Albums',
-                      meta: albumsMeta,
-                      icon: Icons.photo_outlined,
-                      active: lane == ActivityLane.albums,
-                      attention: albumsAttention,
-                      attentionKey: const ValueKey('attention-albums'),
-                      onTap: () => onSelect(ActivityLane.albums),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      }),
-    );
-  }
-}
-
-class _Pill extends StatelessWidget {
-  const _Pill();
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(15),
-        gradient: Warm.acStoneFill,
-        boxShadow: [
-          BoxShadow(
-              color: Warm.shadow(0.06),
-              blurRadius: 2,
-              offset: const Offset(0, 1)),
-          BoxShadow(
-              color: Warm.shadow(0.075),
-              blurRadius: 12,
-              offset: const Offset(0, 5)),
-        ],
-      ),
-      child: const ClipRRect(
-        borderRadius: BorderRadius.all(Radius.circular(15)),
-        child: Stack(children: [LitEdge(), SizedBox.expand()]),
-      ),
+    return Row(
+      children: [
+        _Tab(
+          label: 'Security',
+          meta: securityMeta,
+          active: lane == ActivityLane.security,
+          attention: securityAttention,
+          attentionKey: const ValueKey('attention-security'),
+          onTap: () => onSelect(ActivityLane.security),
+        ),
+        const SizedBox(width: 26),
+        _Tab(
+          label: 'Albums',
+          meta: albumsMeta,
+          active: lane == ActivityLane.albums,
+          attention: albumsAttention,
+          attentionKey: const ValueKey('attention-albums'),
+          onTap: () => onSelect(ActivityLane.albums),
+        ),
+      ],
     );
   }
 }
@@ -417,7 +332,6 @@ class _Pill extends StatelessWidget {
 class _Tab extends StatelessWidget {
   final String label;
   final String meta;
-  final IconData icon;
   final bool active;
   final bool attention;
   final Key attentionKey;
@@ -426,7 +340,6 @@ class _Tab extends StatelessWidget {
   const _Tab({
     required this.label,
     required this.meta,
-    required this.icon,
     required this.active,
     required this.attention,
     required this.attentionKey,
@@ -435,11 +348,6 @@ class _Tab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconColor = !active
-        ? Warm.inkFaint
-        : attention && label == 'Security'
-            ? Warm.warn
-            : Warm.inkSoft;
     return Semantics(
       button: true,
       selected: active,
@@ -448,70 +356,49 @@ class _Tab extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 11),
-          child: Row(
+        child: SizedBox(
+          height: 44,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              SizedBox(
-                width: 28,
-                height: 28,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    AnimatedContainer(
-                      duration: _swap,
-                      width: 28,
-                      height: 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(9),
-                        color: active
-                            ? const Color(0x0E1C1917)
-                            : const Color(0x0B1C1917),
-                      ),
-                      child: Icon(icon, size: 16, color: iconColor),
-                    ),
-                    if (attention)
-                      Positioned(
-                        key: attentionKey,
-                        top: -1,
-                        right: -1,
-                        child: Container(
-                          width: 9,
-                          height: 9,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Warm.warn,
-                            border: Border.all(
-                              color: active ? Warm.stoneTop : Warm.ground,
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     AnimatedDefaultTextStyle(
                       duration: _swap,
-                      style: Warm.acTabLabel
+                      style: Warm.acTab
                           .copyWith(color: active ? Warm.ink : Warm.inkFaint),
                       child: Text(label, maxLines: 1),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      meta,
-                      style: Warm.acTabMeta,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    if (attention) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        key: attentionKey,
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Warm.warn,
+                        ),
+                      ),
+                    ],
                   ],
+                ),
+              ),
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: AnimatedContainer(
+                  duration: _swap,
+                  curve: Curves.easeOutCubic,
+                  width: active ? 18 : 0,
+                  height: 2.5,
+                  decoration: BoxDecoration(
+                    color: Warm.ink,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
             ],
@@ -565,10 +452,6 @@ class _SecurityPanel extends StatelessWidget {
             ),
           ),
         ..._grouped(rest, names, onOpenAlbum, null),
-        const _Foot(
-          "Safety numbers are checked on this phone. Keepsy can't compare "
-          'them for you, or mark a changed key as safe.',
-        ),
       ],
     );
   }
@@ -596,10 +479,6 @@ class _AlbumsPanel extends StatelessWidget {
         if (rows.isEmpty)
           const _Blank('Nothing has been added to your albums yet.'),
         ..._grouped(rows, names, onOpenAlbum, thumb),
-        const _Foot(
-          'This list was built on this phone, from what it saw. The server '
-          'never had a copy, and does not know what a photo is.',
-        ),
       ],
     );
   }
@@ -690,19 +569,3 @@ class _Blank extends StatelessWidget {
   }
 }
 
-class _Foot extends StatelessWidget {
-  final String text;
-  const _Foot(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 34),
-      padding: const EdgeInsets.only(top: 22),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Warm.inkGhost)),
-      ),
-      child: Text(text, style: Warm.acFoot),
-    );
-  }
-}

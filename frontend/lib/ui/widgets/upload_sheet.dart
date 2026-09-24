@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
 import 'package:keepsy/domain/upload/upload_snapshot.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/providers/upload_queue_model.dart';
@@ -140,15 +139,11 @@ class _UploadSheetState extends State<UploadSheet> {
               ),
             ),
             const SizedBox(height: 18),
-            Text(sheetTitle(batch, albumName),
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Warm.ink)),
+            Text(sheetTitle(batch, albumName), style: Warm.sheetTitle),
             const SizedBox(height: 18),
-            _Readout(batch: batch),
-            const SizedBox(height: 16),
             _Track(value: batch.fraction),
+            const SizedBox(height: 10),
+            _Readout(batch: batch),
             if (pauseNote(batch) != null) ...[
               const SizedBox(height: 12),
               Text(pauseNote(batch)!,
@@ -223,110 +218,52 @@ class _Track extends StatelessWidget {
   }
 }
 
-class _Readout extends StatelessWidget {
+class _Readout extends StatefulWidget {
   final UploadBatchSnapshot batch;
   const _Readout({required this.batch});
 
   @override
-  Widget build(BuildContext context) {
-    final active = batch.items.firstWhere(
-      (i) => i.phase != UploadPhase.done && i.phase != UploadPhase.failed,
-      orElse: () => batch.items.last,
-    );
-    final rate = formatRate(batch.bytesPerSecond);
-    final eta = formatEta(batch.eta);
-    final sent = '${formatBytes(batch.logicalBytesSent)} sent';
-
-    // Show the phase while no bytes are moving
-    final lead = batch.settled
-        ? sent
-        : rate.isEmpty
-            ? phaseLabel(active.phase)
-            : rate;
-    final trail = batch.settled
-        ? null
-        : eta.isEmpty
-            ? sent
-            : '$eta  ·  $sent';
-
-    return Row(
-      children: [
-        _CountRing(
-          value: batch.fraction,
-          done: batch.doneCount,
-          total: batch.totalCount,
-          settled: batch.settled,
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                lead,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w700, color: Warm.ink),
-              ),
-              if (trail != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  trail,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12.5, color: Warm.inkSoft),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  State<_Readout> createState() => _ReadoutState();
 }
 
-class _CountRing extends StatelessWidget {
-  final double value;
-  final int done;
-  final int total;
-  final bool settled;
-
-  const _CountRing({
-    required this.value,
-    required this.done,
-    required this.total,
-    required this.settled,
-  });
+class _ReadoutState extends State<_Readout> {
+  // The estimate drops out between photos, so the last one holds its place
+  String _eta = '';
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 46,
-      height: 46,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          SizedBox.expand(
-            child: CircularProgressIndicator(
-              value: value <= 0 && !settled ? null : value,
-              strokeWidth: 3,
-              backgroundColor: Warm.wellEmpty,
-              valueColor: const AlwaysStoppedAnimation<Color>(Warm.ctaTop),
-            ),
-          ),
-          Text(
-            '$done/$total',
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: Warm.ink,
-              height: 1,
-            ),
-          ),
-        ],
-      ),
+    final batch = widget.batch;
+    String photos(int n) => '$n photo${n == 1 ? '' : 's'}';
+    final String left;
+    final String right;
+    if (batch.settled) {
+      left = '${photos(batch.doneCount)} · '
+          '${formatBytes(batch.logicalBytesSent)}';
+      right = '';
+    } else {
+      left = '${batch.doneCount} of ${photos(batch.totalCount)}';
+      final eta = formatEta(batch.eta);
+      if (eta.isNotEmpty) _eta = eta;
+      final rate = formatRate(batch.bytesPerSecond);
+      right = [
+        if (rate.isNotEmpty) rate,
+        if (_eta.isNotEmpty) _eta,
+      ].join(' · ');
+    }
+    const style = TextStyle(
+      fontSize: 13,
+      color: Warm.inkSoft,
+      fontFeatures: [FontFeature.tabularFigures()],
+    );
+    return Row(
+      children: [
+        Text(left, style: style),
+        const Spacer(),
+        Flexible(
+          child: Text(right,
+              style: style, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ],
     );
   }
 }

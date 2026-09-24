@@ -3,10 +3,12 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:keepsy/data/native/image_transcoder.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/own_avatar_store.dart';
 import 'package:keepsy/data/storage/picked_file.dart';
 import 'package:keepsy/domain/account/account_deletion.dart';
@@ -19,116 +21,39 @@ import 'package:keepsy/e2ee/identity_trust.dart';
 import 'package:keepsy/ui/shelf/avatar_crop_screen.dart';
 import 'package:keepsy/ui/shelf/safety_summary.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/account_deletion_screen.dart';
+import 'package:keepsy/ui/settings/delete_account_screen.dart';
+import 'package:keepsy/ui/settings/settings_page.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/delete_shared_albums_dialog.dart';
 import 'package:keepsy/ui/widgets/print_card.dart';
+import 'package:keepsy/ui/widgets/upload_copy.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:keepsy/ui/widgets/warm_field.dart';
 
-const _docsUrl = 'https://keepsy-web.vercel.app';
+const _siteUrl = 'https://keepsy-web.vercel.app';
 const _repoUrl = 'https://github.com/freytastic/keepsy';
 
 const _revealFor = Duration(seconds: 20);
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  // Null leaves the safety numbers row as a count only
+  final VoidCallback? onSafetyNumbers;
+
+  const ProfileScreen({super.key, this.onSafetyNumbers});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  late final TextEditingController _name;
-  final FocusNode _nameFocus = FocusNode();
-  bool _editing = false;
-  bool _confirmingDelete = false;
-  bool _deleting = false;
-  final GlobalKey _dangerKey = GlobalKey();
   String? _verified;
-
-  void _askDelete() {
-    setState(() => _confirmingDelete = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _dangerKey.currentContext;
-      if (ctx == null) return;
-      Scrollable.ensureVisible(ctx,
-          duration: Warm.springSoft, curve: Warm.easeSoft, alignment: 1);
-    });
-  }
-
-  // A plan can go stale repeatedly only under constant roster churn
-  static const _maxPlanReviews = 3;
-
-  Future<void> _deleteAccount() async {
-    final AccountDeletion deletion;
-    try {
-      deletion = context.read<AccountDeletion>();
-    } catch (_) {
-      return;
-    }
-    final state = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    final rootNav = Navigator.of(context, rootNavigator: true);
-    setState(() => _deleting = true);
-    try {
-      var changed = false;
-      for (var review = 0; review < _maxPlanReviews; review++) {
-        final plan = await deletion.plan();
-        if (!mounted) return;
-        if (plan.shared.isNotEmpty) {
-          final ok = await showDialog<bool>(
-            context: context,
-            builder: (_) => DeleteSharedAlbumsDialog(
-              changed: changed,
-              albums: [
-                for (final a in plan.shared)
-                  (
-                    name: state.albumDisplayName(a.albumId) ?? 'Untitled album',
-                    members: a.activeMemberCount,
-                  ),
-              ],
-            ),
-          );
-          if (ok != true) {
-            if (mounted) setState(() => _deleting = false);
-            return;
-          }
-        }
-        // The screen owns the outcome from here, including a lost response
-        final result = await rootNav.push<DeletionResult>(MaterialPageRoute(
-          builder: (_) => AccountDeletionScreen(deletion: deletion, plan: plan),
-        ));
-        if (!mounted) return;
-        if (result == DeletionResult.planChanged) {
-          changed = true;
-          continue;
-        }
-        // Successful deletion replaces the route stack and returns null
-        if (result == null) return;
-        setState(() => _deleting = false);
-        messenger.showSnackBar(const SnackBar(
-          content: Text('Your account was not deleted. Try again.'),
-          behavior: SnackBarBehavior.floating,
-        ));
-        return;
-      }
-      throw StateError('deletion plan kept changing');
-    } catch (_) {
-      if (mounted) setState(() => _deleting = false);
-      messenger.showSnackBar(const SnackBar(
-        content: Text('Could not delete your account. Try again.'),
-        behavior: SnackBarBehavior.floating,
-      ));
-    }
-  }
+  int? _stored;
+  bool _preparing = false;
 
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: context.read<AppState>().profileName);
-    _nameFocus.addListener(() {
-      if (!_nameFocus.hasFocus && _editing) _commitName();
-    });
     unawaited(_loadVerified());
+    unawaited(_loadStored());
   }
 
   // Derive verification from local rosters
@@ -149,19 +74,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) setState(() => _verified = summary);
   }
 
-  @override
-  void dispose() {
-    _name.dispose();
-    _nameFocus.dispose();
-    super.dispose();
+  Future<void> _loadStored() async {
+    final MediaCacheManager cache;
+    try {
+      cache = context.read<MediaCacheManager>();
+    } catch (_) {
+      return;
+    }
+    final u = await cache.usage();
+    if (mounted) setState(() => _stored = u.thumbs + u.full);
   }
 
-  void _commitName() {
-    final name = _name.text.trim();
-    setState(() => _editing = false);
-    if (name.isEmpty) return;
+  Future<void> _editName() async {
     final state = context.read<AppState>();
-    if (name == state.profileName) return;
+    final name = await _NameSheet.show(context, state.profileName);
+    if (name == null || !mounted || name == state.profileName) return;
     state.setProfileName(name);
     _publishName(name);
   }
@@ -182,7 +109,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     unawaited(publisher.publishToAll(targets, name));
   }
 
-  bool _preparing = false;
+  Future<void> _editPhoto(bool hasPhoto) async {
+    final choice = await _PhotoSheet.show(context, hasPhoto: hasPhoto);
+    if (!mounted) return;
+    switch (choice) {
+      case _PhotoChoice.pick:
+        await _pickPhoto();
+      case _PhotoChoice.remove:
+        await _removePhoto();
+      case null:
+        break;
+    }
+  }
 
   // The photo is cleaned of metadata before the crop screen ever shows it
   Future<void> _pickPhoto() async {
@@ -220,6 +158,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) unawaited(context.read<AvatarPublisher?>()?.sync());
   }
 
+  Future<void> _open(Widget page) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+
+  Future<void> _openStorage() async {
+    await _open(const StoragePage());
+    await _loadStored();
+  }
+
+  void _openDelete() {
+    final AccountDeletion deletion;
+    try {
+      deletion = context.read<AccountDeletion>();
+    } catch (_) {
+      return;
+    }
+    _open(DeleteAccountScreen(deletion: deletion));
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -238,72 +194,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: ListView(
                 physics: const BouncingScrollPhysics(
                     parent: AlwaysScrollableScrollPhysics()),
-                padding: const EdgeInsets.only(bottom: 56),
+                padding: const EdgeInsets.only(bottom: 40),
                 children: [
-                  const _Head(),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(Warm.pagePad - 8, 16, 0, 0),
+                    child: Align(
+                        alignment: Alignment.centerLeft, child: WarmBack()),
+                  ),
                   _You(
                     photo: photo,
                     name: state.profileName,
-                    editing: _editing,
-                    controller: _name,
-                    focus: _nameFocus,
-                    onEdit: () {
-                      setState(() => _editing = true);
-                      _nameFocus.requestFocus();
-                    },
-                    onDone: _commitName,
                     busy: _preparing,
-                    onPick: _pickPhoto,
-                    onRemove: _removePhoto,
+                    onPhoto: () => _editPhoto(photo != null),
+                    onName: _editName,
                   ),
-                  _IdBlock(handle: state.keepsyId),
-                  _Section(
-                    label: 'People',
-                    children: [
-                      _Row(
-                        title: 'Safety numbers',
-                        value: _verified,
-                      ),
-                      const _Note(
-                          'Compare a short code with someone in person to be '
-                          'certain their phone is really theirs. Verifying once '
-                          'counts in every album you share.'),
-                    ],
-                  ),
-                  const _Section(
-                    label: 'What Keepsy knows',
-                    children: [
-                      _Row(
-                          title: 'How Keepsy works',
-                          href: '$_docsUrl/how-it-works'),
-                    ],
-                  ),
-                  const _Section(
-                    label: 'Backup',
-                    children: [
-                      _FactTitle('Not in beta version.', muted: true),
-                      _Note(
-                          "There's no way to move your account to a new phone "
-                          'yet. If you reinstall Keepsy, this phone gets a new '
-                          'key, and the people you share albums with will need '
-                          'to invite you again.'),
-                    ],
-                  ),
-                  const _Section(
-                    label: 'About',
-                    children: [
-                      _Row(title: 'Source code', href: _repoUrl, mark: true),
-                      _Version(),
-                    ],
-                  ),
-                  _Danger(
-                    key: _dangerKey,
-                    confirming: _confirmingDelete,
-                    deleting: _deleting,
-                    onAsk: _askDelete,
-                    onConfirm: _deleteAccount,
-                    onDismiss: () => setState(() => _confirmingDelete = false),
-                  ),
+                  _Group(top: 30, children: [
+                    _IdRow(handle: state.keepsyId),
+                    _Row(
+                      title: 'Safety numbers',
+                      value: _verified,
+                      onTap: widget.onSafetyNumbers,
+                    ),
+                    _Row(
+                      title: 'Notifications',
+                      onTap: () => _open(const NotificationsPage()),
+                    ),
+                    _Row(
+                      title: 'Backup',
+                      value: 'Not yet',
+                      onTap: () => _open(const BackupPage()),
+                    ),
+                    _Row(
+                      title: 'Storage',
+                      value: _stored == null ? null : formatBytes(_stored!),
+                      onTap: _openStorage,
+                    ),
+                  ]),
+                  const _Group(children: [
+                    _Row(title: 'Send feedback', href: '$_repoUrl/issues/new'),
+                    _Row(title: 'Privacy policy', href: '$_siteUrl/privacy'),
+                  ]),
+                  _Group(children: [
+                    _Row(
+                        title: 'Delete account',
+                        warn: true,
+                        onTap: _openDelete),
+                  ]),
+                  const _Foot(),
                 ],
               ),
             ),
@@ -331,126 +268,85 @@ class _Ground extends StatelessWidget {
       );
 }
 
-class _Head extends StatelessWidget {
-  const _Head();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 26, Warm.pagePad, 0),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: GestureDetector(
-          onTap: () => Navigator.of(context).maybePop(),
-          child: Container(
-            width: 38,
-            height: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              gradient: Warm.stoneFill,
-              shape: BoxShape.circle,
-              boxShadow: Warm.avatarShadow,
-            ),
-            child: const Icon(Icons.chevron_left_rounded,
-                size: 22, color: Warm.inkSoft),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _You extends StatelessWidget {
   final Uint8List? photo;
   final bool busy;
   final String name;
-  final bool editing;
-  final TextEditingController controller;
-  final FocusNode focus;
-  final VoidCallback onEdit;
-  final VoidCallback onDone;
-  final VoidCallback onPick;
-  final VoidCallback onRemove;
+  final VoidCallback onPhoto;
+  final VoidCallback onName;
 
   const _You({
     required this.photo,
     required this.busy,
     required this.name,
-    required this.editing,
-    required this.controller,
-    required this.focus,
-    required this.onEdit,
-    required this.onDone,
-    required this.onPick,
-    required this.onRemove,
+    required this.onPhoto,
+    required this.onName,
   });
 
   bool get _hasPhoto => photo != null;
 
   @override
   Widget build(BuildContext context) {
+    final empty = name.trim().isEmpty;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 26, Warm.pagePad, 0),
-      child: Column(
-        children: [
-          Transform.rotate(
-            angle: -1.6 * 3.141592653589793 / 180,
-            child: SizedBox(
-              width: 188,
-              child: PrintCard(
-                frame: true,
-                blank: !_hasPhoto,
-                well: _hasPhoto ? _photo() : const _NoFace(),
-                chin: Center(
-                  child: editing
-                      ? TextField(
-                          controller: controller,
-                          focusNode: focus,
-                          maxLength: 28,
-                          textAlign: TextAlign.center,
-                          style: Warm.printName,
-                          cursorColor: Warm.inkFaint,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            isDense: true,
-                            counterText: '',
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          onSubmitted: (_) => onDone(),
-                        )
-                      : GestureDetector(
-                          onTap: onEdit,
+      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 18, Warm.pagePad, 0),
+      child: Center(
+        child: Transform.rotate(
+          angle: -1.6 * 3.141592653589793 / 180,
+          child: SizedBox(
+            width: 188,
+            child: PrintCard(
+              frame: true,
+              blank: !_hasPhoto,
+              well: Semantics(
+                button: true,
+                label: _hasPhoto ? 'Change photo' : 'Add photo',
+                child: GestureDetector(
+                  onTap: busy ? null : onPhoto,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _hasPhoto ? _photo() : const _NoFace(),
+                      Positioned(
+                        right: 8,
+                        bottom: 8,
+                        child: _CameraBadge(busy: busy),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              chin: Center(
+                child: Semantics(
+                  button: true,
+                  label: 'Edit name',
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onName,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
                           child: Text(
-                            name.trim().isEmpty ? 'Add your name' : name,
-                            style: Warm.printName,
+                            empty ? 'Add your name' : name,
+                            style: empty
+                                ? Warm.printName.copyWith(color: Warm.inkFaint)
+                                : Warm.printName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.edit_outlined,
+                            size: 13, color: Warm.inkFaint),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 20),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _Link(
-                    busy
-                        ? 'Preparing photo'
-                        : _hasPhoto
-                            ? 'Change photo'
-                            : 'Add photo',
-                    onTap: busy ? null : onPick),
-                if (_hasPhoto) ...[
-                  const _Mid(),
-                  _Link('Remove', onTap: onRemove),
-                ],
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -463,6 +359,39 @@ class _You extends StatelessWidget {
       );
 }
 
+class _CameraBadge extends StatelessWidget {
+  final bool busy;
+
+  const _CameraBadge({required this.busy});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xDBFDFCFA),
+        boxShadow: [
+          BoxShadow(
+              color: Warm.shadow(0.18),
+              blurRadius: 3,
+              offset: const Offset(0, 1)),
+        ],
+      ),
+      child: busy
+          ? const SizedBox(
+              width: 12,
+              height: 12,
+              child:
+                  CircularProgressIndicator(strokeWidth: 1.6, color: Warm.ink),
+            )
+          : const Icon(Icons.photo_camera_outlined, size: 14, color: Warm.ink),
+    );
+  }
+}
+
 class _NoFace extends StatelessWidget {
   const _NoFace();
 
@@ -473,16 +402,31 @@ class _NoFace extends StatelessWidget {
       );
 }
 
-class _IdBlock extends StatefulWidget {
-  final String? handle;
+class _Group extends StatelessWidget {
+  final double top;
+  final List<Widget> children;
 
-  const _IdBlock({required this.handle});
+  const _Group({required this.children, this.top = 26});
 
   @override
-  State<_IdBlock> createState() => _IdBlockState();
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(Warm.pagePad - 8, top, Warm.pagePad - 8, 0),
+      child: Column(children: children),
+    );
+  }
 }
 
-class _IdBlockState extends State<_IdBlock> {
+class _IdRow extends StatefulWidget {
+  final String? handle;
+
+  const _IdRow({required this.handle});
+
+  @override
+  State<_IdRow> createState() => _IdRowState();
+}
+
+class _IdRowState extends State<_IdRow> {
   bool _shown = false;
   bool _copied = false;
   Timer? _hide;
@@ -522,46 +466,27 @@ class _IdBlockState extends State<_IdBlock> {
     final value =
         h == null ? '••••-••••' : (_shown ? formatHandle(h) : '••••-••••');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 34, Warm.pagePad, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return SizedBox(
+      height: 48,
+      child: Row(
         children: [
-          Container(
-            height: 54,
-            padding: const EdgeInsets.only(left: 18, right: 8),
-            decoration: BoxDecoration(
-              gradient: Warm.fieldFill,
-              borderRadius: BorderRadius.circular(27),
-              boxShadow: Warm.stoneShadow,
-            ),
-            child: Row(
-              children: [
-                Text(_copied ? 'Copied' : 'keepsy ID', style: Warm.idLabel),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: Text(value,
-                        textAlign: TextAlign.right, style: Warm.idValue),
-                  ),
-                ),
-                _IconButton(
-                  icon: _shown
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                  onTap: h == null ? null : _toggle,
-                ),
-                _IconButton(
-                  icon: Icons.copy_outlined,
-                  onTap: h == null ? null : _copy,
-                ),
-              ],
-            ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(_copied ? 'Copied' : 'keepsy ID', style: Warm.rowTitle),
           ),
-          const Padding(
-            padding: EdgeInsets.only(top: 12, left: 4, right: 4),
-            child: _Note('Share this with anyone who wants to add you to an '
-                'album.'),
+          Text(value, style: Warm.idValue.copyWith(color: Warm.inkSoft)),
+          const SizedBox(width: 4),
+          _IconButton(
+            icon: _shown
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+            label: _shown ? 'Hide keepsy ID' : 'Reveal keepsy ID',
+            onTap: h == null ? null : _toggle,
+          ),
+          _IconButton(
+            icon: Icons.copy_outlined,
+            label: 'Copy keepsy ID',
+            onTap: h == null ? null : _copy,
           ),
         ],
       ),
@@ -571,53 +496,42 @@ class _IdBlockState extends State<_IdBlock> {
 
 class _IconButton extends StatelessWidget {
   final IconData icon;
+  final String label;
   final VoidCallback? onTap;
 
-  const _IconButton({required this.icon, required this.onTap});
+  const _IconButton(
+      {required this.icon, required this.label, required this.onTap});
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          width: 34,
-          height: 34,
-          child: Icon(icon, size: 16, color: Warm.inkFaint),
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(icon, size: 16, color: Warm.inkFaint),
+          ),
         ),
       );
-}
-
-class _Section extends StatelessWidget {
-  final String label;
-  final List<Widget> children;
-
-  const _Section({required this.label, required this.children});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 38, Warm.pagePad, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Text(label.toUpperCase(), style: Warm.sectionLabel),
-          ),
-          ...children,
-        ],
-      ),
-    );
-  }
 }
 
 class _Row extends StatelessWidget {
   final String title;
   final String? value;
   final String? href;
-  final bool mark;
+  final bool warn;
+  final VoidCallback? onTap;
 
-  const _Row({required this.title, this.value, this.href, this.mark = false});
+  const _Row({
+    required this.title,
+    this.value,
+    this.href,
+    this.warn = false,
+    this.onTap,
+  });
 
   Future<void> _open(BuildContext context) async {
     final url = href;
@@ -643,33 +557,138 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final row = _body();
-    if (href == null) return row;
+    final tap = href != null ? () => _open(context) : onTap;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _open(context),
-      child: row,
+      onTap: tap,
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: warn
+                      ? Warm.rowTitle.copyWith(color: Warm.warn)
+                      : Warm.rowTitle,
+                ),
+              ),
+              if (value != null) ...[
+                Text(value!,
+                    style: Warm.rowValue.copyWith(color: Warm.inkFaint)),
+                const SizedBox(width: 10),
+              ],
+              if (href != null)
+                const Icon(Icons.north_east_rounded,
+                    size: 14, color: Warm.inkGhost)
+              else if (tap != null)
+                const Icon(Icons.chevron_right_rounded,
+                    size: 17, color: Warm.inkGhost),
+            ],
+          ),
+        ),
+      ),
     );
   }
+}
 
-  Widget _body() {
+class _Foot extends StatelessWidget {
+  const _Foot();
+
+  static const _octocat =
+      '<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path '
+      'fill="#1C1917" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07'
+      '.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-'
+      '.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 '
+      '1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31'
+      '-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 '
+      '2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56'
+      '.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 '
+      '1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>'
+      '</svg>';
+
+  Future<void> _open() async {
+    try {
+      await launchUrl(Uri.parse(_repoUrl),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(left: 0),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 42),
-        child: Row(
+      padding: const EdgeInsets.only(top: 40),
+      child: Center(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _open,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Opacity(
+                  opacity: 0.26,
+                  child: SvgPicture.string(_octocat, width: 14, height: 14),
+                ),
+                const SizedBox(width: 7),
+                Text('keepsy 1.0.0 beta', style: Warm.footMark),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _PhotoChoice { pick, remove }
+
+class _PhotoSheet extends StatelessWidget {
+  final bool hasPhoto;
+
+  const _PhotoSheet({required this.hasPhoto});
+
+  static Future<_PhotoChoice?> show(BuildContext context,
+          {required bool hasPhoto}) =>
+      showModalBottomSheet<_PhotoChoice>(
+        context: context,
+        backgroundColor: Warm.ground,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+        builder: (_) => _PhotoSheet(hasPhoto: hasPhoto),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (mark) ...[
-              const Icon(Icons.code_rounded, size: 15, color: Warm.inkSoft),
-              const SizedBox(width: 10),
-            ],
-            Expanded(child: Text(title, style: Warm.rowTitle)),
-            if (value != null) ...[
-              Text(value!, style: Warm.rowValue),
-              const SizedBox(width: 10),
-            ],
-            const Icon(Icons.chevron_right_rounded,
-                size: 17, color: Warm.inkGhost),
+            const _Grip(),
+            const SizedBox(height: 10),
+            _SheetRow(
+              icon: Icons.photo_outlined,
+              label: hasPhoto ? 'Choose a new photo' : 'Choose a photo',
+              onTap: () => Navigator.of(context).pop(_PhotoChoice.pick),
+            ),
+            if (hasPhoto)
+              _SheetRow(
+                icon: Icons.delete_outline_rounded,
+                label: 'Remove photo',
+                warn: true,
+                onTap: () => Navigator.of(context).pop(_PhotoChoice.remove),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 12, 10, 0),
+              child: Text('Only people in your albums can see it.',
+                  style: Warm.pageSoft),
+            ),
           ],
         ),
       ),
@@ -677,133 +696,137 @@ class _Row extends StatelessWidget {
   }
 }
 
-class _Version extends StatelessWidget {
-  const _Version();
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 22),
-        child: Text('Keepsy v1.0.0 · beta', style: Warm.version),
-      );
-}
-
-class _FactTitle extends StatelessWidget {
-  final String text;
-  final bool muted;
-
-  const _FactTitle(this.text, {this.muted = false});
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: muted
-            ? Warm.factTitle.copyWith(color: Warm.inkSoft)
-            : Warm.factTitle,
-      );
-}
-
-class _Note extends StatelessWidget {
-  final String text;
-
-  const _Note(this.text);
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: 7),
-        child: Text(text, style: Warm.note),
-      );
-}
-
-class _Link extends StatelessWidget {
+class _SheetRow extends StatelessWidget {
+  final IconData icon;
   final String label;
-  final VoidCallback? onTap;
   final bool warn;
+  final VoidCallback onTap;
 
-  const _Link(this.label, {this.onTap, this.warn = false});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          child: Text(label,
-              style: warn ? Warm.link.copyWith(color: Warm.warn) : Warm.link),
-        ),
-      );
-}
-
-class _Mid extends StatelessWidget {
-  const _Mid();
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 2.5,
-        height: 2.5,
-        margin: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: const BoxDecoration(
-          color: Warm.inkGhost,
-          shape: BoxShape.circle,
-        ),
-      );
-}
-
-class _Danger extends StatelessWidget {
-  final bool confirming;
-  final bool deleting;
-  final VoidCallback onAsk;
-  final VoidCallback onConfirm;
-  final VoidCallback onDismiss;
-
-  const _Danger({
-    super.key,
-    required this.confirming,
-    required this.deleting,
-    required this.onAsk,
-    required this.onConfirm,
-    required this.onDismiss,
+  const _SheetRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.warn = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Warm.pagePad, 46, Warm.pagePad, 0),
-      child: AnimatedSwitcher(
-        duration: Warm.quick,
-        switchOutCurve: const FlippedCurve(Warm.easeOut),
-        child: confirming
-            ? Column(
-                key: const ValueKey('confirm'),
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _FactTitle('Delete your account?'),
-                  const _Note(
-                      'This removes your account and every photo you shared. '
-                      'Albums you run are deleted for everyone in them. '
-                      'Members who are offline lose them the next time they '
-                      "open Keepsy. Copies saved outside Keepsy can't be "
-                      'recalled.'),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 14),
-                    child: deleting
-                        ? const _Note('Deleting your account…')
-                        : Row(
-                            children: [
-                              _Link('Delete everything',
-                                  warn: true, onTap: onConfirm),
-                              const _Mid(),
-                              _Link('Cancel', onTap: onDismiss),
-                            ],
-                          ),
-                  ),
-                ],
-              )
-            : Align(
-                key: const ValueKey('ask'),
-                alignment: Alignment.centerLeft,
-                child: _Link('Delete account', warn: true, onTap: onAsk),
-              ),
+    final color = warn ? Warm.warn : Warm.ink;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: SizedBox(
+        height: 54,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: color),
+              const SizedBox(width: 14),
+              Text(label, style: Warm.sheetRow.copyWith(color: color)),
+            ],
+          ),
+        ),
       ),
     );
   }
+}
+
+class _NameSheet extends StatefulWidget {
+  final String name;
+
+  const _NameSheet({required this.name});
+
+  static Future<String?> show(BuildContext context, String name) =>
+      showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: Warm.ground,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+        builder: (_) => _NameSheet(name: name),
+      );
+
+  @override
+  State<_NameSheet> createState() => _NameSheetState();
+}
+
+class _NameSheetState extends State<_NameSheet> {
+  late final TextEditingController _draft =
+      TextEditingController(text: widget.name);
+
+  @override
+  void dispose() {
+    _draft.dispose();
+    super.dispose();
+  }
+
+  String get _clean => _draft.text.trim();
+
+  bool get _ready => _clean.isNotEmpty && _clean != widget.name.trim();
+
+  void _save() {
+    if (_ready) Navigator.of(context).pop(_clean);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inset = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(26, 12, 26, 22 + inset),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _Grip(),
+            const SizedBox(height: 16),
+            Text('Your name', style: Warm.sheetTitle),
+            const SizedBox(height: 16),
+            WarmField(
+              controller: _draft,
+              label: 'Name',
+              maxLength: 28,
+              autofocus: true,
+              autofillHints: const [AutofillHints.name],
+              textInputAction: TextInputAction.done,
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _save(),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(2, 10, 2, 0),
+              child: Text('Only people in your albums can see it.',
+                  style: Warm.pageSoft),
+            ),
+            const SizedBox(height: 22),
+            WarmButton(label: 'Save', onTap: _ready ? _save : null),
+            const SizedBox(height: 6),
+            Center(
+              child: WarmTextButton(
+                label: 'Cancel',
+                onTap: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Grip extends StatelessWidget {
+  const _Grip();
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Container(
+          width: 36,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Warm.inkGhost,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      );
 }

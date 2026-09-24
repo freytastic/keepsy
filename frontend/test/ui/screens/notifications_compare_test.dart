@@ -146,7 +146,7 @@ void main() {
     expect(trust.numbered.single, alerted,
         reason: 'the digits must be for the key that raised the alarm');
 
-    await tester.tap(find.text('They match : Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('They matched'));
     await tester.pumpAndSettle();
@@ -167,7 +167,7 @@ void main() {
 
     await tester.tap(find.text('Compare'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('They match : Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text("They didn't"));
     await tester.pumpAndSettle();
@@ -205,7 +205,7 @@ void main() {
 
     await tester.tap(find.text('Compare'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('They match : Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('They matched'));
     await tester.pumpAndSettle();
@@ -222,7 +222,7 @@ void main() {
 
     await tester.tap(find.text('Compare'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('They match : Mark as verified'));
+    await tester.tap(find.text('They match'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('They matched'));
     await tester.pumpAndSettle();

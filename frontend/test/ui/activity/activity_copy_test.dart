@@ -107,8 +107,8 @@ void main() {
 
       expect(line.lead, 'Juno');
       expect(line.rest, ' left');
-      expect(line.aside, contains('was rotated'));
-      expect(line.aside, contains("can't read"));
+      expect(line.aside, contains("can't see anything added"));
+      expect(line.aside, isNot(contains('still locking')));
       expect(line.warn, isFalse);
     });
 
@@ -123,8 +123,8 @@ void main() {
         names,
       );
 
-      expect(line.aside, isNot(contains('was rotated')));
-      expect(line.aside, contains('not finished'));
+      expect(line.aside, isNot(contains("can't see")));
+      expect(line.aside, contains('still locking'));
       expect(line.warn, isTrue);
     });
 
@@ -160,15 +160,13 @@ void main() {
     test('security without an alarm points at access changes', () {
       final say = sayForSecurity(needs: 1, happened: 0);
       expect(say.title, '1 security update to review.');
-      expect(say.sub, contains('access changes'));
+      expect(say.sub, contains('access'));
     });
 
     test('security says so plainly when nothing is waiting', () {
       expect(sayForSecurity(needs: 0, happened: 9).title, "You're up to date.");
       expect(sayForSecurity(needs: 0, happened: 9).sub,
-          '9 recent security updates are in your history.');
-      expect(sayForSecurity(needs: 0, happened: 1).sub,
-          '1 recent security update is in your history.');
+          'Nothing needs you right now.');
     });
 
     test('security has an empty state that promises what will appear', () {

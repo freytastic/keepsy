@@ -45,7 +45,7 @@ void main() {
     expect(labels, [
       AlbumCopy.selectPhotos,
       AlbumCopy.downloadAlbum,
-      AlbumCopy.peopleAndSafety,
+      AlbumCopy.people,
       AlbumCopy.albumInfo,
     ]);
   });
@@ -82,7 +82,7 @@ void main() {
       (tester) async {
     await open(tester);
 
-    await tester.tap(find.text(AlbumCopy.peopleAndSafety));
+    await tester.tap(find.text(AlbumCopy.people));
     await tester.pumpAndSettle();
 
     expect(chosen, isEmpty, reason: 'its screen lands in a later pass');

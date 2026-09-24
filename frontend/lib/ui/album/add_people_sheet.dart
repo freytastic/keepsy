@@ -10,6 +10,7 @@ import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/blur_scrim.dart';
 import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
 
 import 'album_copy.dart';
 import 'member_avatars.dart';
@@ -415,19 +416,9 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
               style: _help.copyWith(color: Warm.inkFaint)),
         ),
         const SizedBox(height: 22),
-        Row(
-          children: [
-            Expanded(
-              child: _Button(
-                  label: AlbumCopy.addAnother, primary: false, onTap: _again),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _Button(
-                  label: AlbumCopy.addDone, primary: true, onTap: _close),
-            ),
-          ],
-        ),
+        _Button(label: AlbumCopy.addDone, primary: true, onTap: _close),
+        const SizedBox(height: 6),
+        _Button(label: AlbumCopy.addAnother, primary: false, onTap: _again),
       ],
     );
   }
@@ -470,13 +461,16 @@ class _Faces extends StatelessWidget {
 
   static const double _size = 34;
   static const double _step = 26;
+  static const double _ringWidth = 2.5;
+  // The ring sits outside the face, so the box must hold it or it clips flat
+  static const double _outer = _size + _ringWidth * 2;
 
   @override
   Widget build(BuildContext context) {
     final shown = members.take(4).toList();
     return SizedBox(
-      height: _size,
-      width: shown.length * _step + _size,
+      height: _outer,
+      width: shown.length * _step + _outer,
       child: Stack(
         children: [
           for (var i = 0; i < shown.length; i++)
@@ -534,7 +528,7 @@ class _Faces extends StatelessWidget {
           shape: BoxShape.circle,
           color: Warm.ground,
         ),
-        child: Padding(padding: const EdgeInsets.all(2.5), child: child),
+        child: Padding(padding: const EdgeInsets.all(_ringWidth), child: child),
       );
 }
 
@@ -555,52 +549,63 @@ class _Cell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final edge = active
-        ? Border.all(color: Warm.ink, width: 1.6)
-        : error
-            ? Border.all(color: Warm.warn.withValues(alpha: 0.55), width: 1.4)
-            : Border.all(color: const Color(0x0D1C1917));
-    return AnimatedContainer(
-      duration: Warm.quick,
+    final rule = error
+        ? Warm.warn
+        : active
+            ? Warm.ink
+            : char != null
+                ? Warm.inkFaint
+                : Warm.inkGhost;
+    return SizedBox(
       width: width,
       height: 46,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10),
-        // Darker at the top reads as pressed into the page
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFF1ECE4), Color(0xFFFCFAF6)],
-        ),
-        border: edge,
-      ),
-      child: AnimatedSwitcher(
-        duration: Warm.quick,
-        transitionBuilder: (child, a) => ScaleTransition(
-          scale: Tween(begin: 0.8, end: 1.0).animate(a),
-          child: FadeTransition(opacity: a, child: child),
-        ),
-        child: char != null
-            ? Text(
-                char!,
-                key: ValueKey(char),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Warm.ink,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              )
-            : active
-                ? FadeTransition(
-                    opacity: blink.drive(TweenSequence([
-                      TweenSequenceItem(tween: ConstantTween(1.0), weight: 1),
-                      TweenSequenceItem(tween: ConstantTween(0.0), weight: 1),
-                    ])),
-                    child: Container(width: 1.6, height: 20, color: Warm.ink),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedSwitcher(
+            duration: Warm.quick,
+            transitionBuilder: (child, a) => ScaleTransition(
+              scale: Tween(begin: 0.8, end: 1.0).animate(a),
+              child: FadeTransition(opacity: a, child: child),
+            ),
+            child: char != null
+                ? Text(
+                    char!,
+                    key: ValueKey(char),
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w600,
+                      color: Warm.ink,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   )
-                : const SizedBox.shrink(),
+                : active
+                    ? FadeTransition(
+                        opacity: blink.drive(TweenSequence([
+                          TweenSequenceItem(
+                              tween: ConstantTween(1.0), weight: 1),
+                          TweenSequenceItem(
+                              tween: ConstantTween(0.0), weight: 1),
+                        ])),
+                        child:
+                            Container(width: 1.6, height: 22, color: Warm.ink),
+                      )
+                    : const SizedBox.shrink(),
+          ),
+          Positioned(
+            left: 3,
+            right: 3,
+            bottom: 3,
+            child: AnimatedContainer(
+              duration: Warm.quick,
+              height: 2,
+              decoration: BoxDecoration(
+                color: rule,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -614,40 +619,9 @@ class _Button extends StatelessWidget {
   const _Button({required this.label, required this.primary, this.onTap});
 
   @override
-  Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      opacity: onTap == null ? 0.32 : 1,
-      duration: Warm.quick,
-      child: PressableScale(
-        onTap: onTap,
-        child: Container(
-          height: 50,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(25),
-            gradient: primary ? Warm.ctaFill : null,
-            color: primary ? null : const Color(0x0F1C1917),
-            boxShadow: primary
-                ? [
-                    BoxShadow(
-                        color: Warm.shadow(0.16),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2)),
-                  ]
-                : null,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: primary ? Warm.ctaInk : Warm.inkSoft,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => primary
+      ? WarmButton(label: label, onTap: onTap)
+      : Center(child: WarmTextButton(label: label, onTap: onTap));
 }
 
 class _Chip extends StatelessWidget {
@@ -660,16 +634,14 @@ class _Chip extends StatelessWidget {
   Widget build(BuildContext context) {
     return PressableScale(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0x0F1C1917),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(label,
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: Warm.ink)),
-      ),
+      child: Text(label,
+          style: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: Warm.ink,
+            decoration: TextDecoration.underline,
+            decorationColor: Warm.inkGhost,
+          )),
     );
   }
 }

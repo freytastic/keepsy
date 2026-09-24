@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +20,8 @@ import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/camera_stage.dart';
+import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:keepsy/ui/widgets/warm_field.dart';
 
 const int _kOtpLength = 6;
 final RegExp _kEmailRe = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
@@ -711,43 +712,17 @@ class _EmailPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 320),
-        width: double.infinity,
-        height: Warm.fieldHeight,
-        decoration: BoxDecoration(
-          gradient: Warm.stoneFill,
-          borderRadius: BorderRadius.circular(Warm.fieldRadius),
-          boxShadow: Warm.stoneShadow,
-        ),
-        child: TextField(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 300),
+        child: WarmField(
           controller: controller,
           focusNode: focusNode,
+          label: 'Email address',
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.go,
+          autofillHints: const [AutofillHints.email],
           autocorrect: false,
-          textAlign: TextAlign.center,
-          textAlignVertical: TextAlignVertical.center,
-          style: Warm.input,
-          cursorColor: Warm.inkFaint,
-          cursorWidth: 2,
           onSubmitted: (_) => onSubmit(),
-          decoration: const InputDecoration(
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            disabledBorder: InputBorder.none,
-            errorBorder: InputBorder.none,
-            focusedErrorBorder: InputBorder.none,
-            hintText: 'your email',
-            hintStyle: TextStyle(
-              color: Warm.inkGhost,
-              fontWeight: FontWeight.w400,
-              fontSize: 17,
-            ),
-            contentPadding: EdgeInsets.symmetric(horizontal: 24),
-          ),
-          spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
         ),
       ),
     );
@@ -823,23 +798,36 @@ class _OtpCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: Warm.quick,
-      curve: Warm.easeOut,
+    final rule = active
+        ? Warm.ink
+        : digit.isNotEmpty
+            ? Warm.inkFaint
+            : Warm.inkGhost;
+    return SizedBox(
       width: Warm.otpCellWidth,
       height: Warm.otpCellHeight,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        gradient: Warm.stoneFill,
-        borderRadius: BorderRadius.circular(Warm.otpCellRadius),
-        border: active ? Border.all(color: Warm.ink, width: 1.5) : null,
-        boxShadow: Warm.stoneShadow,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (digit.isNotEmpty)
+            Text(digit, style: Warm.otpDigit)
+          else if (active)
+            const _Caret(),
+          Positioned(
+            left: 4,
+            right: 4,
+            bottom: 4,
+            child: AnimatedContainer(
+              duration: Warm.quick,
+              height: 2,
+              decoration: BoxDecoration(
+                color: rule,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          ),
+        ],
       ),
-      child: digit.isNotEmpty
-          ? Text(digit, style: Warm.otpDigit)
-          : active
-              ? const _Caret()
-              : null,
     );
   }
 }
@@ -881,7 +869,7 @@ class _CaretState extends State<_Caret> with SingleTickerProviderStateMixin {
   }
 }
 
-class _Cta extends StatefulWidget {
+class _Cta extends StatelessWidget {
   const _Cta({
     required this.label,
     required this.ready,
@@ -895,137 +883,12 @@ class _Cta extends StatefulWidget {
   final Future<void> Function() onTap;
 
   @override
-  State<_Cta> createState() => _CtaState();
-}
-
-class _CtaState extends State<_Cta> {
-  bool _pressed = false;
-
-  @override
   Widget build(BuildContext context) {
-    final enabled = widget.ready;
-    return GestureDetector(
-      onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
-      onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
-      onTap: enabled
-          ? () {
-              setState(() => _pressed = false);
-              HapticFeedback.lightImpact();
-              widget.onTap();
-            }
-          : null,
-      child: AnimatedOpacity(
-        opacity: enabled ? 1 : 0.42,
-        duration: Warm.quick,
-        child: AnimatedScale(
-          scale: _pressed ? 0.965 : 1,
-          duration: Warm.quick,
-          curve: Warm.easeOut,
-          child: SizedBox(
-            width: 300,
-            height: Warm.ctaHeight,
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: Warm.ctaFill,
-                    borderRadius: BorderRadius.circular(Warm.ctaRadius),
-                    boxShadow: enabled ? Warm.ctaShadow : Warm.ctaShadowIdle,
-                  ),
-                  alignment: Alignment.center,
-                  child: widget.busy
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Warm.ctaInk,
-                          ),
-                        )
-                      : AnimatedSwitcher(
-                          duration: Warm.quick,
-                          child: Text(
-                            widget.label,
-                            key: ValueKey(widget.label),
-                            style: Warm.ctaLabel,
-                          ),
-                        ),
-                ),
-                Positioned.fill(child: _CtaGlow(lit: _pressed)),
-                const Positioned(
-                  top: 1,
-                  left: 1,
-                  right: 1,
-                  height: Warm.ctaHeight * 0.4,
-                  child: IgnorePointer(child: _CtaSheen()),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CtaSheen extends StatelessWidget {
-  const _CtaSheen();
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(Warm.ctaRadius - 1),
-          bottom: Radius.elliptical(Warm.ctaRadius, 12),
-        ),
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.white.withValues(alpha: 0.07),
-            Colors.white.withValues(alpha: 0),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CtaGlow extends StatelessWidget {
-  const _CtaGlow({required this.lit});
-
-  final bool lit;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(Warm.ctaRadius),
-      child: IgnorePointer(
-        child: AnimatedOpacity(
-          opacity: lit ? 1 : 0.37,
-          duration: Warm.quick,
-          child: ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  // Expand the short-side radius across the wide pill
-                  radius: 2.4,
-                  colors: [
-                    Warm.orbPeach.withValues(alpha: 0.55),
-                    Warm.orbBlush.withValues(alpha: 0.28),
-                    Warm.orbPeach.withValues(alpha: 0),
-                  ],
-                  stops: const [0, 0.45, 0.72],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+    return WarmButton(
+      label: label,
+      width: 300,
+      busy: busy,
+      onTap: ready ? onTap : null,
     );
   }
 }

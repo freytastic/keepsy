@@ -14,6 +14,8 @@ typedef PeekPrint = Widget Function({required bool fanned});
 
 const double _degrees = math.pi / 180;
 
+enum ShelfPeekAction { open, people }
+
 class ShelfPeek extends StatefulWidget {
   final AlbumModel album;
   final Rect from;
@@ -30,14 +32,14 @@ class ShelfPeek extends StatefulWidget {
     this.entry = kAlwaysCompleteAnimation,
   });
 
-  // Resolves true when the album should open
-  static PageRoute<bool> route({
+  // Resolves to the action picked, or null when dismissed
+  static PageRoute<ShelfPeekAction> route({
     required AlbumModel album,
     required Rect from,
     required double tilt,
     required PeekPrint print,
   }) =>
-      PageRouteBuilder<bool>(
+      PageRouteBuilder<ShelfPeekAction>(
         opaque: false,
         barrierColor: Colors.transparent,
         transitionDuration: const Duration(milliseconds: 520),
@@ -90,7 +92,9 @@ class _ShelfPeekState extends State<ShelfPeek> {
 
   // This route leaves at once, so the print tucks away in an overlay entry
   // that stays above the screen being opened
-  void _open() {
+  void _open() => _leave(ShelfPeekAction.open);
+
+  void _leave(ShelfPeekAction action) {
     late final OverlayEntry tuck;
     tuck = OverlayEntry(
       builder: (_) => _Tuck(
@@ -101,7 +105,7 @@ class _ShelfPeekState extends State<ShelfPeek> {
     );
     Overlay.of(context, rootOverlay: true).insert(tuck);
     setState(() => _leaving = true);
-    Navigator.of(context).pop(true);
+    Navigator.of(context).pop(action);
   }
 
   Rect _targetFor(Size size, EdgeInsets pad) {
@@ -189,7 +193,10 @@ class _ShelfPeekState extends State<ShelfPeek> {
             onTap: _open,
           ),
           const MenuItem(label: AlbumCopy.downloadAlbum, onTap: null),
-          const MenuItem(label: AlbumCopy.peopleAndSafety, onTap: null),
+          MenuItem(
+            label: AlbumCopy.people,
+            onTap: () => _leave(ShelfPeekAction.people),
+          ),
           const MenuSeparator(),
           MenuItem(
             label: AlbumCopy.albumInfo,

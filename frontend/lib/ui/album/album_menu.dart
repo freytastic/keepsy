@@ -97,7 +97,7 @@ class AlbumMenu extends StatelessWidget {
                   onTap: () => _pick(context, onAddSomeone!),
                 ),
               MenuItem(
-                label: AlbumCopy.peopleAndSafety,
+                label: AlbumCopy.people,
                 onTap:
                     onPeople == null ? null : () => _pick(context, onPeople!),
               ),

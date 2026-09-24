@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:keepsy/data/api/album_api.dart';
 import 'package:keepsy/data/models/album_model.dart';
 import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:keepsy/ui/people/everyone.dart';
 import 'package:keepsy/ui/screens/album_detail_screen.dart';
 import 'package:keepsy/ui/create/create_album_screen.dart';
 import 'package:keepsy/ui/screens/notifications_screen.dart';
@@ -64,11 +65,13 @@ class MainShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ShelfScreen(
-      onOpenProfile: () => Navigator.of(context)
-          .push(_slide(const ProfileScreen(), from: const Offset(-1, 0))),
+      onOpenProfile: () => Navigator.of(context).push(_slide(
+          ProfileScreen(onSafetyNumbers: () => openEveryone(context)),
+          from: const Offset(-1, 0))),
       onOpenAlbum: (album) => _openAlbum(context, album),
       onCreateAlbum: () => _create(context),
       onOpenActivity: () => _openActivity(context),
+      onOpenPeople: (album) => openAlbumPeople(context, album),
     );
   }
 }

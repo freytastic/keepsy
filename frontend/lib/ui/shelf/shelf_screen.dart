@@ -26,6 +26,7 @@ class ShelfScreen extends StatefulWidget {
   final Future<void> Function(AlbumModel album)? onOpenAlbum;
   final VoidCallback? onCreateAlbum;
   final VoidCallback? onOpenActivity;
+  final Future<void> Function(AlbumModel album)? onOpenPeople;
 
   const ShelfScreen({
     super.key,
@@ -33,6 +34,7 @@ class ShelfScreen extends StatefulWidget {
     this.onOpenAlbum,
     this.onCreateAlbum,
     this.onOpenActivity,
+    this.onOpenPeople,
   });
 
   @override
@@ -271,10 +273,8 @@ class _Header extends StatelessWidget {
           GestureDetector(
             onTap: onOpenProfile,
             child: FaceCircle(
-              size: 38,
-              color: Warm.ground,
-              gradient: Warm.stoneFill,
-              shadow: Warm.avatarShadow,
+              size: 34,
+              color: photo == null ? Warm.orbPeach : Colors.transparent,
               photo: photo,
               child: Text(initial, style: Warm.avatarInitial),
             ),
@@ -378,19 +378,9 @@ class _ViewPickerState extends State<_ViewPicker>
                   scale: _pressed ? 0.94 : 1,
                   duration: Warm.quick,
                   curve: Warm.easeOut,
-                  child: Container(
-                    width: 38,
-                    height: 38,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      gradient: Warm.stoneFill,
-                      shape: BoxShape.circle,
-                      boxShadow: Warm.avatarShadow,
-                    ),
-                    child: CustomPaint(
-                      size: const Size.square(18),
-                      painter: _LayoutGlyph(_split),
-                    ),
+                  child: CustomPaint(
+                    size: const Size.square(18),
+                    painter: _LayoutGlyph(_split),
                   ),
                 ),
               ),
@@ -413,8 +403,8 @@ class _LayoutGlyph extends CustomPainter {
     final t = split.value;
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.35
-      ..color = Warm.inkSoft;
+      ..strokeWidth = 1.6
+      ..color = Warm.ink;
     RRect r(double x, double y, double w) => RRect.fromRectAndRadius(
         Rect.fromLTWH(x, y, w, 5.6), const Radius.circular(1.5));
     final w = 12 - 6.8 * t;
@@ -423,7 +413,7 @@ class _LayoutGlyph extends CustomPainter {
     canvas.drawRRect(r(3, 10, w), paint);
     canvas.drawRRect(
       r(3 + 6.8 * t, 10, w),
-      paint..color = Warm.inkSoft.withValues(alpha: Warm.inkSoft.a * t),
+      paint..color = Warm.ink.withValues(alpha: t),
     );
   }
 
@@ -689,8 +679,19 @@ class _ShelfCardState extends State<_ShelfCard> {
     unawaited(route.completed.then((_) {
       if (mounted) setState(() => _lifted = false);
     }));
-    final open = await Navigator.of(context, rootNavigator: true).push(route);
-    if (open == true) widget.onTap();
+    final action =
+        await Navigator.of(context, rootNavigator: true).push(route);
+    if (!mounted) return;
+    switch (action) {
+      case ShelfPeekAction.open:
+        widget.onTap();
+      case ShelfPeekAction.people:
+        final people =
+            context.findAncestorWidgetOfExactType<ShelfScreen>()?.onOpenPeople;
+        await people?.call(widget.album);
+      case null:
+        break;
+    }
   }
 
   @override
