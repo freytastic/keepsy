@@ -212,7 +212,7 @@ class _AlbumPrintState extends State<AlbumPrint> {
               ),
             ),
             const SizedBox(width: 13),
-            _Faces(
+            PrintFaces(
               albumId: widget.albumId,
               members: widget.members,
               total: widget.totalMembers,
@@ -277,17 +277,21 @@ class _BackPrint extends StatelessWidget {
   }
 }
 
-class _Faces extends StatelessWidget {
+class PrintFaces extends StatelessWidget {
   final String albumId;
   final List<MemberPreview> members;
   final int total;
   final String? Function(MemberPreview) nameOf;
+  // Matches whatever the faces sit on
+  final Color ring;
 
-  const _Faces({
+  const PrintFaces({
+    super.key,
     required this.albumId,
     required this.members,
     required this.total,
     required this.nameOf,
+    this.ring = Warm.paper,
   });
 
   static const double _size = 24;
@@ -315,6 +319,7 @@ class _Faces extends StatelessWidget {
                     albumId: albumId,
                     token: shown[i].memberToken,
                     initial: _initial(nameOf(shown[i])),
+                    ring: ring,
                   ),
                 ),
             ],
@@ -341,16 +346,22 @@ class _Face extends StatelessWidget {
   final String albumId;
   final String token;
   final String? initial;
+  final Color ring;
 
-  const _Face({required this.albumId, required this.token, this.initial});
+  const _Face({
+    required this.albumId,
+    required this.token,
+    required this.ring,
+    this.initial,
+  });
 
   @override
   Widget build(BuildContext context) {
     return FaceCircle(
-      size: _Faces._size,
+      size: PrintFaces._size,
       color: hueFor(token).withValues(alpha: 0.62),
       // The ring is the paper, so the faces read as printed on the chin
-      shadow: const [BoxShadow(color: Warm.paper, spreadRadius: 2)],
+      shadow: [BoxShadow(color: ring, spreadRadius: 2)],
       photo: memberPhoto(context, albumId, token),
       child: initial == null
           ? const SizedBox.shrink()

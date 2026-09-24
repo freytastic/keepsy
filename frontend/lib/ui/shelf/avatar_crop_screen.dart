@@ -240,26 +240,6 @@ class _Back extends StatelessWidget {
   const _Back();
 
   @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: 'Back',
-      child: GestureDetector(
-        key: const ValueKey('avatar-back'),
-        onTap: () => Navigator.of(context).maybePop(),
-        child: Container(
-          width: 38,
-          height: 38,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            gradient: Warm.stoneFill,
-            shape: BoxShape.circle,
-            boxShadow: Warm.avatarShadow,
-          ),
-          child: const Icon(Icons.chevron_left_rounded,
-              size: 22, color: Warm.inkSoft),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      const WarmBack(key: ValueKey('avatar-back'));
 }
