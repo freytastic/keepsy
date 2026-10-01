@@ -34,9 +34,10 @@ func (s *refreshSessionStore) ExtendByToken(ctx context.Context, t string, e tim
 type stubOTP struct{}
 
 func (stubOTP) SetOTP(context.Context, string, string, time.Duration) error { return nil }
-func (stubOTP) GetOTP(context.Context, string) (string, error)              { return "", nil }
-func (stubOTP) DeleteOTP(context.Context, string) error                     { return nil }
-func (stubOTP) CheckRateLimit(context.Context, string) (bool, error)        { return true, nil }
+func (stubOTP) CheckOTP(context.Context, string, string, int) (bool, error) { return false, nil }
+func (stubOTP) CheckRateLimit(context.Context, string, int, time.Duration) (bool, error) {
+	return true, nil
+}
 
 type stubUsers struct{}
 

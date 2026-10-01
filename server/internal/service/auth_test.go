@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,21 +15,31 @@ import (
 )
 
 type MockOTPStore struct {
-	SetOTPFunc         func(ctx context.Context, email, otp string, ttl time.Duration) error
-	GetOTPFunc         func(ctx context.Context, email string) (string, error)
-	DeleteOTPFunc      func(ctx context.Context, email string) error
-	CheckRateLimitFunc func(ctx context.Context, email string) (bool, error)
+	SetOTPFunc         func(ctx context.Context, key, codeMAC string, ttl time.Duration) error
+	CheckOTPFunc       func(ctx context.Context, key, codeMAC string, maxAttempts int) (bool, error)
+	CheckRateLimitFunc func(ctx context.Context, key string, max int, window time.Duration) (bool, error)
 }
 
-func (m *MockOTPStore) SetOTP(ctx context.Context, e, o string, t time.Duration) error {
-	return m.SetOTPFunc(ctx, e, o, t)
+func (m *MockOTPStore) SetOTP(ctx context.Context, k, c string, t time.Duration) error {
+	return m.SetOTPFunc(ctx, k, c, t)
 }
-func (m *MockOTPStore) GetOTP(ctx context.Context, e string) (string, error) {
-	return m.GetOTPFunc(ctx, e)
+func (m *MockOTPStore) CheckOTP(ctx context.Context, k, c string, n int) (bool, error) {
+	return m.CheckOTPFunc(ctx, k, c, n)
 }
-func (m *MockOTPStore) DeleteOTP(ctx context.Context, e string) error { return m.DeleteOTPFunc(ctx, e) }
-func (m *MockOTPStore) CheckRateLimit(ctx context.Context, e string) (bool, error) {
-	return m.CheckRateLimitFunc(ctx, e)
+func (m *MockOTPStore) CheckRateLimit(ctx context.Context, k string, n int, w time.Duration) (bool, error) {
+	return m.CheckRateLimitFunc(ctx, k, n, w)
+}
+
+// otpMatches accepts only the MAC the service derives for code
+func otpMatches(code string) func(context.Context, string, string, int) (bool, error) {
+	s := NewAuthService(nil, nil, nil, nil, testHMACKey)
+	return func(_ context.Context, key, codeMAC string, _ int) (bool, error) {
+		emailHMAC, err := hex.DecodeString(key)
+		if err != nil {
+			return false, err
+		}
+		return codeMAC == s.otpMAC(emailHMAC, code), nil
+	}
 }
 
 type MockUserStore struct {
@@ -97,8 +109,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			otp:  correctOTP,
 			mockOTP: func() *MockOTPStore {
 				return &MockOTPStore{
-					GetOTPFunc:    func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
-					DeleteOTPFunc: func(ctx context.Context, e string) error { return nil },
+					CheckOTPFunc: otpMatches(correctOTP),
 				}
 			},
 			mockUser: func() *MockUserStore {
@@ -121,8 +132,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			otp:  correctOTP,
 			mockOTP: func() *MockOTPStore {
 				return &MockOTPStore{
-					GetOTPFunc:    func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
-					DeleteOTPFunc: func(ctx context.Context, e string) error { return nil },
+					CheckOTPFunc: otpMatches(correctOTP),
 				}
 			},
 			mockUser: func() *MockUserStore {
@@ -149,7 +159,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			otp:  "wrong",
 			mockOTP: func() *MockOTPStore {
 				return &MockOTPStore{
-					GetOTPFunc: func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
+					CheckOTPFunc: otpMatches(correctOTP),
 				}
 			},
 			mockUser:    func() *MockUserStore { return &MockUserStore{} },
@@ -161,7 +171,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 			otp:  correctOTP,
 			mockOTP: func() *MockOTPStore {
 				return &MockOTPStore{
-					GetOTPFunc: func(ctx context.Context, e string) (string, error) { return "", errors.New("not found") },
+					CheckOTPFunc: func(context.Context, string, string, int) (bool, error) { return false, nil },
 				}
 			},
 			mockUser:    func() *MockUserStore { return &MockUserStore{} },
@@ -214,8 +224,7 @@ func TestAuthService_VerifyOTP_KeepsyIDCollisionRetry(t *testing.T) {
 		},
 	}
 	otpStore := &MockOTPStore{
-		GetOTPFunc:    func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
-		DeleteOTPFunc: func(ctx context.Context, e string) error { return nil },
+		CheckOTPFunc: otpMatches(correctOTP),
 	}
 	sessStore := &MockSessionStore{
 		CreateFunc: func(ctx context.Context, s *model.Session) error { return nil },
@@ -244,8 +253,7 @@ func TestAuthService_VerifyOTP_ReturnsUserIDAndSessionExpiry(t *testing.T) {
 	var created *model.Session
 
 	otpStore := &MockOTPStore{
-		GetOTPFunc:    func(ctx context.Context, e string) (string, error) { return correctOTP, nil },
-		DeleteOTPFunc: func(ctx context.Context, e string) error { return nil },
+		CheckOTPFunc: otpMatches(correctOTP),
 	}
 	userStore := &MockUserStore{
 		GetByEmailHMACFunc: func(ctx context.Context, _ []byte) (*model.User, error) {
@@ -421,5 +429,76 @@ func TestAuthService_RefreshSession_SeparatesDeadSessionFromBrokenDatabase(t *te
 					got, tt.wantInvalid, err)
 			}
 		})
+	}
+}
+
+// Redis must only ever see the email HMAC and a keyed MAC of the code
+func TestAuthService_RequestOTP_StoresNoPlaintext(t *testing.T) {
+	const email = "Person@Example.com"
+	var keys []string
+	var stored, sent string
+	otpStore := &MockOTPStore{
+		CheckRateLimitFunc: func(_ context.Context, k string, _ int, _ time.Duration) (bool, error) {
+			keys = append(keys, k)
+			return true, nil
+		},
+		SetOTPFunc: func(_ context.Context, k, c string, _ time.Duration) error {
+			keys = append(keys, k)
+			stored = c
+			return nil
+		},
+	}
+	mail := &MockEmailService{SendOTPFunc: func(_, o string) error { sent = o; return nil }}
+
+	s := NewAuthService(otpStore, &MockUserStore{}, &MockSessionStore{}, mail, testHMACKey)
+	if err := s.RequestOTP(context.Background(), email); err != nil {
+		t.Fatalf("RequestOTP: %v", err)
+	}
+
+	want := hex.EncodeToString(s.HashEmail(email))
+	for _, k := range keys {
+		if k != want {
+			t.Errorf("store key = %q, want the email HMAC %q", k, want)
+		}
+		if strings.Contains(strings.ToLower(k), "example") {
+			t.Errorf("store key %q contains the email", k)
+		}
+	}
+	if stored == "" || strings.Contains(stored, sent) {
+		t.Errorf("stored value %q exposes the code %q", stored, sent)
+	}
+	// Bound to the email : the same code for another address must not match
+	if stored == s.otpMAC(s.HashEmail("other@example.com"), sent) {
+		t.Error("code MAC is not bound to the email")
+	}
+}
+
+func TestAuthService_VerifyOTP_PassesAttemptLimit(t *testing.T) {
+	var got int
+	otpStore := &MockOTPStore{
+		CheckOTPFunc: func(_ context.Context, _, _ string, n int) (bool, error) {
+			got = n
+			return false, nil
+		},
+	}
+	s := NewAuthService(otpStore, &MockUserStore{}, &MockSessionStore{}, &MockEmailService{}, testHMACKey)
+	if _, err := s.VerifyOTP(context.Background(), "a@b.c", "000000"); !errors.Is(err, ErrInvalidOTP) {
+		t.Fatalf("err = %v, want ErrInvalidOTP", err)
+	}
+	if got != maxOTPAttempts {
+		t.Errorf("maxAttempts = %d, want %d", got, maxOTPAttempts)
+	}
+}
+
+// A store failure is not a wrong code : the user must not be told to retype
+func TestAuthService_VerifyOTP_StoreFailureIsNotInvalidOTP(t *testing.T) {
+	down := errors.New("redis down")
+	otpStore := &MockOTPStore{
+		CheckOTPFunc: func(context.Context, string, string, int) (bool, error) { return false, down },
+	}
+	s := NewAuthService(otpStore, &MockUserStore{}, &MockSessionStore{}, &MockEmailService{}, testHMACKey)
+	_, err := s.VerifyOTP(context.Background(), "a@b.c", "000000")
+	if !errors.Is(err, down) {
+		t.Fatalf("err = %v, want the store error", err)
 	}
 }
