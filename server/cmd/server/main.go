@@ -161,12 +161,15 @@ func main() {
 			),
 		),
 	).Methods(http.MethodGet)
-	// resolve a random keepsy_id to a prekey bundle. Same
-	// per-(requester, handle) 5/min limit : the real user_id never leaves here
+	// resolve a random keepsy_id to a prekey bundle. Per (requester, handle)
+	// 5/min plus a per requester cap on all ID lookups : the real user_id never
+	// leaves here
 	authed.Handle(
 		"/users/by-handle/{handle}/prekey-bundle",
-		rateLimiter.Middleware(prekey.KeyByRequesterAndHandle, 5, 60*time.Second)(
-			http.HandlerFunc(prekeyHandler.GetPrekeyBundleByHandle),
+		rateLimiter.Middleware(prekey.KeyByRequesterHandleLookups, prekey.MaxHandleLookups, prekey.HandleLookupsWindow)(
+			rateLimiter.Middleware(prekey.KeyByRequesterAndHandle, 5, 60*time.Second)(
+				http.HandlerFunc(prekeyHandler.GetPrekeyBundleByHandle),
+			),
 		),
 	).Methods(http.MethodGet)
 

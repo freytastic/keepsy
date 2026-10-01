@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"log"
 	"math/big"
@@ -20,6 +21,15 @@ import (
 
 const maxKeepsyIDAttempts = 5
 
+const (
+	otpTTL = 5 * time.Minute
+	// Wrong guesses allowed per code before it is burned
+	maxOTPAttempts = 5
+	// Code requests allowed per email per window
+	maxOTPRequests   = 3
+	otpRequestWindow = 5 * time.Minute
+)
+
 // Successful refreshes extend this sliding lifetime
 const sessionTTL = 30 * 24 * time.Hour
 
@@ -32,11 +42,11 @@ var (
 )
 
 // repository interfaces to allow for mocking in tests
+// Keys are the hex email HMAC and values are code HMACs, never plaintext
 type OTPStore interface {
-	SetOTP(ctx context.Context, email, otp string, ttl time.Duration) error
-	GetOTP(ctx context.Context, email string) (string, error)
-	DeleteOTP(ctx context.Context, email string) error
-	CheckRateLimit(ctx context.Context, email string) (bool, error)
+	SetOTP(ctx context.Context, key, codeMAC string, ttl time.Duration) error
+	CheckOTP(ctx context.Context, key, codeMAC string, maxAttempts int) (bool, error)
+	CheckRateLimit(ctx context.Context, key string, max int, window time.Duration) (bool, error)
 }
 
 type AuthUserStore interface {
@@ -57,6 +67,7 @@ type AuthService struct {
 	SessionRepo  SessionStore
 	EmailService EmailService
 	emailHMACKey []byte
+	otpKey       []byte
 }
 
 func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo SessionStore, emailService EmailService, emailHMACKey []byte) *AuthService {
@@ -69,7 +80,24 @@ func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo Sessio
 		SessionRepo:  sessionRepo,
 		EmailService: emailService,
 		emailHMACKey: emailHMACKey,
+		otpKey:       deriveOTPKey(emailHMACKey),
 	}
+}
+
+// Separate key so a code MAC can never equal an email HMAC
+func deriveOTPKey(emailHMACKey []byte) []byte {
+	mac := hmac.New(sha256.New, emailHMACKey)
+	mac.Write([]byte("keepsy-otp-key-v1"))
+	return mac.Sum(nil)
+}
+
+// A plain hash of a 6 digit code falls to a million guesses, so the stored
+// value is keyed and bound to the email it was sent to
+func (s *AuthService) otpMAC(emailHMAC []byte, otp string) string {
+	mac := hmac.New(sha256.New, s.otpKey)
+	mac.Write(emailHMAC)
+	mac.Write([]byte(otp))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // HashEmail computes HMAC-SHA256(emailHMACKey, lower(trim(email))). The
@@ -85,7 +113,9 @@ func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
 	// Internal failure logs intentionally drop the email + OTP : the server is
 	// the one place these two are joinable to a real identity, and a leaked
 	// log line should never become a re identification attack
-	allowed, err := s.OTPRepo.CheckRateLimit(ctx, email)
+	emailHMAC := s.HashEmail(email)
+	key := hex.EncodeToString(emailHMAC)
+	allowed, err := s.OTPRepo.CheckRateLimit(ctx, key, maxOTPRequests, otpRequestWindow)
 	if err != nil {
 		log.Printf("RequestOTP: rate limit check failed: %v", err)
 		return err
@@ -100,7 +130,7 @@ func (s *AuthService) RequestOTP(ctx context.Context, email string) error {
 		return err
 	}
 
-	if err := s.OTPRepo.SetOTP(ctx, email, otp, 5*time.Minute); err != nil {
+	if err := s.OTPRepo.SetOTP(ctx, key, s.otpMAC(emailHMAC, otp), otpTTL); err != nil {
 		log.Printf("RequestOTP: store failed: %v", err)
 		return err
 	}
@@ -121,20 +151,17 @@ type VerifiedSession struct {
 }
 
 func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (VerifiedSession, error) {
-	storedOTP, err := s.OTPRepo.GetOTP(ctx, email)
+	emailHMAC := s.HashEmail(email)
+	ok, err := s.OTPRepo.CheckOTP(ctx, hex.EncodeToString(emailHMAC), s.otpMAC(emailHMAC, otp), maxOTPAttempts)
 	if err != nil {
 		// Intentionally no email/otp in the log line
+		log.Printf("VerifyOTP: check failed: %v", err)
+		return VerifiedSession{}, err
+	}
+	if !ok {
 		return VerifiedSession{}, ErrInvalidOTP
 	}
 
-	if storedOTP != otp {
-		// Same : no email, never the OTP value
-		return VerifiedSession{}, ErrInvalidOTP
-	}
-
-	_ = s.OTPRepo.DeleteOTP(ctx, email)
-
-	emailHMAC := s.HashEmail(email)
 	user, err := s.UserRepo.GetByEmailHMAC(ctx, emailHMAC)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {

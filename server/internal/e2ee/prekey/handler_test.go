@@ -471,6 +471,62 @@ func TestPrekeyBundleByHandle_RateLimit(t *testing.T) {
 	}
 }
 
+// Distinct IDs each stay under the per ID limit, so only the per account cap
+// stops a sweep
+func TestPrekeyBundleByHandle_SweepCapped(t *testing.T) {
+	redisURL := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	if redisURL == "" {
+		t.Skip("set KEEPSY_TEST_REDIS_URL to run rate-limit test")
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
+	t.Cleanup(func() { _ = rdb.Close() })
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis ping: %v", err)
+	}
+	limiter := middleware.NewRateLimiter(rdb)
+
+	ikPub, _, spk, sig := genIdentity(t, fixedTs)
+	ts := int64(fixedTs)
+	target := uuid.New()
+	store := &mockStore{
+		identityByIDFn: func(_ context.Context, _ uuid.UUID) (*Identity, error) {
+			return &Identity{IKPub: []byte(ikPub), LKPub: make([]byte, 32), SPKPub: spk, SPKSig: sig, SPKTs: &ts}, nil
+		},
+		popRandomFn: func(_ context.Context, _ uuid.UUID) (*model.OneTimePrekey, error) { return nil, nil },
+		countFn:     func(_ context.Context, _ uuid.UUID) (int, error) { return 0, nil },
+	}
+	svc := NewService(store)
+	svc.SetClock(fixedClock)
+	resolver := stubResolver{fn: func(_ context.Context, _ string) (uuid.UUID, error) { return target, nil }}
+	h := NewHandler(svc, nil, resolver, nil)
+
+	r := mux.NewRouter()
+	r.Handle(
+		"/users/by-handle/{handle}/prekey-bundle",
+		limiter.Middleware(KeyByRequesterHandleLookups, MaxHandleLookups, HandleLookupsWindow)(
+			limiter.Middleware(KeyByRequesterAndHandle, 5, 60*time.Second)(
+				http.HandlerFunc(h.GetPrekeyBundleByHandle),
+			),
+		),
+	).Methods(http.MethodGet)
+
+	requester := uuid.New()
+	get := func(i int) int {
+		rec := httptest.NewRecorder()
+		path := fmt.Sprintf("/users/by-handle/K7F2%04d/prekey-bundle", i)
+		r.ServeHTTP(rec, authReq(http.MethodGet, path, nil, requester))
+		return rec.Code
+	}
+	for i := range MaxHandleLookups {
+		if code := get(i); code != http.StatusOK {
+			t.Fatalf("lookup %d: status=%d want 200", i+1, code)
+		}
+	}
+	if code := get(MaxHandleLookups); code != http.StatusTooManyRequests {
+		t.Fatalf("lookup %d of a new ID: status=%d want 429", MaxHandleLookups+1, code)
+	}
+}
+
 // TestPrekeyBundle_RateLimit drives the actual middleware.RateLimiter against a
 // real Redis. Skipped without KEEPSY_TEST_REDIS_URL
 func TestPrekeyBundle_RateLimit(t *testing.T) {
