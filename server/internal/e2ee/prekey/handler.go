@@ -384,6 +384,21 @@ func KeyByRequesterAndHandle(r *http.Request) string {
 	return "prekey-bundle-handle:" + uid.String() + ":" + norm
 }
 
+// Per ID limits alone let one account walk through many IDs, so its total
+// ID lookups are capped as well
+const (
+	MaxHandleLookups    = 20
+	HandleLookupsWindow = time.Hour
+)
+
+func KeyByRequesterHandleLookups(r *http.Request) string {
+	uid, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		return ""
+	}
+	return "prekey-bundle-handle-any:" + uid.String()
+}
+
 // Album-token limits preserve rotation retries without widening probe budgets
 func KeyByRequesterAndMemberToken(r *http.Request) string {
 	uid, ok := middleware.GetUserID(r.Context())
