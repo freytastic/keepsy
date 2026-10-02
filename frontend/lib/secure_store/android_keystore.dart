@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:keepsy/diagnostics/trace.dart';
 
 import 'key_handle.dart';
 import 'key_store_exceptions.dart';
@@ -69,10 +70,13 @@ class AndroidKeystore extends SecureKeyStore {
   /// Typed wrapper for MethodChannel.invokeMethod
   /// Maps PlatformException to typed KeyStoreException
   Future<R> _invoke<R>(String method, Map<String, Object?> args) async {
+    final span = Trace.start('keystore.$method');
     try {
       final result = await _channel.invokeMethod<Object?>(method, args);
+      span.end();
       return result as R;
     } on PlatformException catch (e) {
+      span.fail(e.code);
       throw KeyStoreException.fromPlatform(method, e);
     }
   }

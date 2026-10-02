@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import io.flutter.plugin.common.MethodCall
@@ -18,6 +19,7 @@ import java.security.SecureRandom
 import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 //  It uses the Android Keystore system to protect a master "wrapper" key,
@@ -79,6 +81,7 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
                 }
 
                 "wipeAll" -> dispatch(result) { wipeAll(); null }
+                "probe" -> dispatch(result) { probe() }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -171,6 +174,37 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
         return loadMap().entries
             .filter { prefix == null || it.value.first.startsWith(prefix) }
             .map { it.key to it.value.first }
+    }
+
+    // Diagnostics only : what backs the wrap key and what one envelope read costs
+    private fun probe(): Map<String, Any?> {
+        if (!ks.containsAlias(WRAP_ALIAS)) return mapOf("initialized" to false)
+        val key = (ks.getEntry(WRAP_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
+        val info = SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+            .getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        val level = if (Build.VERSION.SDK_INT >= 31) {
+            when (info.securityLevel) {
+                KeyProperties.SECURITY_LEVEL_STRONGBOX -> "strongbox"
+                KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "tee"
+                KeyProperties.SECURITY_LEVEL_SOFTWARE -> "software"
+                else -> "unknown"
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            if (info.isInsideSecureHardware) "hardware" else "software"
+        }
+        val loads = (0 until 3).map {
+            val t = System.nanoTime()
+            loadMap()
+            (System.nanoTime() - t) / 1_000_000.0
+        }
+        return mapOf(
+            "initialized" to true,
+            "level" to level,
+            "envelopeBytes" to File(ctx.filesDir, ENVELOPE_FILE).length(),
+            "entries" to loadMap().size,
+            "loadMs" to loads,
+        )
     }
 
     private fun wipeAll() {
