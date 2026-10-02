@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:keepsy/secure_store/key_handle.dart';
@@ -130,6 +131,11 @@ class AlbumKeyStore {
 
   // Only public surface for MK bytes (D2). Mirrors SecureKeyStore.use<T> :
   // bytes zeroed in finally, callback style so nothing escapes
+
+  // Overlapping callers for one MK share a single key store read. Each read
+  // decrypts the whole envelope on a serial native worker, so a grid of cold
+  // thumbnails otherwise queued one read per photo. The bytes are zeroed once
+  // the last overlapping callback returns, exactly as before
   Future<T> useMk<T>(
     Uint8List albumId,
     int epoch,
@@ -140,7 +146,55 @@ class AlbumKeyStore {
     if (h == null) {
       throw StateError('no MK for album=${_hex(albumId)} epoch=$epoch');
     }
-    return _store.use<T>(h, fn);
+    final key = '${_hex(albumId)}.$epoch';
+    final read = _reads[key] ??= _SharedRead(_store, h, (r) {
+      if (identical(_reads[key], r)) _reads.remove(key);
+    });
+    return read.run(fn);
+  }
+
+  final Map<String, _SharedRead> _reads = {};
+}
+
+// One in-flight key store read and the callbacks currently using its bytes
+class _SharedRead {
+  final Completer<Uint8List> _bytes = Completer<Uint8List>();
+  final Completer<void> _released = Completer<void>();
+  final void Function(_SharedRead) _onClose;
+  late final Future<void> _finished;
+  int _users = 0;
+  bool _closed = false;
+
+  _SharedRead(SecureKeyStore store, KeyHandle h, this._onClose) {
+    _finished = store.use<void>(h, (bytes) async {
+      _bytes.complete(bytes);
+      // The store zeroes the bytes when this returns
+      await _released.future;
+    }).catchError((Object e, StackTrace s) {
+      if (!_bytes.isCompleted) _bytes.completeError(e, s);
+      _close();
+    });
+  }
+
+  Future<T> run<T>(Future<T> Function(Uint8List mk) fn) async {
+    _users++;
+    try {
+      return await fn(await _bytes.future);
+    } finally {
+      if (--_users == 0) {
+        _close();
+        // The last caller returns only after the bytes are zeroed
+        await _finished;
+      }
+    }
+  }
+
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    // Later callers start a fresh read rather than joining a closing one
+    _onClose(this);
+    _released.complete();
   }
 }
 
