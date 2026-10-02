@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/baked_paint.dart';
 import 'package:keepsy/ui/widgets/warm_button.dart';
 
 class FootScrim extends StatelessWidget {
@@ -116,28 +117,28 @@ class _MakeButtonState extends State<MakeButton> {
 class _MakeGlow extends StatelessWidget {
   const _MakeGlow();
 
+  // The circle reaches 0.34 of the width past the box, the blur 3 sigma more
   @override
-  Widget build(BuildContext context) => CustomPaint(painter: _GlowPainter());
+  Widget build(BuildContext context) => const BakedPaint(
+        id: 'make-glow',
+        overflow: EdgeInsets.all(44),
+        maxScale: 2,
+        painter: _paintGlow,
+      );
 }
 
-class _GlowPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final centre = size.center(Offset.zero);
-    final radius = size.width * 0.84;
-    final paint = Paint()
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
-      ..shader = RadialGradient(
-        colors: [
-          Warm.orbPeach.withValues(alpha: 0.6),
-          Warm.orbBlush.withValues(alpha: 0.3),
-          Warm.orbPeach.withValues(alpha: 0),
-        ],
-        stops: const [0, 0.45, 0.72],
-      ).createShader(Rect.fromCircle(center: centre, radius: radius));
-    canvas.drawCircle(centre, radius, paint);
-  }
-
-  @override
-  bool shouldRepaint(_GlowPainter old) => false;
+void _paintGlow(Canvas canvas, Size size) {
+  final centre = size.center(Offset.zero);
+  final radius = size.width * 0.84;
+  final paint = Paint()
+    ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
+    ..shader = RadialGradient(
+      colors: [
+        Warm.orbPeach.withValues(alpha: 0.6),
+        Warm.orbBlush.withValues(alpha: 0.3),
+        Warm.orbPeach.withValues(alpha: 0),
+      ],
+      stops: const [0, 0.45, 0.72],
+    ).createShader(Rect.fromCircle(center: centre, radius: radius));
+  canvas.drawCircle(centre, radius, paint);
 }

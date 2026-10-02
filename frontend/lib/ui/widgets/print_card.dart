@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/baked_paint.dart';
 
 class PrintCard extends StatelessWidget {
   final Widget? well;
@@ -31,13 +32,25 @@ class PrintCard extends StatelessWidget {
   static const double _wellAspect = 260 / 278;
   static const double _chinPadRatio = 0.037;
 
+  // Soft layers are baked once; the small crisp ones stay live
+  static const double _bakeFromBlur = 30;
+  static const BorderRadius _radius = BorderRadius.all(Radius.circular(8));
+
   @override
   Widget build(BuildContext context) {
-    final card = DecoratedBox(
+    final shadows = shadow ?? Warm.printShadow;
+    final soft = [
+      for (final s in shadows)
+        if (s.blurRadius >= _bakeFromBlur) s
+    ];
+    Widget card = DecoratedBox(
       decoration: BoxDecoration(
         color: Warm.paper,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: shadow ?? Warm.printShadow,
+        borderRadius: _radius,
+        boxShadow: [
+          for (final s in shadows)
+            if (s.blurRadius < _bakeFromBlur) s
+        ],
       ),
       child: LayoutBuilder(
         builder: (context, c) {
@@ -67,7 +80,46 @@ class PrintCard extends StatelessWidget {
       ),
     );
 
+    if (soft.isNotEmpty) {
+      card = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: BakedPaint(
+              id: 'print-shadow:${soft.join(',')}',
+              overflow: _reach(soft),
+              maxScale: 2,
+              painter: (canvas, size) => _paintShadows(canvas, size, soft),
+            ),
+          ),
+          Positioned.fill(child: card),
+        ],
+      );
+    }
     return frame ? AspectRatio(aspectRatio: _aspect, child: card) : card;
+  }
+
+  // Same geometry and paint BoxDecoration uses for its shadows
+  static void _paintShadows(Canvas canvas, Size size, List<BoxShadow> shadows) {
+    final rect = Offset.zero & size;
+    for (final s in shadows) {
+      final bounds = rect.shift(s.offset).inflate(s.spreadRadius);
+      canvas.drawRRect(_radius.toRRect(bounds), s.toPaint());
+    }
+  }
+
+  // A gaussian is invisible past three sigma
+  static EdgeInsets _reach(List<BoxShadow> shadows) {
+    var l = 0.0, t = 0.0, r = 0.0, b = 0.0;
+    for (final s in shadows) {
+      final e = s.spreadRadius + 3 * s.blurSigma;
+      l = math.max(l, e - s.offset.dx);
+      t = math.max(t, e - s.offset.dy);
+      r = math.max(r, e + s.offset.dx);
+      b = math.max(b, e + s.offset.dy);
+    }
+    return EdgeInsets.fromLTRB(
+        l.ceilToDouble(), t.ceilToDouble(), r.ceilToDouble(), b.ceilToDouble());
   }
 }
 
