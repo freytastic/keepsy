@@ -20,6 +20,7 @@ import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/camera_stage.dart';
+import 'package:keepsy/ui/widgets/caret_blink.dart';
 import 'package:keepsy/ui/widgets/warm_button.dart';
 import 'package:keepsy/ui/widgets/warm_field.dart';
 
@@ -839,11 +840,8 @@ class _Caret extends StatefulWidget {
   State<_Caret> createState() => _CaretState();
 }
 
-class _CaretState extends State<_Caret> with SingleTickerProviderStateMixin {
-  late final AnimationController _blink = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..repeat();
+class _CaretState extends State<_Caret> {
+  final CaretBlink _blink = CaretBlink(const Duration(milliseconds: 1100));
 
   @override
   void dispose() {
@@ -853,10 +851,9 @@ class _CaretState extends State<_Caret> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _blink,
-      builder: (context, child) =>
-          Opacity(opacity: _blink.value < 0.5 ? 1 : 0, child: child),
+    return ValueListenableBuilder<bool>(
+      valueListenable: _blink,
+      builder: (context, on, child) => Opacity(opacity: on ? 1 : 0, child: child),
       child: Container(
         width: 2,
         height: 24,

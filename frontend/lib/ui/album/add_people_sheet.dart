@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:keepsy/data/api/api_error.dart';
@@ -8,6 +9,7 @@ import 'package:keepsy/e2ee/handle.dart';
 import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/blur_scrim.dart';
+import 'package:keepsy/ui/widgets/caret_blink.dart';
 import 'package:keepsy/ui/widgets/member_face.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
 import 'package:keepsy/ui/widgets/warm_button.dart';
@@ -81,10 +83,7 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
     vsync: this,
     duration: const Duration(milliseconds: 380),
   );
-  late final AnimationController _blink = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1050),
-  )..repeat();
+  final CaretBlink _blink = CaretBlink(const Duration(milliseconds: 1050));
 
   String _code = '';
   bool _finding = false;
@@ -537,7 +536,7 @@ class _Cell extends StatelessWidget {
   final String? char;
   final bool active;
   final bool error;
-  final Animation<double> blink;
+  final ValueListenable<bool> blink;
 
   const _Cell({
     required this.width,
@@ -580,13 +579,10 @@ class _Cell extends StatelessWidget {
                     ),
                   )
                 : active
-                    ? FadeTransition(
-                        opacity: blink.drive(TweenSequence([
-                          TweenSequenceItem(
-                              tween: ConstantTween(1.0), weight: 1),
-                          TweenSequenceItem(
-                              tween: ConstantTween(0.0), weight: 1),
-                        ])),
+                    ? ValueListenableBuilder<bool>(
+                        valueListenable: blink,
+                        builder: (context, on, child) =>
+                            Opacity(opacity: on ? 1 : 0, child: child),
                         child:
                             Container(width: 1.6, height: 22, color: Warm.ink),
                       )
