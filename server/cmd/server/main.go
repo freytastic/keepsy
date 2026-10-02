@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -54,7 +55,17 @@ func main() {
 	}
 	log.Println("Migrations applied successfully!")
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisURL})
+	// Railway sets a redis:// URL; local dev uses bare host:port
+	var redisOpts *redis.Options
+	if strings.HasPrefix(cfg.RedisURL, "redis://") || strings.HasPrefix(cfg.RedisURL, "rediss://") {
+		redisOpts, err = redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			log.Fatalf("Invalid REDIS_URL: %v", err)
+		}
+	} else {
+		redisOpts = &redis.Options{Addr: cfg.RedisURL}
+	}
+	rdb := redis.NewClient(redisOpts)
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		log.Fatalf("Unable to connect to redis: %v\n", err)
 	}
