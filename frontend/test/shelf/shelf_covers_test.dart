@@ -9,6 +9,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/models/album_summary.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
+import 'package:keepsy/data/storage/media_plaintext_cache.dart';
 import 'package:keepsy/e2ee/album_keys.dart';
 import 'package:keepsy/e2ee/file_pipeline.dart';
 import 'package:keepsy/e2ee/media_record.dart';
@@ -102,6 +104,11 @@ Future<({AlbumKeyStore aks, PreviewMedia preview, Uint8List cipher})>
   );
 }
 
+MediaCacheManager _manager(
+        MediaSealedCache l2, MediaApiInterface api, AlbumKeyStore aks) =>
+    MediaCacheManager(
+        plaintext: MediaPlaintextCache(), ciphertext: l2, api: api, aks: aks);
+
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -121,8 +128,7 @@ void main() {
     api = FakeApi();
     covers = ShelfCoversImpl(
       sealedCache: l2,
-      api: api,
-      albumKeys: AlbumKeyStore(MockSecureKeyStore()),
+      cache: _manager(l2, api, AlbumKeyStore(MockSecureKeyStore())),
     );
   });
 
@@ -208,12 +214,51 @@ void main() {
   group('with a cover that really decrypts', () {
     late PreviewMedia real;
     late ShelfCoversImpl live;
+    late AlbumKeyStore realAks;
 
     setUp(() async {
       final c = await _realCover();
       real = c.preview;
+      realAks = c.aks;
       api.cipher = c.cipher;
-      live = ShelfCoversImpl(sealedCache: l2, api: api, albumKeys: c.aks);
+      live = ShelfCoversImpl(sealedCache: l2, cache: _manager(l2, api, c.aks));
+    });
+
+    test('a thumbnail the grid also wants is fetched once, full record kept',
+        () async {
+      final shared = _manager(l2, api, realAks);
+      final fullRecord = MediaRecord(
+        id: real.mediaId,
+        albumId: _realAlbumId,
+        uploaderToken: 'uploader',
+        wrapNonce: Uint8List(12),
+        wrapTagCT: Uint8List(48),
+        epochTag: real.epochTag,
+        blobSize: 1,
+        blobSha256: Uint8List(32),
+        mediaType: 'photo',
+        mimeType: 'image/jpeg',
+        createdAt: DateTime.utc(2026),
+        thumbWrapNonce: real.thumbWrapNonce,
+        thumbWrapTagCT: real.thumbWrapTagCT,
+        thumbSize: real.thumbSize,
+        thumbSha256: real.thumbSha256,
+      );
+      final shelf = ShelfCoversImpl(sealedCache: l2, cache: shared);
+      api.gate = Completer<void>();
+      shelf.ensureCover(_realAlbumId, [real]);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final grid = shared.getDecrypted(fullRecord, thumb: true);
+      api.gate!.complete();
+      await grid;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await shared.flushWrites();
+
+      expect(api.downloads, ['${real.mediaId}:thumb']);
+      expect(shelf.bytes(_realAlbumId, 0), isNotNull);
+      final stored = await l2.readRecord(real.mediaId);
+      expect(stored?.uploaderToken, fullRecord.uploaderToken,
+          reason: 'the grid caller must still persist the full record');
     });
 
     test('the fixture actually decrypts, or nothing below means anything',

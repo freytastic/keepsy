@@ -176,10 +176,36 @@ void main() {
     expect(got, equals(_plain()));
     expect(api.requestDownloadURLCalls, 1);
     expect(api.downloadCiphertextCalls, 1);
+    // The sealed write runs after the caller has its bytes
+    await mgr.flushWrites();
     // L2 now holds the decrypted plaintext (sealed under cache_root_key)
     expect(await l2.readBlob(fileKey), equals(_plain()));
     expect(await l2.readRecord(record.id), isNotNull);
     expect(l1.get(fileKey), equals(_plain()));
+  });
+
+  test('a delete during the background write leaves nothing on disk',
+      () async {
+    await mgr.getDecrypted(record, thumb: false);
+    // The write is still pending here
+    await mgr.invalidate(record.id);
+    await mgr.flushWrites();
+    expect(await l2.readBlob(fileKey), isNull);
+    expect(l1.get(fileKey), isNull);
+  });
+
+  test('shutdown waits for background writes', () async {
+    await mgr.getDecrypted(record, thumb: false);
+    await mgr.shutdown();
+    expect(await l2.readBlob(fileKey), equals(_plain()),
+        reason: 'shutdown returns only once the write settled');
+  });
+
+  test('a fill that finishes after shutdown starts writes nothing', () async {
+    final pending = mgr.getDecrypted(record, thumb: false);
+    await mgr.shutdown();
+    await pending.then((_) {}, onError: (_) {});
+    expect(await l2.readBlob(fileKey), isNull);
   });
 
   test('acceptNewMedia warms ONLY the thumb, never the full file', () async {

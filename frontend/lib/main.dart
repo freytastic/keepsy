@@ -22,6 +22,7 @@ import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/native/image_transcoder.dart';
 import 'package:keepsy/data/upload/upload_adapters.dart';
+import 'package:keepsy/diagnostics/perf_probe.dart';
 import 'package:keepsy/data/upload/upload_outbox.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/domain/account/account_deletion.dart';
@@ -91,6 +92,7 @@ final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PerfProbe.start();
 
   // Native libsodium for X25519/Ed25519 (sumo variant exposes raw
   // crypto_scalarmult). AES-GCM/ChaCha20 stay on cryptography_flutter
@@ -399,10 +401,15 @@ void main() async {
   final mediaPlaintextCache = MediaPlaintextCache();
   // Seen state must survive media cache eviction
   final seenStore = await SealedSeenStore.open(cacheRootKey: cacheRootKey);
+  final mediaCacheManager = MediaCacheManager(
+    plaintext: mediaPlaintextCache,
+    ciphertext: mediaSealedCache,
+    api: mediaApi,
+    aks: albumKeyStore,
+  );
   final shelfCovers = ShelfCoversImpl(
     sealedCache: mediaSealedCache,
-    api: mediaApi,
-    albumKeys: albumKeyStore,
+    cache: mediaCacheManager,
   );
   // Unknown albums start at their current generation
   void seedWatermarks() {
@@ -423,13 +430,6 @@ void main() async {
     final fresh = await albumService.getMyAlbums();
     if (fresh != null) appState.applyListing(fresh);
   });
-
-  final mediaCacheManager = MediaCacheManager(
-    plaintext: mediaPlaintextCache,
-    ciphertext: mediaSealedCache,
-    api: mediaApi,
-    aks: albumKeyStore,
-  );
 
   // Removal rotations bind every new wrap to a locally trusted identity key
   // A missing pin fails before the new MK is generated
