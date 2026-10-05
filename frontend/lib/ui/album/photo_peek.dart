@@ -25,6 +25,7 @@ class PhotoPeek extends StatefulWidget {
   final MediaRecord record;
   final Animation<double> entry;
   final String? uploaderName;
+  final Widget? uploaderFace;
   final bool isOwner;
   final Future<void> Function() onDelete;
   final double aspectRatio;
@@ -41,6 +42,7 @@ class PhotoPeek extends StatefulWidget {
     required this.aspectRatio,
     required this.previewBuilder,
     required this.fullImageBuilder,
+    this.uploaderFace,
     this.entry = kAlwaysCompleteAnimation,
     this.now,
   });
@@ -49,6 +51,7 @@ class PhotoPeek extends StatefulWidget {
     BuildContext context, {
     required MediaRecord record,
     required String? uploaderName,
+    Widget? uploaderFace,
     required bool isOwner,
     required Future<void> Function() onDelete,
     required double aspectRatio,
@@ -64,6 +67,7 @@ class PhotoPeek extends StatefulWidget {
         pageBuilder: (_, a, __) => PhotoPeek(
           record: record,
           uploaderName: uploaderName,
+          uploaderFace: uploaderFace,
           isOwner: isOwner,
           onDelete: onDelete,
           aspectRatio: aspectRatio,
@@ -226,6 +230,7 @@ class _PhotoPeekState extends State<PhotoPeek> with TickerProviderStateMixin {
                                   at: _caption,
                                   from: 6,
                                   child: _Caption(
+                                    face: widget.uploaderFace,
                                     uploader: widget.uploaderName,
                                     createdAt: widget.record.createdAt,
                                     bytes:
@@ -422,12 +427,14 @@ class _PeekImageState extends State<_PeekImage> {
 }
 
 class _Caption extends StatelessWidget {
+  final Widget? face;
   final String? uploader;
   final DateTime createdAt;
   final int bytes;
   final DateTime Function()? now;
 
   const _Caption({
+    this.face,
     required this.uploader,
     required this.createdAt,
     required this.bytes,
@@ -440,6 +447,10 @@ class _Caption extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (face != null) ...[
+          SizedBox(key: const Key('photo-peek-face'), child: face),
+          const SizedBox(width: 7),
+        ],
         Text(
           uploader ?? AlbumCopy.unknownMember,
           style: const TextStyle(

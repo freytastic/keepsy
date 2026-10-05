@@ -712,6 +712,7 @@ class _EmailPill extends StatelessWidget {
           textInputAction: TextInputAction.go,
           autofillHints: const [AutofillHints.email],
           autocorrect: false,
+          soft: true,
           onSubmitted: (_) => onSubmit(),
         ),
       ),

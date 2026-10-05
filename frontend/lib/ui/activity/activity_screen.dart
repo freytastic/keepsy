@@ -13,8 +13,6 @@ import 'activity_card.dart';
 import 'activity_copy.dart';
 import 'activity_row.dart';
 
-// Separates access changes from album contents; unresolved actions lead
-
 const Duration _swap = Duration(milliseconds: 180);
 
 class ActivityScreen extends StatefulWidget {
@@ -23,7 +21,7 @@ class ActivityScreen extends StatefulWidget {
   final Future<void> Function()? refresh;
   final ActivityThumb? thumb;
   final void Function(String albumId)? onOpenAlbum;
-  // Opens comparison for the alerted key; only a persisted match resolves it
+  // Only persisted verification resolves the alerted key
   final Future<void> Function(SafetyNumberChanged event)? onCompare;
   final void Function(bool unread)? onUnreadChanged;
 
@@ -46,8 +44,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
   ActivityLane _lane = ActivityLane.security;
   List<StoredActivity> _rows = const [];
   bool _loading = true;
-  // Hides cards answered before their store write lands
-  // Their history rows remain grouped under the original day
+  // Hide answered cards while dismissal is still being saved
   final Set<String> _quieted = {};
 
   @override
@@ -91,7 +88,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
     try {
       await widget.refresh?.call();
     } catch (_) {
-      // What is already recorded is still worth showing
+      // Show stored activity even if refresh fails
     }
     await _reread();
     _announceUnread();
@@ -147,7 +144,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
       body: SafeArea(
         bottom: false,
         child: ListView(
-          // 26 and 32 visually; the back control's tap area carries 5 of each
           padding:
               const EdgeInsets.fromLTRB(Warm.pagePad, 21, Warm.pagePad, 48),
           children: [
@@ -239,7 +235,6 @@ class _Back extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 48 to tap, pinned to the page edge like the shelf
     return const SizedBox(
       key: ValueKey('activity-back'),
       width: 48,
@@ -285,7 +280,6 @@ class _Heading extends StatelessWidget {
   }
 }
 
-// Two words, not a control: the active one is ink with a short rule under it
 class _Segmented extends StatelessWidget {
   final ActivityLane lane;
   final void Function(ActivityLane lane) onSelect;
@@ -444,8 +438,10 @@ class _SecurityPanel extends StatelessWidget {
               child: ActivityCard(
                 copy: cardCopyFor(needs[i].event, names),
                 alarm: needs[i].event is SafetyNumberChanged,
-                face: _face(needs[i].event, names,
-                    alarm: needs[i].event is SafetyNumberChanged),
+                face: _personToken(needs[i].event) != null
+                    ? _face(needs[i].event, names,
+                        alarm: needs[i].event is SafetyNumberChanged)
+                    : null,
                 onGo: () => onGo(needs[i].event),
                 onQuiet: () => onQuiet(needs[i].event),
               ),
@@ -520,14 +516,16 @@ List<Widget> _grouped(
   return out;
 }
 
+String? _personToken(ActivityEvent e) => switch (e) {
+      SafetyNumberChanged() => e.peerToken,
+      MemberJoined() => e.memberToken,
+      MemberLeft() => e.memberToken,
+      PhotosAdded() => e.uploaderToken,
+      _ => null,
+    };
+
 ActivityFace _face(ActivityEvent e, ActivityNames names, {bool alarm = false}) {
-  final token = switch (e) {
-    SafetyNumberChanged() => e.peerToken,
-    MemberJoined() => e.memberToken,
-    MemberLeft() => e.memberToken,
-    PhotosAdded() => e.uploaderToken,
-    _ => null,
-  };
+  final token = _personToken(e);
   return ActivityFace(
     albumId: e.albumId,
     name: token == null ? null : names.memberName(e.albumId, token),
@@ -568,4 +566,3 @@ class _Blank extends StatelessWidget {
     );
   }
 }
-

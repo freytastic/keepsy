@@ -235,6 +235,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       context,
       record: record,
       uploaderName: resolved,
+      uploaderFace: _face(record.uploaderToken, resolved, 20),
       isOwner: record.uploaderToken == widget.album.memberToken,
       onDelete: () => _deleteMedia(record),
       aspectRatio: preview.aspectRatio,

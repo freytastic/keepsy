@@ -7,7 +7,7 @@ import 'activity_copy.dart';
 class ActivityCard extends StatelessWidget {
   final CardCopy copy;
   final bool alarm;
-  final Widget face;
+  final Widget? face;
   final VoidCallback onGo;
   final VoidCallback onQuiet;
 
@@ -15,7 +15,7 @@ class ActivityCard extends StatelessWidget {
     super.key,
     required this.copy,
     required this.alarm,
-    required this.face,
+    this.face,
     required this.onGo,
     required this.onQuiet,
   });
@@ -55,7 +55,7 @@ class ActivityCard extends StatelessWidget {
                 child: ColoredBox(color: Warm.warn),
               ),
             Padding(
-              // 15 at the foot visually, 5 of it inside the buttons' tap area
+              // Button tap padding adds 5 px to the bottom gap
               padding: EdgeInsets.fromLTRB(alarm ? 20 : 17, 16, 17, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -63,8 +63,10 @@ class ActivityCard extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      face,
-                      const SizedBox(width: 11),
+                      if (face != null) ...[
+                        face!,
+                        const SizedBox(width: 11),
+                      ],
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -80,7 +82,7 @@ class ActivityCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   Text(copy.body, style: Warm.acCardBody),
-                  // 14 visually: the buttons carry 5 of it as tap area
+                  // Button tap padding adds 5 px to this gap
                   const SizedBox(height: 9),
                   Row(
                     children: [
@@ -126,7 +128,7 @@ class _Btn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 48 high to tap, 40 high to look at
+    // Keep a 48 px touch target around the 40 px button
     return SizedBox(
       key: ValueKey('card-$label'),
       height: 48,
