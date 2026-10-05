@@ -24,6 +24,7 @@ import 'package:keepsy/ui/screens/start_deletion_flow.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:keepsy/ui/widgets/camera_stage.dart';
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
@@ -40,7 +41,6 @@ Future<AccountGateOutcome> reconcileAccount({
 }) async {
   AccountGateOutcome outcome;
   if (userId == null) {
-    // Nothing names the account, so nothing may vouch for the catalog
     outcome = AccountGateOutcome.connectionRequired;
   } else {
     try {
@@ -70,9 +70,7 @@ class _LandingPageState extends State<LandingPage> {
     final valid = await storage.isValid();
 
     if (valid) {
-      // Server doesnt return email or display name (M8 + M7) : load both from
-      // local storage written at login. Null on a brand new install that came
-      // straight to landing without going through login : harmless
+      // Restore email and display name from local storage because /me omits them
       final cachedEmail = await storage.getEmail();
       final cachedName = await storage.getName();
       final cachedUserId = await storage.getUserId();
@@ -80,17 +78,14 @@ class _LandingPageState extends State<LandingPage> {
         final appState = context.read<AppState>();
         if (cachedEmail != null) appState.setEmail(cachedEmail);
         if (cachedName != null) appState.setProfileName(cachedName);
-        // Photos sealed offline can be listed before the server answers
         if (cachedUserId != null) appState.setCachedUserId(cachedUserId);
 
-        // Capture providers before the background awaits
         final identity = context.read<IdentityService>();
         final epochProcessor = context.read<EpochProcessor>();
         final catalog = context.read<AlbumCatalog>();
         final rotationRecovery = context.read<RotationRecoveryScheduler>();
         final gate = context.read<SignInGate>();
         final wipe = context.read<TerminalWipe>();
-        // Idempotent ('if (_active) return'); safe to call on every landing
         unawaited(context.read<RealtimeService>().connect());
         unawaited(_warmSession(
           userService: userService,
@@ -108,6 +103,8 @@ class _LandingPageState extends State<LandingPage> {
 
     if (!mounted) return;
 
+    // Hide clip preparation behind the route fade
+    if (!valid) CameraStage.prewarm();
     final destination = valid ? const MainShell() : const OnboardingScreen();
 
     Navigator.of(context).pushReplacement(
@@ -122,7 +119,6 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  // Refresh network state after local navigation
   Future<void> _warmSession({
     required UserService userService,
     required AlbumService albumService,
@@ -134,11 +130,9 @@ class _LandingPageState extends State<LandingPage> {
     required SignInGate gate,
     required TerminalWipe wipe,
   }) async {
-    // Renew before the server considers the session expired
     try {
       await SessionRefresher().renewIfDue();
     } catch (_) {
-      // Refresh is best effort during cold start
     }
 
     final userData = await Trace.measure<Map<String, dynamic>?>(
@@ -147,8 +141,7 @@ class _LandingPageState extends State<LandingPage> {
     );
     if (userData != null) appState.setUserData(userData);
 
-    // Reconcile legacy installs on launch and fall back to the cached immutable
-    // user ID when /users/me is unavailable
+    // Use the cached account ID when /users/me is unavailable
     final userId =
         userData?['id'] as String? ?? await StorageService().getUserId();
     final outcome = await reconcileAccount(
@@ -168,7 +161,6 @@ class _LandingPageState extends State<LandingPage> {
       apply: appState.applyListing,
     );
 
-    // Crypto hygiene uses the best shelf available including offline state
     final albumIds = <Uint8List>[];
     for (final a in appState.albums) {
       final b = _uuidStringToBytes(a.id);
@@ -178,9 +170,8 @@ class _LandingPageState extends State<LandingPage> {
         identity, epochProcessor, rotationRecovery, appState, albumIds);
   }
 
-  // Use the root navigator because MainShell replaces Landing before this ends
+  // Use the root navigator after Landing has been replaced
   void _presentGateRefusal(AccountGateOutcome outcome, TerminalWipe wipe) {
-    // Use the pushed screen's context because this route is removed
     final Widget screen = switch (outcome) {
       AccountGateOutcome.lostDevice => AccountKeysLostScreen(
           onDismiss: (_) => SystemNavigator.pop(),
@@ -201,9 +192,7 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  // Runs cold start crypto hygiene off the navigation critical path. Album
-  // detail screens watch AppState.isSyncing to render a "syncing keys"
-  // placeholder until catchUpAll lands the MK
+  // Run key setup after navigation while AppState tracks album sync
   Future<void> _runCryptoHygiene(
       IdentityService identity,
       EpochProcessor epochProcessor,
@@ -234,8 +223,7 @@ class _LandingPageState extends State<LandingPage> {
     await rotationRecovery.checkAll(albumIds);
   }
 
-  // 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
-  // so callers (best effort cold start) skip the album rather than throw
+  // Malformed album IDs are skipped during background sync
   Uint8List? _uuidStringToBytes(String s) {
     final hex = s.replaceAll('-', '');
     if (hex.length != 32) return null;
@@ -288,14 +276,12 @@ class _LandingPageState extends State<LandingPage> {
   }
 }
 
-// 16B UUID -> canonical hex string. Matches the form the server uses for IDs
 String uuidStringFromBytes(Uint8List b) {
   final s = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
   return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}'
       '-${s.substring(16, 20)}-${s.substring(20)}';
 }
 
-// Always clears app-level sync state even after the triggering screen unmounts
 Future<void> syncAlbumKeys({
   required AppState appState,
   required List<Uint8List> albumIds,
@@ -306,7 +292,6 @@ Future<void> syncAlbumKeys({
   final span = Trace.start('sync.albumKeys', fields: {'albums': ids.length});
   appState.markSyncing(ids);
 
-  // Release each album as soon as its key sync completes
   var cursor = 0;
   Future<void> worker() async {
     while (true) {
@@ -321,7 +306,6 @@ Future<void> syncAlbumKeys({
     }
   }
 
-  // Bound network fan-out across large shelves
   const maxConcurrent = 2;
   final workers = <Future<void>>[
     for (var i = 0; i < maxConcurrent && i < albumIds.length; i++) worker(),
@@ -329,14 +313,13 @@ Future<void> syncAlbumKeys({
 
   try {
     await Future.wait(workers);
-    // MKs are installed now : titles that setAlbums couldnt decrypt yet
-    // (cold start before catch up) become resolvable
+    // Installed keys may unlock previously unreadable titles
     appState.refreshAlbumNames();
     span.end();
   } catch (e) {
     span.fail(Trace.reasonOf(e));
   } finally {
-    // Clear IDs left by an unexpected worker failure
+    // Release sync state after unexpected worker failures
     for (final id in ids) {
       appState.clearSyncing(id);
     }
