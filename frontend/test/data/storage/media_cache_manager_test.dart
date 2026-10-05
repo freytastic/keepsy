@@ -22,7 +22,6 @@ Uint8List _mk() => Uint8List.fromList(List<int>.filled(32, 0x42));
 Uint8List _cacheKey() => Uint8List.fromList(List<int>.filled(32, 0x11));
 Uint8List _plain() => Uint8List.fromList(List.generate(256, (i) => i & 0xFF));
 
-// Solid color JPEG that decodes cleanly so prepareUpload runs the thumb gen path
 Uint8List _syntheticJpegBytes({int w = 200, int h = 150}) {
   final image = img.Image(width: w, height: h);
   for (final p in image) {
@@ -122,9 +121,7 @@ void main() {
     api = _FakeMediaApi();
     aks = await _newAks();
     mgr = MediaCacheManager(plaintext: l1, ciphertext: l2, api: api, aks: aks);
-    // Mint a real AEAD envelope so FileDecryptor's verify path is exercised.
-    // 'video' : _plain() is raw bytes, not a decodable image (photo would now
-    // fail closed). The cache round trip under test is media-type-agnostic
+    // Use video for raw fixture bytes so photo decoding is not required
     env = await FilePipeline.prepareUpload(
       aks: aks,
       albumIdBytes: _albumIdBytes(),
@@ -157,7 +154,6 @@ void main() {
   });
 
   test('L2 warm hit returns plaintext without S3 and without useMk', () async {
-    // L2 now holds sealed *plaintext* : seed it directly
     await l2.writeRecord(record);
     await l2.writeBlob(fileKey, _plain());
     final counter = _CountingAks(aks);
@@ -176,14 +172,36 @@ void main() {
     expect(got, equals(_plain()));
     expect(api.requestDownloadURLCalls, 1);
     expect(api.downloadCiphertextCalls, 1);
-    // L2 now holds the decrypted plaintext (sealed under cache_root_key)
+    await mgr.flushWrites();
     expect(await l2.readBlob(fileKey), equals(_plain()));
     expect(await l2.readRecord(record.id), isNotNull);
     expect(l1.get(fileKey), equals(_plain()));
   });
 
+  test('a delete during the background write leaves nothing on disk',
+      () async {
+    await mgr.getDecrypted(record, thumb: false);
+    await mgr.invalidate(record.id);
+    await mgr.flushWrites();
+    expect(await l2.readBlob(fileKey), isNull);
+    expect(l1.get(fileKey), isNull);
+  });
+
+  test('shutdown waits for background writes', () async {
+    await mgr.getDecrypted(record, thumb: false);
+    await mgr.shutdown();
+    expect(await l2.readBlob(fileKey), equals(_plain()),
+        reason: 'shutdown returns only once the write settled');
+  });
+
+  test('a fill that finishes after shutdown starts writes nothing', () async {
+    final pending = mgr.getDecrypted(record, thumb: false);
+    await mgr.shutdown();
+    await pending.then((_) {}, onError: (_) {});
+    expect(await l2.readBlob(fileKey), isNull);
+  });
+
   test('acceptNewMedia warms ONLY the thumb, never the full file', () async {
-    // Thumbed envelope : a real JPEG so prepareUpload emits a thumb cipher
     final tenv = await FilePipeline.prepareUpload(
       aks: aks,
       albumIdBytes: _albumIdBytes(),
@@ -213,19 +231,14 @@ void main() {
         mediaId: trecord.id,
         epochTag: 0,
         asset: CacheAsset.file);
-    // thumb warmed (tiny, keeps the grid instant) ...
     expect(await l2.readBlob(thumbKey), isNotNull);
     expect(counter.useMkCalls, 1);
-    // ... but the full file is NOT instantly pulled : it loads lazily
-    // only when the user actually opens the photo (EncryptedImage)
     expect(await l2.readBlob(fileKey2), isNull);
     expect(api.lastRequestedAsset, 'thumb');
   });
 
   test('acceptNewMedia on a thumbless record fetches nothing eagerly',
       () async {
-    // Legacy / no thumb media : the full file loads lazily on view, not on
-    // arrival. Record is still indexed so listMedia ordering etc. is unaffected
     final counter = _CountingAks(aks);
     final mgr2 = MediaCacheManager(
         plaintext: l1, ciphertext: l2, api: api, aks: counter);
@@ -295,9 +308,7 @@ void main() {
   });
 }
 
-// Counts useMk calls so the warm-hit "no-MK" guarantee + the cold-fill
-// "exactly one MK" guarantee are testable. Delegates every other call to the
-// real instance so installVerified + _present stay consistent
+// Count MK reads while retaining real key installation behavior
 class _CountingAks implements AlbumKeyStore {
   final AlbumKeyStore _inner;
   int useMkCalls = 0;
