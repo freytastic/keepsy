@@ -10,8 +10,8 @@ Uint8List _albumId([int seed = 0xA1]) =>
 
 Uint8List _mk(int b) => Uint8List.fromList(List<int>.filled(32, b));
 
-Future<AlbumKeyStore> _newStore() async {
-  final s = MockSecureKeyStore();
+Future<AlbumKeyStore> _newStore([MockSecureKeyStore? store]) async {
+  final s = store ?? MockSecureKeyStore();
   await s.initialize();
   final aks = AlbumKeyStore(s);
   await aks.initialize();
@@ -33,7 +33,6 @@ void main() {
             .having((e) => e.epoch, 'epoch', 3)
             .having((e) => e.latestEpoch, 'latestEpoch', 5)),
       );
-      // backfill=true still bypasses (Phase 6 flow)
       await aks.installVerified(
           albumId: id, epoch: 3, mk: _mk(0x33), backfill: true);
       expect(await aks.presentEpochs(id), [3, 5]);
@@ -78,8 +77,6 @@ void main() {
       await aks1.installVerified(
           albumId: id, epoch: 9, mk: _mk(0x19), backfill: false);
 
-      // Fresh AlbumKeyStore over the same SecureKeyStore : presence rebuilt
-      // from labels alone, no in memory carry over
       final aks2 = AlbumKeyStore(shared);
       await aks2.initialize();
       expect(await aks2.presentEpochs(id), [0, 4, 9]);
@@ -104,10 +101,8 @@ void main() {
 
       expect(await aks.presentEpochs(a), isEmpty);
       expect(await aks.latestEpoch(a), -1);
-      expect(await aks.presentEpochs(b), [0]); // untouched
+      expect(await aks.presentEpochs(b), [0]);
 
-      // Persisted, not just the in memory map: a fresh store over the same
-      // backing SecureKeyStore rebuilds with album a's labels gone
       final aks2 = AlbumKeyStore(shared);
       await aks2.initialize();
       expect(await aks2.presentEpochs(a), isEmpty);
@@ -116,7 +111,7 @@ void main() {
 
     test('deleting an album with no MKs is a no-op', () async {
       final aks = await _newStore();
-      await aks.deleteAlbumMKs(_albumId(0xC3)); // must not throw
+      await aks.deleteAlbumMKs(_albumId(0xC3));
       expect(await aks.presentEpochs(_albumId(0xC3)), isEmpty);
     });
   });
@@ -130,15 +125,84 @@ void main() {
 
       Uint8List? captured;
       final got = await aks.useMk<int>(id, 1, (mk) async {
-        // Inside the callback, the buffer carries the real MK
         expect(mk.length, 32);
         expect(mk.every((b) => b == 0x42), isTrue);
-        captured = mk; // hold a reference so we can inspect after finally
+        captured = mk;
         return mk[0];
       });
       expect(got, 0x42);
-      // After useMk returns, the buffer SecureKeyStore handed in must be zero
       expect(captured!.every((b) => b == 0), isTrue);
+    });
+
+    test('overlapping callers share one key store read', () async {
+      final store = MockSecureKeyStore();
+      final aks = await _newStore(store);
+      final id = _albumId();
+      await aks.installVerified(
+          albumId: id, epoch: 0, mk: _mk(0x42), backfill: false);
+      store.getOnceCalls = 0;
+
+      final seen = <Uint8List>[];
+      final results = await Future.wait([
+        for (var i = 0; i < 5; i++)
+          aks.useMk<int>(id, 0, (mk) async {
+            seen.add(mk);
+            await Future<void>.delayed(Duration(milliseconds: 5 * i));
+            return mk.every((b) => b == 0x42) ? 1 : 0;
+          }),
+      ]);
+
+      expect(results, everyElement(1),
+          reason: 'no caller may see bytes zeroed under it');
+      expect(store.getOnceCalls, 1);
+      for (final mk in seen) {
+        expect(mk.every((b) => b == 0), isTrue);
+      }
+    });
+
+    test('a caller after the last one finished reads again', () async {
+      final store = MockSecureKeyStore();
+      final aks = await _newStore(store);
+      final id = _albumId();
+      await aks.installVerified(
+          albumId: id, epoch: 0, mk: _mk(0x42), backfill: false);
+      store.getOnceCalls = 0;
+
+      await aks.useMk<void>(id, 0, (_) async {});
+      await aks.useMk<void>(id, 0, (_) async {});
+
+      expect(store.getOnceCalls, 2);
+    });
+
+    test('different epochs never share bytes', () async {
+      final aks = await _newStore();
+      final id = _albumId();
+      await aks.installVerified(
+          albumId: id, epoch: 0, mk: _mk(0x10), backfill: false);
+      await aks.installVerified(
+          albumId: id, epoch: 1, mk: _mk(0x11), backfill: false);
+
+      final got = await Future.wait([
+        aks.useMk<int>(id, 0, (mk) async => mk[0]),
+        aks.useMk<int>(id, 1, (mk) async => mk[0]),
+      ]);
+
+      expect(got, [0x10, 0x11]);
+    });
+
+    test('a failed read reaches every overlapping caller', () async {
+      final store = MockSecureKeyStore();
+      final aks = await _newStore(store);
+      final id = _albumId();
+      await aks.installVerified(
+          albumId: id, epoch: 0, mk: _mk(0x42), backfill: false);
+      final handle = (await store.list(labelPrefix: kAlbumLabelPrefix)).single;
+      await store.delete(handle);
+
+      final a = aks.useMk<int>(id, 0, (mk) async => 1);
+      final b = aks.useMk<int>(id, 0, (mk) async => 1);
+      await expectLater(a, throwsA(anything));
+      await expectLater(b, throwsA(anything));
     });
   });
 }

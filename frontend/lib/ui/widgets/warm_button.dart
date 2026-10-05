@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/pressable_scale.dart';
 
-// The one primary button: lit face, top sheen, warm glow that brightens on press
 class WarmButton extends StatefulWidget {
   final String label;
   final VoidCallback? onTap;
@@ -136,7 +135,6 @@ class WarmSheen extends StatelessWidget {
   }
 }
 
-// Painted over the dark face, which is what warms it to brown
 class WarmGlow extends StatelessWidget {
   final bool lit;
   final double radius;
@@ -151,30 +149,93 @@ class WarmGlow extends StatelessWidget {
         child: AnimatedOpacity(
           opacity: lit ? 1 : 0.37,
           duration: Warm.quick,
-          child: ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  // Expand the short-side radius across the wide pill
-                  radius: 2.4,
-                  colors: [
-                    Warm.orbPeach.withValues(alpha: 0.55),
-                    Warm.orbBlush.withValues(alpha: 0.28),
-                    Warm.orbPeach.withValues(alpha: 0),
-                  ],
-                  stops: const [0, 0.45, 0.72],
-                ),
-              ),
-            ),
-          ),
+          child: const _GlowImage(),
         ),
       ),
     );
   }
 }
 
-// Secondary actions sit beside or under a WarmButton as words
+const double _kGlowSigma = 18;
+
+final RadialGradient _kGlowGradient = RadialGradient(
+  // Expand the short-side radius across the wide pill
+  radius: 2.4,
+  colors: [
+    Warm.orbPeach.withValues(alpha: 0.55),
+    Warm.orbBlush.withValues(alpha: 0.28),
+    Warm.orbPeach.withValues(alpha: 0),
+  ],
+  stops: const [0, 0.45, 0.72],
+);
+
+// Cache the glow by size to avoid repeated blur passes
+class _GlowImage extends StatefulWidget {
+  const _GlowImage();
+
+  @override
+  State<_GlowImage> createState() => _GlowImageState();
+}
+
+typedef _GlowKey = ({int w, int h});
+
+class _GlowImageState extends State<_GlowImage> {
+  static final Map<_GlowKey, ui.Image> _cache = {};
+  static final Map<_GlowKey, Future<ui.Image>> _pending = {};
+
+  _GlowKey? _requested;
+
+  void _request(_GlowKey key, Size size, double dpr) {
+    if (_requested == key) return;
+    _requested = key;
+    final job = _pending[key] ??= _render(size, dpr, key).then((image) {
+      _cache[key] = image;
+      _pending.remove(key);
+      return image;
+    });
+    job.then((_) {
+      if (mounted && _requested == key) setState(() {});
+    }, onError: (Object _) => _pending.remove(key));
+  }
+
+  static Future<ui.Image> _render(Size size, double dpr, _GlowKey key) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder)..scale(dpr);
+    final rect = Offset.zero & size;
+    canvas.saveLayer(
+        null,
+        Paint()
+          ..imageFilter =
+              ui.ImageFilter.blur(sigmaX: _kGlowSigma, sigmaY: _kGlowSigma));
+    canvas.drawRect(rect, Paint()..shader = _kGlowGradient.createShader(rect));
+    canvas.restore();
+    final picture = recorder.endRecording();
+    return picture.toImage(key.w, key.h).whenComplete(picture.dispose);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      if (!size.isFinite || size.isEmpty) return const SizedBox.shrink();
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final key = (w: (size.width * dpr).ceil(), h: (size.height * dpr).ceil());
+      final image = _cache[key];
+      if (image != null) {
+        return RawImage(image: image, fit: BoxFit.fill);
+      }
+      _request(key, size, dpr);
+      return ImageFiltered(
+        imageFilter:
+            ui.ImageFilter.blur(sigmaX: _kGlowSigma, sigmaY: _kGlowSigma),
+        child: DecoratedBox(
+          decoration: BoxDecoration(gradient: _kGlowGradient),
+        ),
+      );
+    });
+  }
+}
+
 class WarmTextButton extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
@@ -204,7 +265,6 @@ class WarmTextButton extends StatelessWidget {
   }
 }
 
-// Bare header chevron, the same weight as the album's
 class WarmBack extends StatelessWidget {
   final VoidCallback? onTap;
 
