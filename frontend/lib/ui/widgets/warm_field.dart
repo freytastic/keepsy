@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 
-// Filled field whose label rises above the text once focused or filled
 class WarmField extends StatefulWidget {
   final TextEditingController controller;
   final FocusNode? focusNode;
@@ -15,6 +14,7 @@ class WarmField extends StatefulWidget {
   final bool autocorrect;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
+  final bool soft;
 
   const WarmField({
     super.key,
@@ -29,6 +29,7 @@ class WarmField extends StatefulWidget {
     this.autocorrect = true,
     this.onChanged,
     this.onSubmitted,
+    this.soft = false,
   });
 
   @override
@@ -67,6 +68,7 @@ class _WarmFieldState extends State<WarmField> {
   @override
   Widget build(BuildContext context) {
     final focused = _focus.hasFocus;
+    if (widget.soft) return _soft(focused);
     return AnimatedContainer(
       duration: Warm.quick,
       curve: Warm.easeOut,
@@ -106,6 +108,65 @@ class _WarmFieldState extends State<WarmField> {
           border: InputBorder.none,
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+        ),
+      ),
+    );
+  }
+
+  Widget _soft(bool focused) {
+    return AnimatedContainer(
+      duration: Warm.quick,
+      curve: Warm.easeOut,
+      height: Warm.fieldHeight,
+      decoration: BoxDecoration(
+        color: focused ? Colors.white : Warm.groundLift.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Warm.ink.withValues(alpha: focused ? 0.1 : 0.06),
+        ),
+        boxShadow: focused
+            ? [
+                BoxShadow(
+                    color: Warm.shadow(0.08),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6)),
+                BoxShadow(
+                    color: Warm.shadow(0.05),
+                    blurRadius: 3,
+                    offset: const Offset(0, 1)),
+              ]
+            : [
+                BoxShadow(
+                    color: Warm.shadow(0.04),
+                    blurRadius: 2,
+                    offset: const Offset(0, 1)),
+              ],
+      ),
+      alignment: Alignment.center,
+      child: TextField(
+        controller: widget.controller,
+        focusNode: _focus,
+        keyboardType: widget.keyboardType,
+        textInputAction: widget.textInputAction,
+        autofillHints: widget.autofillHints,
+        autofocus: widget.autofocus,
+        autocorrect: widget.autocorrect,
+        maxLength: widget.maxLength,
+        maxLengthEnforcement: MaxLengthEnforcement.enforced,
+        style: Warm.fieldText,
+        textAlignVertical: TextAlignVertical.center,
+        cursorColor: Warm.ink,
+        cursorWidth: 2,
+        onChanged: widget.onChanged,
+        onSubmitted: widget.onSubmitted,
+        spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
+        decoration: InputDecoration(
+          hintText: widget.label,
+          hintStyle: Warm.fieldLabel.copyWith(color: Warm.inkFaint),
+          counterText: '',
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 18),
         ),
       ),
     );
