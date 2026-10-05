@@ -119,30 +119,57 @@ void main() {
 
   testWidgets('only the uploader can reach the delete flow', (tester) async {
     await pump(tester, owner: false);
-    expect(find.text(AlbumCopy.delete), findsNothing);
+    expect(find.byKey(const Key('photo-peek-delete')), findsNothing);
 
     await pump(tester, owner: true);
-    expect(find.text(AlbumCopy.delete), findsOneWidget);
+    expect(find.byKey(const Key('photo-peek-delete')), findsOneWidget);
   });
 
-  testWidgets('delete requires confirmation and reports it once',
-      (tester) async {
+  testWidgets('delete asks on a sheet and reports it once', (tester) async {
     await pump(tester, owner: true);
 
-    await tester.tap(find.text(AlbumCopy.delete));
+    await tester.tap(find.byKey(const Key('photo-peek-delete')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text(AlbumCopy.deleteCancel));
+    expect(find.text(AlbumCopy.deleteTitle), findsOneWidget);
+    await tester.tap(find.byKey(const Key('photo-delete-keep')));
     await tester.pumpAndSettle();
     expect(deletes, 0);
 
-    await tester.tap(find.text(AlbumCopy.delete));
+    await tester.tap(find.byKey(const Key('photo-peek-delete')));
     await tester.pumpAndSettle();
-    await tester.tap(find.descendant(
-      of: find.byType(AlertDialog),
-      matching: find.text(AlbumCopy.deleteConfirm),
-    ));
+    await tester.tap(find.byKey(const Key('photo-delete-confirm')));
     await tester.pumpAndSettle();
     expect(deletes, 1);
+  });
+
+  testWidgets('one heart, and heart and save say they are not here yet',
+      (tester) async {
+    await pump(tester);
+    expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.star_border_rounded), findsNothing);
+
+    await tester.tap(find.byKey(const Key('photo-peek-heart')));
+    await tester.pump();
+    expect(find.text(AlbumCopy.heartSoon), findsOneWidget);
+
+    await tester.tap(find.text(AlbumCopy.saveToPhone));
+    await tester.pump();
+    expect(find.text(AlbumCopy.saveSoon), findsOneWidget);
+    await tester.pumpAndSettle(const Duration(seconds: 3));
+  });
+
+  testWidgets('the note on the pushed route has no debug underline',
+      (tester) async {
+    // Match the album's transparent route without an enclosing Material
+    await push(tester);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-peek-heart')));
+    await tester.pump();
+
+    final note = tester.element(find.text(AlbumCopy.heartSoon));
+    expect(DefaultTextStyle.of(note).style.decoration,
+        anyOf(isNull, TextDecoration.none));
+    await tester.pumpAndSettle(const Duration(seconds: 3));
   });
 
   testWidgets('opens with the preview before the full image is ready',
