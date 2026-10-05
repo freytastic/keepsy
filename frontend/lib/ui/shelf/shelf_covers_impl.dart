@@ -1,20 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
+import 'package:keepsy/data/storage/media_cache_manager.dart';
 import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/file_decryptor.dart';
 import 'package:keepsy/e2ee/media_record.dart';
 import 'package:keepsy/ui/shelf/shelf_data.dart';
 
-// Uses preview records so shelf loads cannot overwrite full media records
 class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
   final MediaSealedCache _l2;
-  final MediaApiInterface _api;
-  final AlbumKeyStore _aks;
+  // Share thumbnail fetches with the album grid
+  final MediaCacheManager _cache;
 
   static const _maxConcurrent = 3;
 
@@ -41,11 +37,9 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
 
   ShelfCoversImpl({
     required MediaSealedCache sealedCache,
-    required MediaApiInterface api,
-    required AlbumKeyStore albumKeys,
+    required MediaCacheManager cache,
   })  : _l2 = sealedCache,
-        _api = api,
-        _aks = albumKeys;
+        _cache = cache;
 
   @override
   Uint8List? bytes(String albumId, int slot) {
@@ -143,7 +137,6 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
 
   bool _stale(String albumId, int epoch) => (_epoch[albumId] ?? 0) != epoch;
 
-  // Retain a completed load only while its preview is current
   bool _current(String albumId, String mediaId, int epoch) {
     if (_stale(albumId, epoch)) return false;
     final showing = _preview[albumId];
@@ -158,17 +151,9 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
     try {
       if (_stale(albumId, epoch)) return;
 
-      final record = _recordFor(albumId, p);
-      final cacheKey = MediaCacheKey(
-        albumId: albumId,
-        mediaId: p.mediaId,
-        epochTag: p.epochTag,
-        asset: CacheAsset.thumb,
-      );
-
-      var plaintext = await _l2.readBlob(cacheKey);
-      plaintext ??= await _coldFill(record, cacheKey, albumId, epoch);
-      if (plaintext == null || !_current(albumId, p.mediaId, epoch)) return;
+      final plaintext = await _cache.getDecrypted(_recordFor(albumId, p),
+          thumb: true, preview: true);
+      if (!_current(albumId, p.mediaId, epoch)) return;
 
       if (_suspended || _closed) return;
       _bytes[p.mediaId] = plaintext;
@@ -180,32 +165,7 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
     }
   }
 
-  // Avoid recreating sealed files after an album wipe
-  Future<Uint8List?> _coldFill(
-      MediaRecord record, MediaCacheKey k, String albumId, int epoch) async {
-    final url =
-        await _api.requestDownloadURL(k.albumId, k.mediaId, asset: 'thumb');
-    // Refresh the presigned URL between retries
-    final cipher = await _api.downloadCiphertext(
-      url,
-      expectedBytes: record.thumbSize ?? 0,
-      refreshUrl: () =>
-          _api.requestDownloadURL(k.albumId, k.mediaId, asset: 'thumb'),
-    );
-    final pt = await FileDecryptor.downloadAndDecryptThumb(
-      aks: _aks,
-      record: record,
-      presignedUrl: 'cache://',
-      download: (_) async => cipher,
-    );
-    if (_stale(albumId, epoch)) return null;
-    await _l2.writeRecordIfAbsent(record);
-    if (_stale(albumId, epoch)) return null;
-    await _l2.writeBlob(k, pt);
-    return pt;
-  }
-
-  // Preview records intentionally omit the full file wrap
+  // Shelf previews omit full file wraps
   MediaRecord _recordFor(String albumId, PreviewMedia p) => MediaRecord(
         id: p.mediaId,
         albumId: albumId,
@@ -227,6 +187,8 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
   @override
   Future<void> forget(String albumId) async {
     _epoch[albumId] = (_epoch[albumId] ?? 0) + 1;
+    // Fence downloads before wiping the album
+    _cache.fence(albumId);
     _preview.remove(albumId);
     final owned = _owned.remove(albumId);
     if (owned != null && owned.isNotEmpty) {
@@ -244,8 +206,7 @@ class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
     await _registryWrite.remove(albumId);
   }
 
-  // Account deletion: no new loads, running ones drain, and every decrypted
-  // cover is zeroed. Throws TimeoutException while a load still runs
+  // Refuse wipe success until active loads finish and cover bytes are zeroed
   Future<void> shutdown({Duration wait = const Duration(seconds: 20)}) async {
     _closed = true;
     _queue.clear();

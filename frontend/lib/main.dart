@@ -22,6 +22,7 @@ import 'package:keepsy/crypto/primitives.dart';
 import 'package:keepsy/data/api/media_api.dart';
 import 'package:keepsy/data/native/image_transcoder.dart';
 import 'package:keepsy/data/upload/upload_adapters.dart';
+import 'package:keepsy/diagnostics/perf_probe.dart';
 import 'package:keepsy/data/upload/upload_outbox.dart';
 import 'package:keepsy/data/storage/storage_service.dart';
 import 'package:keepsy/domain/account/account_deletion.dart';
@@ -84,17 +85,15 @@ import 'package:keepsy/domain/account/local_identity.dart';
 import 'package:keepsy/domain/account/sign_in_gate.dart';
 import 'package:keepsy/ui/screens/onboarding_screen.dart';
 
-// Lets the global error handler navigate and show messages
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PerfProbe.start();
 
-  // Native libsodium for X25519/Ed25519 (sumo variant exposes raw
-  // crypto_scalarmult). AES-GCM/ChaCha20 stay on cryptography_flutter
-  // auto-enabled by Flutter since the package ships as a plugin
+  // Use libsodium for curve operations and cryptography_flutter for AEAD
   final sodium = await SodiumSumoInit.init();
   Sign.bindSodium(sodium);
   Kex.bindSodium(sodium);
@@ -119,7 +118,6 @@ void main() async {
   final apiClient = ApiClient();
   final realtimeService = RealtimeService(apiClient);
 
-  // Tests inject host-safe key stores while production uses the platform store
   final secureKeyStore = createSecureKeyStore();
   final labelMap = IdentityLabelMap();
   await labelMap.load();
@@ -130,9 +128,8 @@ void main() async {
     api: prekeyApi,
   );
 
-  // Keep the owner beside vault keys so they share the same lifetime
+  // Persist vault ownership with its keys
   final accountOwner = AccountOwnerStore(secureKeyStore);
-  // MemberDirectory is the E2EE layer's only route to album membership data
   final albumKeyStore = AlbumKeyStore(secureKeyStore);
   // Wrapper-key initialization must precede every key-backed store
 
@@ -143,8 +140,6 @@ void main() async {
     ks: albumKeyStore,
     putProfileCt: (albumId, ct) => albumService.putProfileCt(albumId, ct),
   );
-  // The album title resolver is attached after cache_root_key/NameCache load
-  // (below), since it reads through the persistent name cache
   final memberDirectory = MemberDirectory((albumId) async {
     final members =
         await albumService.listMembers(_uuidStringFromBytes(albumId));
@@ -164,23 +159,19 @@ void main() async {
   });
   final epochApi = HttpEpochApi(data_epoch.ApiClientEpochJsonClient(apiClient));
   final inviteApi = HttpInviteApi(ApiClientInviteJsonClient(apiClient));
-  // Initiates epoch 0 during album creation and rotations after member removal
   final epochRotator = EpochRotator(
     epochs: epochApi,
     prekeys: prekeyApi,
     identity: identityService,
     aks: albumKeyStore,
-    // member removal rotates for members known only by token (identity
-    // hidden) : HttpPrekeyApi doubles as the by token bundle fetcher
+    // Rotations fetch member bundles by token when user IDs are hidden
     memberBundles: prekeyApi,
   );
-  // Load the media cache key once and open L2 before album screens can render
   final mediaApi = MediaApi(apiClient);
   final cacheRootKey = await loadOrCreateCacheRootKey(secureKeyStore);
   final nameCache = await NameCache.open(cacheRootKey: cacheRootKey);
   final ownAvatar = await OwnAvatarStore.open(cacheRootKey: cacheRootKey);
   final avatarApi = AvatarApi(apiClient);
-  // Faces are fetched and opened only for albums whose key this phone holds
   final avatarCache = await AvatarCache.open(
     cacheRootKey: cacheRootKey,
     fetch: (albumId, token, ref) async {
@@ -213,7 +204,6 @@ void main() async {
     upload: avatarApi.upload,
     remove: avatarApi.remove,
   );
-  // Cache only titles that decrypt successfully under an installed MK
   appState.attachAlbumNameResolver((albumId, nameCt) async {
     if (nameCt == null || nameCt.isEmpty) return 'Untitled Album';
     final key = NameCache.albumKey(albumId);
@@ -223,8 +213,7 @@ void main() async {
     if (b == null) return 'Untitled Album';
     final opened = await SealedName.openAlbumName(albumKeyStore, b, nameCt);
     if (opened != null) {
-      // Dont cache a title for an album we've since left/removed (an in flight
-      // resolve can finish after the wipe)
+      // An album wipe may finish while the title is decrypting
       if (appState.albums.any((a) => a.id == albumId)) {
         nameCache.put(key, opened, nameCt);
       }
@@ -247,8 +236,7 @@ void main() async {
     }
     return opened;
   });
-  // Roster pins, verification claims, signer bindings, and creator markers are
-  // sealed under cache_root_key and survive normal logout
+  // Identity pins and signer bindings remain sealed across logout
   final identityPinStore =
       await IdentityPinStore.open(cacheRootKey: cacheRootKey);
   // Remove creator markers left by a crash after epoch 0 installed
@@ -258,17 +246,16 @@ void main() async {
       await identityPinStore.clearCreating(albumIdStr);
     }
   }
-  // Reconcile cannot invoke this callback before the store opens below
   late final ActivityStore activityStore;
   late final ActivitySync activitySync;
-  // Recompute from storage so repeated alarms and restarts cannot desync the dot
+  // Recompute unread state after repeated alarms or restarts
   Future<void> refreshUnread() async =>
       appState.setUnreadNotifications(await activityStore.hasUnseen());
   final identityTrust = IdentityTrust(
     identity: identityService,
     pins: identityPinStore,
     onChanged: (albumId, memberToken, newIkPub) {
-      // Through the sync so opening Activity and the wipe both wait for it
+      // Serialize with activity sync and account wipe
       unawaited(activitySync.alarm(() => recordTrustAlarm(
             record: activityStore.record,
             onRecorded: refreshUnread,
@@ -279,8 +266,7 @@ void main() async {
           )));
     },
   );
-  // look up an invitee by keepsy_id + ship all historical MKs. The pinner
-  // anchors first contact TOFU on the IK we wrap to (finding #1, invite path)
+  // Pin the invitee IK used to wrap the historical album keys
   final inviteInitiator = InviteInitiator(
     prekeys: prekeyApi,
     invites: inviteApi,
@@ -329,14 +315,12 @@ void main() async {
         }
         return (await mediaSealedCache.loadAlbums()).isNotEmpty;
       } catch (_) {
-        // Fail closed when vault state cannot be read
         return true;
       }
     },
     readServerIdentity: () async {
       try {
         final keys = await prekeyApi.fetchOwnKeys();
-        // Empty fields mean this account has not published an identity
         if (keys.ikPub.isEmpty || keys.lkPub.isEmpty) {
           return (
             state: ServerIdentityState.unpublished,
@@ -361,7 +345,6 @@ void main() async {
     record: activityStore.record,
     readSnapshot: activityStore.readSnapshot,
     writeSnapshot: activityStore.writeSnapshot,
-    // The server exposes uploader tokens, but names remain sealed on-device
     fetchMedia: (albumId) async {
       try {
         return await mediaApi.listMedia(albumId);
@@ -382,32 +365,33 @@ void main() async {
       await refreshUnread();
     },
   );
-  // Restore the dot offline only for the owner whose shelf may be shown
   if (shelfSeedAllowed) {
     try {
       await refreshUnread();
     } catch (_) {}
   }
-  // Each listing says what every album shows for us, so both compare against it
+  // Use the same listing for activity and deletion reconciliation
   appState.attachListingApplied(() {
     unawaited(activitySync.listed());
     unawaited(avatarPublisher.sync());
   });
 
-  // Persist every AppState shelf mutation
   appState.attachShelfPersistence(mediaSealedCache.saveAlbums);
   final mediaPlaintextCache = MediaPlaintextCache();
   // Seen state must survive media cache eviction
   final seenStore = await SealedSeenStore.open(cacheRootKey: cacheRootKey);
+  final mediaCacheManager = MediaCacheManager(
+    plaintext: mediaPlaintextCache,
+    ciphertext: mediaSealedCache,
+    api: mediaApi,
+    aks: albumKeyStore,
+  );
   final shelfCovers = ShelfCoversImpl(
     sealedCache: mediaSealedCache,
-    api: mediaApi,
-    albumKeys: albumKeyStore,
+    cache: mediaCacheManager,
   );
-  // Unknown albums start at their current generation
   void seedWatermarks() {
     for (final a in appState.albums) {
-      // Do not seed from an unknown generation
       if (!a.hasSummary) continue;
       if (!seenStore.knows(a.id)) {
         unawaited(seenStore.markSeen(a.id, a.mediaGeneration));
@@ -418,27 +402,16 @@ void main() async {
   appState.addListener(seedWatermarks);
   seedWatermarks();
 
-  // Reconcile gaps in realtime summary data
   appState.attachSummaryRefresh(() async {
     final fresh = await albumService.getMyAlbums();
     if (fresh != null) appState.applyListing(fresh);
   });
 
-  final mediaCacheManager = MediaCacheManager(
-    plaintext: mediaPlaintextCache,
-    ciphertext: mediaSealedCache,
-    api: mediaApi,
-    aks: albumKeyStore,
-  );
-
-  // Removal rotations bind every new wrap to a locally trusted identity key
-  // A missing pin fails before the new MK is generated
   final expectedIkResolver = ExpectedIkResolver.responder(
     selfToken: (albumId) {
       final t = appState.selfMemberToken(_uuidStringFromBytes(albumId));
       return t == null ? null : base64.decode(base64.normalize(t));
     },
-    // Every remaining member needs a roster identity pin
     pinned: (albumId, token) =>
         identityPinStore.pinnedIk(hexAlbumId(albumId), base64.encode(token)),
     // Roster discovery must never grant epoch-signing authority
@@ -448,22 +421,19 @@ void main() async {
     // Only the creator may sign before epoch 0 installs
     soleSigner: (albumId) =>
         identityPinStore.isCreating(_uuidStringFromBytes(albumId)),
-    // First sight is pinned only after its signature proves the key
     pin: (albumId, token, ik) async {
       identityPinStore.pinSigner(hexAlbumId(albumId), base64.encode(token), ik);
       await identityPinStore.flush();
     },
   );
-  // Verify wraps against locally bound signer keys, never server-supplied keys
   final epochProcessor = EpochProcessor(
     api: epochApi,
     identity: identityService,
     store: albumKeyStore,
     directory: memberDirectory,
     signerGate: expectedIkResolver,
-    invites: inviteApi, // backfill posts the join_complete receipt
+    invites: inviteApi,
   );
-  // Surface failures swallowed by background epoch dispatch
   epochProcessor.blocked.listen((b) {
     appState.setKeyBlock(_uuidStringFromBytes(b.albumId), b);
   });
@@ -478,8 +448,7 @@ void main() async {
     return cur?.rotationRequired ?? false;
   }
 
-  // Installing the authoritative epoch is what releases an album's queued
-  // photos : the realtime echo that normally does it is only a hint
+  // Resume uploads only after installing the authoritative epoch
   Future<void> reconcileAlbumKeys(Uint8List albumId) async {
     final cur = await epochApi.getCurrentEpoch(_uuidStringFromBytes(albumId));
     if (cur == null) return;
@@ -488,7 +457,6 @@ void main() async {
 
   Future<void> wipeLocalAlbum(Uint8List albumId) async {
     final albumStr = _uuidStringFromBytes(albumId);
-    // Queued photos and their sealed keys must not outlive the album
     final picks = await uploadQueue.forgetAlbum(albumStr);
     await shelfCovers.forget(albumStr);
     await mediaCacheManager.clearAlbum(albumStr);
@@ -502,8 +470,7 @@ void main() async {
     await ownAvatar.forgetAlbum(albumStr);
     await identityTrust.forgetAlbum(albumId);
     rotationRecovery.forget(albumId);
-    // Several of the steps above swallow delete failures by design, so the
-    // cleanup record is only released once nothing is found
+    // Verify the wipe because some stores swallow deletion errors
     final left = <String>[
       for (final path in picks)
         if (await File(path).exists()) 'picked photo',
@@ -544,7 +511,6 @@ void main() async {
     wipeLocalAlbum: wipeLocalAlbum,
     isRotationRequired: isRotationRequired,
   );
-  // Persists every album loss until its local wipe is verified
   final albumCleanup = AlbumCleanupQueue(
     store: mediaSealedCache,
     probe: albumService.probeAlbum,
@@ -567,7 +533,6 @@ void main() async {
     if (b != null) unawaited(rotationRecovery.request(b));
   });
 
-  // Membership errors trigger durable cleanup when realtime events were missed
   ApiClient.onMemberRevoked = (albumStr) {
     unawaited(albumCleanup.albumGone(albumStr).catchError((_) {}));
   };
@@ -577,7 +542,7 @@ void main() async {
   }
 
   ApiClient.onNotMember = onAlbumDeleted;
-  // A listing can race a just created album, so an omission is probed first
+  // Probe omissions because listings can race album creation
   appState.attachAlbumsVanished((ids) {
     for (final id in ids) {
       unawaited(albumCleanup.albumMissing(id).catchError((_) {}));
@@ -585,8 +550,7 @@ void main() async {
   });
   unawaited(albumCleanup.drain());
 
-  // WS dispatcher. Epoch failures are surfaced through EpochProcessor.blocked
-  // and swallowed here so one bad event cannot terminate the listener
+  // EpochProcessor reports failures without terminating the realtime listener
   realtimeService.stream.listen((ev) {
     if (ev.type == 'e2ee.opk_low') {
       identityService.replenishOpks();
@@ -644,7 +608,6 @@ void main() async {
       appState.refreshSummarySoon();
       appState.notifyMemberChanged(albumStr);
     } else if (ev.type == 'e2ee.member_revoked') {
-      // Self removal wipes the album while another removal refreshes its roster
       final albumStr = ev.payload['album_id'] as String?;
       final tokenB64 = ev.payload['member_token'] as String?;
       if (albumStr == null || tokenB64 == null) return;
@@ -671,7 +634,6 @@ void main() async {
     }
   });
 
-  // Joined albums appear only after their keys install
   epochProcessor.joinedAlbums.listen((albumIdBytes) async {
     final albumIdStr = _uuidStringFromBytes(albumIdBytes);
     await appState
@@ -717,7 +679,7 @@ void main() async {
     ),
   );
   uploadQueue = UploadQueueModel(uploadCoordinator);
-  // Sealed photos are bound to an account, so restore waits until it is known
+  // Restore the outbox only after its owning account is known
   appState.attachUserKnown((userId) {
     unawaited(StorageService().saveUserId(userId));
     unawaited(uploadQueue.restore());
@@ -725,8 +687,8 @@ void main() async {
   unawaited(pickedSources.sweepStaleStaging());
   appState.attachUploadResume(uploadCoordinator.resumeAlbum);
 
-  // Stop work that can reach the server or write plaintext before clearing stores
-  // Every step is idempotent because a failed wipe repeats them
+  // Stop network and plaintext writes before clearing stores
+  // Wipe steps must tolerate retries
   var catalogClosed = false;
   final terminalWipe = TerminalWipe(
     steps: [
@@ -758,7 +720,7 @@ void main() async {
       (name: 'own avatar', run: ownAvatar.wipe),
       (name: 'pins', run: identityPinStore.clear),
       (name: 'seen', run: seenStore.clear),
-      // Closed before the keystore goes so no late install recreates it
+      // Block late key installs before deleting the keystore
       (name: 'key handles', run: () async => albumKeyStore.forgetAll()),
       (name: 'labels', run: labelMap.clearAll),
       (name: 'keystore', run: secureKeyStore.wipeAll),
@@ -770,7 +732,6 @@ void main() async {
         name: 'preferences',
         run: () async => (await SharedPreferences.getInstance()).clear()
       ),
-      // Catch alls for picker copies, temp files and anything a store missed
       (
         name: 'support dir',
         run: () async => _emptyDir(await getApplicationSupportDirectory())
@@ -797,7 +758,6 @@ void main() async {
     random: Csprng.bytes,
   );
 
-  // Reconcile key state and catch up missed epochs after each reconnect
   realtimeService.connected.listen((_) {
     unawaited(albumCleanup.drain());
     unawaited(_onReconnect(
@@ -874,17 +834,13 @@ Future<void> _onReconnect(
   }
   if (ids.isEmpty) return;
   try {
-    // Per album resilient + idempotent : overlapping with landing_screen's
-    // cold start call is harmless, so both entry points keep their own
     await epochProcessor.catchUpAll(ids);
-    // Newly installed MKs may make album titles decryptable now
     appState.refreshAlbumNames();
     await rotationRecovery.checkAll(ids);
   } catch (_) {}
 }
 
-// Everything goes except the deletion marker, which is cleared only once the
-// wipe has been verified
+// Retain the deletion marker until the wipe is verified
 bool _survivesWipe(String name) =>
     name == kDeletionMarkerName || name.startsWith('com.apple.');
 
@@ -905,8 +861,7 @@ Future<void> _emptyDir(Directory dir) async {
   }
 }
 
-// Checked after the steps instead of trusting them, since several stores
-// swallow their own delete failures by design
+// Verify deletion because some stores swallow their own failures
 Future<List<String>> _wipeLeftovers(SecureKeyStore keys) async {
   final left = <String>[];
   for (final dir in [
@@ -929,7 +884,7 @@ Future<List<String>> _wipeLeftovers(SecureKeyStore keys) async {
   try {
     if ((await keys.list()).isNotEmpty) left.add('keystore');
   } on KeyStoreUninitializedException {
-    // The wrapper key is gone, which is what a wiped store looks like
+    // A missing wrapper key confirms the store is wiped
   }
   return left;
 }
@@ -940,8 +895,6 @@ Future<void> _prewarmAlbumKeyStore(AlbumKeyStore aks) async {
   } catch (_) {}
 }
 
-// Canonical 8-4-4-4-12 hex form for raw 16B UUIDs. Inline here so main.dart
-// doesnt pull package:uuid for one tiny conversion
 String _uuidStringFromBytes(Uint8List b) {
   if (b.length != 16) {
     throw ArgumentError('albumId must be 16 bytes, got ${b.length}');

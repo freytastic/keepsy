@@ -1,9 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:keepsy/secure_store/key_handle.dart';
 import 'package:keepsy/secure_store/secure_key_store.dart';
-
-// Persists MKs by album and epoch while exposing bytes only through useMk
 
 const String kAlbumLabelPrefix = 'keepsy.album.';
 
@@ -16,7 +15,6 @@ class AlbumKeyStore {
 
   AlbumKeyStore(this._store);
 
-  // Failed initialization is not cached so the next call can retry
   Future<void> initialize() {
     return _initFuture ??= _rebuildPresence().catchError((Object e) {
       _initFuture = null;
@@ -48,7 +46,7 @@ class AlbumKeyStore {
     return m.keys.toList()..sort();
   }
 
-  // Direct write : bypasses replay/downgrade. Internal flows + tests only
+  // Bypasses replay and downgrade checks
   Future<void> install(Uint8List albumId, int epoch, Uint8List mk) async {
     await initialize();
     if (epoch < 0) throw ArgumentError('epoch must be >= 0, got $epoch');
@@ -62,7 +60,7 @@ class AlbumKeyStore {
     _present.putIfAbsent(hex, () => {})[epoch] = h;
   }
 
-  // Replay/downgrade rule (spec §7.3). Idempotent on byte equal re install
+  // Reinstalling an epoch requires identical key bytes
   Future<void> installVerified({
     required Uint8List albumId,
     required int epoch,
@@ -77,8 +75,6 @@ class AlbumKeyStore {
     final hex = _hex(albumId);
     final existing = _present[hex]?[epoch];
     if (existing != null) {
-      // Idempotent on byte equal, tamper exception otherwise. Read existing
-      // through use<T> so the bytes get zeroed in the finally
       final equal = await _store.use<bool>(existing, (bytes) async {
         if (bytes.length != mk.length) return false;
         var diff = 0;
@@ -114,13 +110,12 @@ class AlbumKeyStore {
     _present.clear();
   }
 
-  // Deletes each MK before dropping its in-memory handle
   Future<void> deleteAlbumMKs(Uint8List albumId) async {
     await initialize();
     final hex = _hex(albumId);
     final handles = _present[hex];
     if (handles == null) return;
-    // Forget each key only once deleted, so a failure stays visible to a retry
+    // Keep failed deletions in the map for retry
     for (final epoch in handles.keys.toList()) {
       await _store.delete(handles[epoch]!);
       handles.remove(epoch);
@@ -128,8 +123,7 @@ class AlbumKeyStore {
     _present.remove(hex);
   }
 
-  // Only public surface for MK bytes (D2). Mirrors SecureKeyStore.use<T> :
-  // bytes zeroed in finally, callback style so nothing escapes
+  // Overlapping callbacks share one MK read until the last callback releases it
   Future<T> useMk<T>(
     Uint8List albumId,
     int epoch,
@@ -140,7 +134,54 @@ class AlbumKeyStore {
     if (h == null) {
       throw StateError('no MK for album=${_hex(albumId)} epoch=$epoch');
     }
-    return _store.use<T>(h, fn);
+    final key = '${_hex(albumId)}.$epoch';
+    final read = _reads[key] ??= _SharedRead(_store, h, (r) {
+      if (identical(_reads[key], r)) _reads.remove(key);
+    });
+    return read.run(fn);
+  }
+
+  final Map<String, _SharedRead> _reads = {};
+}
+
+class _SharedRead {
+  final Completer<Uint8List> _bytes = Completer<Uint8List>();
+  final Completer<void> _released = Completer<void>();
+  final void Function(_SharedRead) _onClose;
+  late final Future<void> _finished;
+  int _users = 0;
+  bool _closed = false;
+
+  _SharedRead(SecureKeyStore store, KeyHandle h, this._onClose) {
+    _finished = store.use<void>(h, (bytes) async {
+      _bytes.complete(bytes);
+      // Returning releases the buffer to the store for zeroing
+      await _released.future;
+    }).catchError((Object e, StackTrace s) {
+      if (!_bytes.isCompleted) _bytes.completeError(e, s);
+      _close();
+    });
+  }
+
+  Future<T> run<T>(Future<T> Function(Uint8List mk) fn) async {
+    _users++;
+    try {
+      return await fn(await _bytes.future);
+    } finally {
+      if (--_users == 0) {
+        _close();
+        // Wait for zeroing before the last caller returns
+        await _finished;
+      }
+    }
+  }
+
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    // Remove the shared read before releasing its buffer
+    _onClose(this);
+    _released.complete();
   }
 }
 
@@ -158,7 +199,6 @@ class EpochReplayException implements Exception {
       'EpochReplayException($reason, epoch=$epoch, latest=$latestEpoch)';
 }
 
-// keepsy.album.<hex32>.mk.<epoch>
 final RegExp _kLabelRe = RegExp(r'^keepsy\.album\.([0-9a-f]{32})\.mk\.(\d+)$');
 
 ({String albumHex, int epoch})? _parseLabel(String label) {
