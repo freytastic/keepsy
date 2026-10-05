@@ -12,6 +12,7 @@ import 'package:keepsy/ui/widgets/pressable_scale.dart';
 
 import 'album_copy.dart';
 import 'album_stats.dart';
+import 'photo_sheets.dart';
 
 typedef PeekFullImageBuilder = Widget Function(
   BuildContext context,
@@ -132,6 +133,7 @@ class _PhotoPeekState extends State<PhotoPeek> with TickerProviderStateMixin {
   void dispose() {
     _captionDelay.cancel();
     _controlsDelay.cancel();
+    _noteTimer?.cancel();
     (_entry as CurvedAnimation).dispose();
     (_sharp as CurvedAnimation).dispose();
     _photo.dispose();
@@ -142,36 +144,18 @@ class _PhotoPeekState extends State<PhotoPeek> with TickerProviderStateMixin {
   }
 
   Future<void> _confirmDelete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        backgroundColor: Warm.paper,
-        title: const Text(AlbumCopy.deleteTitle,
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-        content: const Text(AlbumCopy.deleteBody,
-            style: TextStyle(fontSize: 13.5, color: Warm.inkSoft)),
-        actions: [
-          PressableScale(
-            onTap: () => Navigator.of(dialog).pop(false),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Text(AlbumCopy.deleteCancel,
-                  style: TextStyle(color: Warm.inkSoft)),
-            ),
-          ),
-          PressableScale(
-            onTap: () => Navigator.of(dialog).pop(true),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Text(AlbumCopy.deleteConfirm,
-                  style:
-                      TextStyle(color: Warm.warn, fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) await widget.onDelete();
+    if (await confirmPhotoDelete(context)) await widget.onDelete();
+  }
+
+  String? _note;
+  Timer? _noteTimer;
+
+  void _say(String note) {
+    _noteTimer?.cancel();
+    setState(() => _note = note);
+    _noteTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _note = null);
+    });
   }
 
   void _keepOpen() {}
@@ -254,30 +238,15 @@ class _PhotoPeekState extends State<PhotoPeek> with TickerProviderStateMixin {
                                   at: _controls,
                                   from: 10,
                                   scaleFrom: 0.96,
-                                  child: const ReactionRow(),
+                                  child: PeekDock(
+                                    owner: widget.isOwner,
+                                    onHeart: () => _say(AlbumCopy.heartSoon),
+                                    onSave: () => _say(AlbumCopy.saveSoon),
+                                    onDelete: _confirmDelete,
+                                  ),
                                 ),
                                 const SizedBox(height: 14),
                                 const _SayBar(),
-                                const SizedBox(height: 18),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const PeekAction(
-                                      icon: Icons.download_rounded,
-                                      label: AlbumCopy.save,
-                                      onTap: null,
-                                    ),
-                                    if (widget.isOwner) ...[
-                                      const SizedBox(width: 22),
-                                      PeekAction(
-                                        icon: Icons.delete_outline_rounded,
-                                        label: AlbumCopy.delete,
-                                        danger: true,
-                                        onTap: _confirmDelete,
-                                      ),
-                                    ],
-                                  ],
-                                ),
                               ],
                             ),
                           ),
@@ -285,6 +254,20 @@ class _PhotoPeekState extends State<PhotoPeek> with TickerProviderStateMixin {
                       );
                     },
                   ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: MediaQuery.paddingOf(context).top + 16,
+            child: IgnorePointer(
+              child: Center(
+                child: AnimatedOpacity(
+                  opacity: _note == null ? 0 : 1,
+                  duration: Warm.quick,
+                  child: PeekNote(text: _note ?? ''),
                 ),
               ),
             ),
@@ -495,7 +478,7 @@ class _Caption extends StatelessWidget {
     if (days == 0) return 'Today';
     if (days == 1) return 'Yesterday';
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June', //
+      'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December',
     ];
     if (days < 365 && at.year == today.year) {
@@ -517,42 +500,6 @@ class _CaptionDot extends StatelessWidget {
       decoration: const BoxDecoration(
         color: Color(0x57FFFFFF),
         shape: BoxShape.circle,
-      ),
-    );
-  }
-}
-
-class ReactionRow extends StatelessWidget {
-  const ReactionRow({super.key});
-
-  static const _glyphs = [
-    Icons.favorite_border_rounded,
-    Icons.star_border_rounded,
-    Icons.sentiment_satisfied_alt_rounded,
-    Icons.done_rounded,
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
-      decoration: BoxDecoration(
-        color: Warm.glassFill,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Warm.glassHairline),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (var i = 0; i < _glyphs.length; i++) ...[
-            if (i > 0) const SizedBox(width: 3),
-            SizedBox(
-              width: 42,
-              height: 38,
-              child: Icon(_glyphs[i], size: 19, color: Color(0x9EFFFFFF)),
-            ),
-          ],
-        ],
       ),
     );
   }
@@ -608,44 +555,183 @@ class _LaterPill extends StatelessWidget {
   }
 }
 
-class PeekAction extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
-  final bool danger;
+class PeekDock extends StatelessWidget {
+  final bool owner;
+  final VoidCallback onHeart;
+  final VoidCallback onSave;
+  final VoidCallback onDelete;
 
-  const PeekAction({
+  const PeekDock({
     super.key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.danger = false,
+    required this.owner,
+    required this.onHeart,
+    required this.onSave,
+    required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = onTap == null
-        ? Warm.glassInkFaint
-        : danger
-            ? Warm.warnGlass
-            : Warm.glassInk;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Row(
+        children: [
+          PeekRoundButton(
+            key: const Key('photo-peek-heart'),
+            label: AlbumCopy.heart,
+            icon: Icons.favorite_border_rounded,
+            onTap: onHeart,
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: _SaveStone(onTap: onSave)),
+          if (owner) ...[
+            const SizedBox(width: 10),
+            PeekRoundButton(
+              key: const Key('photo-peek-delete'),
+              label: AlbumCopy.delete,
+              icon: Icons.delete_outline_rounded,
+              quiet: true,
+              onTap: onDelete,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class PeekRoundButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool quiet;
+  final VoidCallback onTap;
+
+  const PeekRoundButton({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.quiet = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: PressableScale(
+        onTap: onTap,
+        child: Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: quiet ? const Color(0x14FFFFFF) : Warm.glassFill,
+            shape: BoxShape.circle,
+            border: Border.all(color: Warm.glassHairline),
+          ),
+          child: Icon(icon,
+              size: 21,
+              color: quiet ? const Color(0x9EFFFFFF) : const Color(0xD9FFFFFF)),
+        ),
+      ),
+    );
+  }
+}
+
+class _SaveStone extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _SaveStone({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
     return PressableScale(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(width: 7),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13.5, fontWeight: FontWeight.w600, color: color)),
-            if (onTap == null) ...[
-              const SizedBox(width: 7),
-              const _LaterPill(),
-            ],
+      child: Container(
+        height: 50,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          gradient: Warm.stoneFill,
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x40000000),
+              offset: Offset(0, 6),
+              blurRadius: 18,
+            ),
           ],
+        ),
+        child: const FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.download_rounded, size: 18, color: Warm.ink),
+              SizedBox(width: 8),
+              Text(
+                AlbumCopy.saveToPhone,
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w600,
+                  color: Warm.ink,
+                ),
+              ),
+              SizedBox(width: 8),
+              _StoneChip(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StoneChip extends StatelessWidget {
+  const _StoneChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: Warm.inkGhost,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Text(
+        AlbumCopy.laterBadge,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+          color: Warm.inkSoft,
+        ),
+      ),
+    );
+  }
+}
+
+class PeekNote extends StatelessWidget {
+  final String text;
+
+  const PeekNote({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xE62A2622),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      // The note sits outside the peek's Material and needs its own text style
+      child: Material(
+        type: MaterialType.transparency,
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w500,
+            color: Colors.white,
+          ),
         ),
       ),
     );

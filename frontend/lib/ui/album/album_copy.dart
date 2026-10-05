@@ -47,7 +47,6 @@ abstract final class AlbumCopy {
   static String showEveryone(int people) =>
       'Show everyone in this album, $people ${people == 1 ? 'person' : 'people'}';
 
-  // Keeps unfinished actions visible without pretending they work
   static const laterBadge = 'Soon';
 
   static String onlyTheirPhotos(String? name) =>
@@ -90,4 +89,26 @@ abstract final class AlbumCopy {
   static const deleteCancel = 'Keep';
   static const deleteFailed = 'Could not delete that photo.';
   static const unknownMember = 'Someone';
+
+  static const saveToPhone = 'Save to phone';
+  static const saveSoon = 'Saving to your phone comes in beta v2.';
+  static const heartSoon = 'Hearts come in beta v2.';
+  static const heart = 'Heart';
+  static const deleteForEveryone = 'Delete for everyone';
+  static const betaV2 = 'Beta v2';
+  static const hearts = 'Hearts';
+  static const heartsLater = "You'll be able to heart photos here.";
+  static const comments = 'Comments';
+  static const commentsLater = 'Comments will live here, next to the photo.';
+  static const factSize = 'Size';
+  static const factFormat = 'Format';
+  static const factAdded = 'Added';
+  static String sharedBy(String? name, {required bool mine}) => mine
+      ? 'Shared by you'
+      : 'Shared by ${name ?? 'someone'}';
+  static String encryptedOn(String? name, {required bool mine}) {
+    final whose = mine ? 'your' : (name == null ? "the uploader's" : "$name's");
+    return 'Encrypted on $whose phone. Location and camera details were '
+        'removed before upload.';
+  }
 }

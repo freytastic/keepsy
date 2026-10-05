@@ -88,14 +88,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   AlbumFeedState _feed = AlbumFeedState.loadingNoCache;
   bool _markedOpenSeen = false;
 
-  //  track the last (album,media) tuple we acted on so a
-  // single AppState.notifyListeners broadcast doesnt drive _loadMedia twice
-  // _appState is captured in didChangeDependencies for symmetric add/remove
+  // Deduplicate events repeated by unrelated AppState notifications
   String? _lastSeenMediaAddedId;
   int _lastSeenMemberTick = 0;
   int _lastSeenMediaRemovedTick = 0;
-  // set once this screen has begun exiting (kicked, or a voluntary leave) so
-  // the AppState listener never double pops
+  // Prevent access loss notifications from popping the route twice
   bool _accessLost = false;
   AppState? _appState;
 
@@ -256,6 +253,47 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
+  String? _uploaderName(String token) {
+    final name = _memberNames[token];
+    return _members
+        .where((m) => m.memberToken == token)
+        .map((m) =>
+            name != null && name.ct == m.profile.nameCt ? name.name : null)
+        .firstOrNull;
+  }
+
+  Future<void> _openViewer(MediaRecord record) async {
+    final records = _filterToken == null
+        ? _items
+        : _items.where((r) => r.uploaderToken == _filterToken).toList();
+    final index = records.indexWhere((r) => r.id == record.id);
+    if (index < 0) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PhotoViewerScreen(
+        records: records,
+        initialIndex: index,
+        cache: context.read<MediaCacheManager>(),
+        nameOf: _uploaderName,
+        faceOf: (token, size) => _face(token, _uploaderName(token), size),
+        isOwner: (r) => r.uploaderToken == widget.album.memberToken,
+        onDelete: _deleteFromViewer,
+      ),
+    ));
+  }
+
+  // The viewer handles navigation after deletion
+  Future<bool> _deleteFromViewer(MediaRecord record) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _media.deleteMedia(widget.album.id, record.id);
+      unawaited(_loadMedia());
+      return true;
+    } catch (_) {
+      messenger.showSnackBar(_note(AlbumCopy.deleteFailed));
+      return false;
+    }
+  }
+
   Future<void> _deleteMedia(MediaRecord record) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -302,7 +340,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _appState!.addListener(_onAppStateChange);
     }
     final queue = context.read<UploadQueueModel>();
-    // Claim observation once per queue instance
     if (!identical(_uploads, queue)) {
       _uploads?.removeListener(_onUploadChange);
       _uploads?.stopObserving(widget.album.id);
@@ -332,7 +369,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final s = _appState;
     if (s == null) return;
 
-    // Exit on external access loss without double-popping a voluntary leave
     if (!_accessLost && s.lastRemovedAlbumId == widget.album.id) {
       _accessLost = true;
       final nav = Navigator.of(context);
@@ -350,15 +386,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       _loadMedia();
     }
 
-    // a member joined or was revoked in this album : refresh the roster so a
-    // kicked user disappears (and a new one appears) without re entering
     if (s.lastMemberChangedAlbumId == widget.album.id &&
         s.memberChangeTick != _lastSeenMemberTick) {
       _lastSeenMemberTick = s.memberChangeTick;
       _loadMembers();
     }
 
-    // new media in this album
     if (s.lastMediaAddedAlbumId == widget.album.id) {
       final mid = s.lastMediaAddedMediaId;
       if (mid != null && mid != _lastSeenMediaAddedId) {
@@ -371,7 +404,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // Ciphertext fingerprints prevent stale decrypted names after a rename
   final Map<String, ({String name, String ct})> _memberNames = {};
 
-  // Never surface the raw token slice : and never a stale name after a rename
+  // Use a neutral fallback while a renamed member's name is unresolved
   String _memberName(AlbumMember m) {
     final e = _memberNames[m.memberToken];
     if (e != null && e.ct == m.profile.nameCt) return e.name;
@@ -391,8 +424,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (mounted) {
       setState(() {
         _members = members;
-        // Filtering by someone no longer listed empties the grid with no
-        // avatar left to tap to get back
+        // A removed member's filter has no avatar left to clear it
         if (_filterToken != null &&
             !members.any((m) => !m.revoked && m.memberToken == _filterToken)) {
           _filterToken = null;
@@ -403,8 +435,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
   }
 
-  // memberToken -> roster trust shown by chips and the key change banner
-  // Epoch signing authority and install blocks are tracked separately
+  // Display trust is separate from epoch signing authority and install blocks
   Map<String, TrustState> _trust = {};
 
   // Seen persistence must not fail a successful listing
@@ -426,7 +457,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     try {
       return context.read<IdentityTrust>();
     } catch (_) {
-      return null; // widget tests that dont install the provider
+      return null;
     }
   }
 
@@ -466,7 +497,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         unawaited(_retryRotation());
       }
     } catch (_) {
-      // trust display : never break the album on it
+      // Trust display failures must not prevent viewing the album
     }
   }
 
@@ -494,8 +525,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         state: state,
         subtitle: _appState?.albumDisplayName(widget.album.id),
         face: _face(m.memberToken, _resolvedNames()[m.memberToken], 46),
-        // verifies the key the user was ACTUALLY SHOWN, not whatever the
-        // roster happens to say by the time they tap
+        // Bind verification to the displayed key even if the roster changes
         onVerify: () {
           verifying = () async {
             try {
@@ -515,8 +545,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     await verifying?.catchError((_) {});
   }
 
-  // Manually re run contiguous catch up. Reconnects may retry it too: any
-  // unresolved failure simply emits a fresh block
   Future<void> _retryKeySync() async {
     final albumIdBytes = uuidToBytes(widget.album.id);
     if (albumIdBytes == null) return;
@@ -524,14 +552,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     try {
       proc = context.read<EpochProcessor>();
     } catch (_) {
-      return; // widget tests that dont install the provider
+      return;
     }
     await proc.catchUpAll([albumIdBytes]);
   }
 
-  // Shows the digits for the key EXACTLY as it was presented during the failed
-  // install. Re reading it from the roster would let a server sign with one key
-  // and show an honest one here, so the human would be comparing the wrong thing
+  // Compare the failed install's signer key to prevent roster substitution
   Future<void> _verifyBlockingSigner(EpochBlocked block) async {
     final trust = _trustSvc();
     final albumIdBytes = uuidToBytes(widget.album.id);
@@ -566,8 +592,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           } on VerificationNotSaved {
             // Session-only; a restart restores the alarm
           }
-          // Verifying only AUTHORIZES the retry : the block lifts when the
-          // install actually succeeds
+          // Verification permits a retry but only a successful install clears the block
           await _retryKeySync();
         },
       ),
@@ -578,14 +603,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (!mounted) return;
     final withCt =
         members.where((m) => (m.profile.nameCt ?? '').isNotEmpty).toList();
-    // Nothing published yet : skip (also avoids needing providers in tests
-    // whose members carry no name_ct)
     if (withCt.isEmpty) return;
     final nameCache = context.read<NameCache>();
     final albumId = widget.album.id;
 
-    // Serve cache hits instantly (CPU) : batch the misses into one MK
-    // unwrap per epoch instead of a keystore round trip per member
+    // Batch cache misses to share one MK unwrap per epoch
     final fromCache = <String, ({String name, String ct})>{};
     final misses = <({String token, Uint8List tokenBytes, String nameCt})>[];
     for (final m in withCt) {
@@ -613,9 +635,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (albumIdBytes == null) return;
     final ks = context.read<AlbumKeyStore>();
     final resolved = await SealedName.openMemberNames(ks, albumIdBytes, misses);
-    // If we were removed from the album while this decrypt was in flight, the
-    // wipe (clearAlbum) already ran : don't repopulate NameCache with names for
-    // an album we no longer belong to
+    // An album wipe may finish during decryption, so reject late results
     if (!mounted || _accessLost) return;
     if (resolved.isEmpty) return;
     final ctByToken = {for (final m in misses) m.token: m.nameCt};
@@ -636,8 +656,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       .where((m) => !m.revoked && _trust[m.memberToken] == TrustState.changed)
       .toList();
 
-  // The viewer's own member row for this album, resolved by matching their held
-  // member_token. null until members load (or if not present)
   AlbumMember? get _me {
     final myToken = widget.album.memberToken;
     if (myToken == null) return null;
@@ -657,13 +675,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     try {
       scheduler = context.read<RotationRecoveryScheduler>();
     } catch (_) {
-      return; // widget tests that dont install the provider
+      return;
     }
     await scheduler.request(albumIdBytes);
   }
 
-  // §6.1 : invite an existing keepsy user by their keepsy_id. The server gates
-  // the actual add to the admin
   Future<void> _openAddMember() async {
     final albumIdBytes = _uuidStringToBytes(widget.album.id);
     if (albumIdBytes == null) return;
@@ -876,19 +892,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    // Scope frequent queue rebuilds to the grid
     final syncing = state.isSyncing(widget.album.id);
-    // A block survives failed sync attempts and disables uploads until a
-    // successful catch up reaches the refused epoch
+    // Uploads stay blocked until catch up reaches the refused epoch
     final keyBlock = state.keyBlockFor(widget.album.id);
     final rotation = state.rotationFor(widget.album.id);
 
-    // Only surface a resolved name whose fingerprint still matches the member's
-    // current name_ct : a renamed member falls back to "Member" until re resolved
     final memberDisplayNames = _resolvedNames();
     final title = state.albumDisplayName(widget.album.id) ?? 'Album';
-    // The shelf's previews hold the row's place until the roster arrives, so
-    // the grid does not jump down when it does
+    // Shelf previews reserve the roster's space to prevent a layout jump
     final loaded = _members.isNotEmpty;
     final avatars = loaded ? _avatars() : _previewAvatars(state);
     final invited = loaded ? avatars.where((a) => a.pending).length : 0;
@@ -980,6 +991,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     traceId: _openTraceId,
                     onFirstThumbnailPaint: _onFirstThumbnailPaint,
                     onPeek: _openPeek,
+                    onOpen: _openViewer,
                   );
                 },
               ),
@@ -1069,6 +1081,7 @@ class _MediaGrid extends StatelessWidget {
   final String traceId;
   final VoidCallback onFirstThumbnailPaint;
   final void Function(MediaRecord record, DecryptedImagePreview preview) onPeek;
+  final void Function(MediaRecord record) onOpen;
 
   const _MediaGrid({
     required this.items,
@@ -1079,6 +1092,7 @@ class _MediaGrid extends StatelessWidget {
     required this.traceId,
     required this.onFirstThumbnailPaint,
     required this.onPeek,
+    required this.onOpen,
   });
 
   @override
@@ -1139,6 +1153,7 @@ class _MediaGrid extends StatelessWidget {
             traceId: traceId,
             onFirstThumbnailPaint: onFirstThumbnailPaint,
             onPeek: onPeek,
+            onOpen: onOpen,
           );
         },
         childCount: pending.length + items.length,
@@ -1155,6 +1170,7 @@ class _MediaTile extends StatefulWidget {
   final String traceId;
   final VoidCallback onFirstThumbnailPaint;
   final void Function(MediaRecord record, DecryptedImagePreview preview) onPeek;
+  final void Function(MediaRecord record) onOpen;
 
   const _MediaTile({
     super.key,
@@ -1163,6 +1179,7 @@ class _MediaTile extends StatefulWidget {
     required this.traceId,
     required this.onFirstThumbnailPaint,
     required this.onPeek,
+    required this.onOpen,
   });
 
   @override
@@ -1192,14 +1209,7 @@ class _MediaTileState extends State<_MediaTile> {
     return PhotoHold(
       onStart: _openPeek,
       child: GestureDetector(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => PhotoViewerScreen(
-              record: widget.record,
-              cache: widget.cache,
-            ),
-          ),
-        ),
+        onTap: () => widget.onOpen(widget.record),
         child: ColoredBox(
           color: Warm.wellEmpty,
           child: EncryptedThumbnail(
@@ -1367,7 +1377,6 @@ class _KeyChangeBanner extends StatelessWidget {
   }
 }
 
-// An owed key rotation. The server holds new photos until it commits
 class _RotationBanner extends StatelessWidget {
   final RotationStatus status;
   final Future<void> Function() onRetry;
@@ -1436,8 +1445,6 @@ class _RotationBanner extends StatelessWidget {
   }
 }
 
-// Persistent key sync failure. It remains visible until a background or manual
-// catch up reaches the blocked epoch
 class _KeyBlockBanner extends StatelessWidget {
   final EpochBlocked block;
   final VoidCallback onVerify;
@@ -1452,8 +1459,7 @@ class _KeyBlockBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const red = Color(0xFFF87171);
-    // Only a PEER's key can be settled by a human comparison. Our own key needs
-    // no confirming, and the rest have nothing to compare against
+    // Only peer identity failures can be resolved by comparing safety numbers
     final verifiable = block.reason == EpochBlockReason.signerMismatch ||
         block.reason == EpochBlockReason.unknownSigner;
     final text = switch (block.reason) {
@@ -1525,9 +1531,6 @@ class _KeyBlockBanner extends StatelessWidget {
   }
 }
 
-// 8-4-4-4-12 hex string -> 16 raw bytes. Returns null on malformed input
-// Inlined here to match the existing pattern in main.dart + landing_screen.dart :
-// future cleanup could pull into a shared helper if a 4th copy appears
 Uint8List? _uuidStringToBytes(String s) {
   final hex = s.replaceAll('-', '');
   if (hex.length != 32) return null;
