@@ -20,6 +20,7 @@ import 'package:keepsy/ui/providers/app_state.dart';
 import 'package:keepsy/ui/screens/main_shell.dart';
 import 'package:keepsy/ui/theme/warm_tokens.dart';
 import 'package:keepsy/ui/widgets/camera_stage.dart';
+import 'package:keepsy/ui/widgets/caret_blink.dart';
 import 'package:keepsy/ui/widgets/warm_button.dart';
 import 'package:keepsy/ui/widgets/warm_field.dart';
 
@@ -154,7 +155,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await auth.commit(pending, email: _email);
       if (!mounted) return;
 
-      // Authentication enables the server identity lookup needed to resolve
       final outcome = await gate.resolve(pending.userId);
       if (!mounted) return;
       if (!AccountGate.admitsShelf(outcome)) {
@@ -192,11 +192,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (!mounted) return;
       final appState = context.read<AppState>();
       if (userData != null) appState.setUserData(userData);
-      // The profile still needs the typed email when /me omits it
       appState.setEmail(_email);
       unawaited(context.read<RealtimeService>().connect());
 
-      // Capture before navigation invalidates this context
       final messenger = ScaffoldMessenger.of(context);
       FocusManager.instance.primaryFocus?.unfocus();
       setState(() {
@@ -225,7 +223,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     try {
       await identity.bootstrap();
     } on BootstrapAccountConflictException {
-      // Late safety net without promising unavailable recovery
       messenger.showSnackBar(const SnackBar(
         content: Text(
           "This account's photos are locked to the phone it was set up on, "
@@ -263,7 +260,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  // A foreign vault can only be opened by its owner or erased locally
   void _showBelongsToAnother() {
     final wipe = context.read<TerminalWipe>();
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -281,7 +277,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ));
   }
 
-  // This authenticated account may delete its unrecoverable server data
   void _showKeysLost() {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => AccountKeysLostScreen(
@@ -313,11 +308,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    // Keep the camera anchored while the keyboard opens
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final keyboardOpen = keyboard > 0;
     final onIntro = _phase == _Phase.intro;
-    // Use the same stable top inset as CameraStage.positioned
     final topInset = MediaQuery.viewPaddingOf(context).top;
 
     final compactCopyBox =
@@ -366,7 +359,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 shrunkScale: compactStageScale,
               ),
 
-              // Move the copy with the compact camera to avoid field overlap
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 280),
                 curve: Curves.easeOutCubic,
@@ -504,7 +496,6 @@ class _Copy extends StatelessWidget {
             duration: Warm.crossfade,
             switchInCurve: Warm.easeSoft,
             switchOutCurve: const FlippedCurve(Warm.easeSoft),
-            // Keep copy top-aligned across phases
             layoutBuilder: (current, previous) => Stack(
               alignment: Alignment.topCenter,
               children: [...previous, if (current != null) current],
@@ -579,7 +570,6 @@ class _PhaseCopy extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: Warm.leadMaxWidth,
-      // Align phase copy with the intro lead
       margin: EdgeInsets.only(top: compact ? 4 : Warm.headingToLead),
       child: phase == _Phase.email
           ? const Text(
@@ -839,11 +829,8 @@ class _Caret extends StatefulWidget {
   State<_Caret> createState() => _CaretState();
 }
 
-class _CaretState extends State<_Caret> with SingleTickerProviderStateMixin {
-  late final AnimationController _blink = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..repeat();
+class _CaretState extends State<_Caret> {
+  final CaretBlink _blink = CaretBlink(const Duration(milliseconds: 1100));
 
   @override
   void dispose() {
@@ -853,10 +840,9 @@ class _CaretState extends State<_Caret> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _blink,
-      builder: (context, child) =>
-          Opacity(opacity: _blink.value < 0.5 ? 1 : 0, child: child),
+    return ValueListenableBuilder<bool>(
+      valueListenable: _blink,
+      builder: (context, on, child) => Opacity(opacity: on ? 1 : 0, child: child),
       child: Container(
         width: 2,
         height: 24,
