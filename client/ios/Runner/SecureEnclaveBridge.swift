@@ -3,13 +3,12 @@ import Flutter
 import CryptoKit
 import Security
 
- // It uses a P-256 key in the Secure Enclave as a master "wrapper"
-// Since the Enclave cannot do AES, we use it for ECDH to derive a symmetric
- // key that encrypts the actual "envelope" of handles stored in the Keychain
+// On devices, a Secure Enclave P-256 key derives the AES key that seals app keys
+// The encrypted envelope lives in Keychain
 final class SecureEnclaveBridge: NSObject, FlutterPlugin {
     static let CHANNEL = "miuchio/keystore"
-    static let WRAP_TAG = "com.example.client.miuchio.wrap"
-    static let ENVELOPE_TAG = "com.example.client.miuchio.envelope"
+    static let WRAP_TAG = "com.freytastic.miuchio.wrap"
+    static let ENVELOPE_TAG = "com.freytastic.miuchio.envelope"
     static let HKDF_INFO = "miuchio.envelope.v1"
 
     static func register(with registrar: FlutterPluginRegistrar) {
@@ -18,36 +17,69 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
         registrar.addMethodCallDelegate(instance, channel: channel)
     }
 
+    // One serial queue keeps envelope reads and rewrites in order without
+    // blocking the UI thread, matching the Android worker
+    private let queue = DispatchQueue(label: "miuchio.keystore", qos: .userInitiated)
+
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        do {
-            let args = (call.arguments as? [String: Any]) ?? [:]
-            switch call.method {
-            case "initialize":
-                try initialize(); result(nil)
-            case "put":
-                let label = args["label"] as! String
-                let pt = (args["plaintext"] as! FlutterStandardTypedData).data
-                let id = try put(label: label, plaintext: pt)
-                result(["handleId": id])
-            case "getOnce":
-                let id = args["handleId"] as! String
-                let pt = try getOnce(handleId: id)
-                result(["plaintext": FlutterStandardTypedData(bytes: pt)])
-            case "delete":
-                try delete(handleId: args["handleId"] as! String); result(nil)
-            case "list":
-                let prefix = args["labelPrefix"] as? String
-                result(try list(prefix: prefix).map { ["handleId": $0.0, "label": $0.1] })
-            case "wipeAll":
-                try wipeAll(); result(nil)
-            default:
-                result(FlutterMethodNotImplemented)
+        let args = (call.arguments as? [String: Any]) ?? [:]
+        let work: () throws -> Any?
+        switch call.method {
+        case "initialize":
+            work = { try self.initialize(); return nil }
+        case "put":
+            work = {
+                let id = try self.put(label: try Self.string(args, "label"),
+                                      plaintext: try Self.bytes(args, "plaintext"))
+                return ["handleId": id]
             }
-        } catch let e as Err {
-            result(FlutterError(code: e.code, message: e.message, details: nil))
-        } catch {
-            result(FlutterError(code: "E_NATIVE", message: "\(error)", details: nil))
+        case "putMany":
+            work = {
+                guard let entries = args["entries"] as? [[String: Any]] else {
+                    throw Err.native("entries missing")
+                }
+                let parsed = try entries.map { (try Self.string($0, "label"), try Self.bytes($0, "plaintext")) }
+                return try self.putMany(parsed).map { ["handleId": $0] }
+            }
+        case "getOnce":
+            work = {
+                let pt = try self.getOnce(handleId: try Self.string(args, "handleId"))
+                return ["plaintext": FlutterStandardTypedData(bytes: pt)]
+            }
+        case "delete":
+            work = { try self.delete(handleId: try Self.string(args, "handleId")); return nil }
+        case "list":
+            work = {
+                let prefix = args["labelPrefix"] as? String
+                return try self.list(prefix: prefix).map { ["handleId": $0.0, "label": $0.1] }
+            }
+        case "wipeAll":
+            work = { try self.wipeAll(); return nil }
+        default:
+            result(FlutterMethodNotImplemented)
+            return
         }
+        queue.async {
+            let reply: Any?
+            do {
+                reply = try work()
+            } catch let e as Err {
+                reply = FlutterError(code: e.code, message: e.message, details: nil)
+            } catch {
+                reply = FlutterError(code: "E_NATIVE", message: "\(error)", details: nil)
+            }
+            DispatchQueue.main.async { result(reply) }
+        }
+    }
+
+    private static func string(_ args: [String: Any], _ key: String) throws -> String {
+        guard let v = args[key] as? String else { throw Err.native("\(key) missing") }
+        return v
+    }
+
+    private static func bytes(_ args: [String: Any], _ key: String) throws -> Data {
+        guard let v = args[key] as? FlutterStandardTypedData else { throw Err.native("\(key) missing") }
+        return v.data
     }
 
     // MARK:  Wrapper key
@@ -62,6 +94,7 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
             kSecClass as String:              kSecClassKey,
             kSecAttrApplicationTag as String: Self.WRAP_TAG.data(using: .utf8)!,
             kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass as String:       kSecAttrKeyClassPrivate,
             kSecReturnRef as String:          true
         ]
         var item: CFTypeRef?
@@ -72,27 +105,29 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
 
     private func createWrapKey() throws -> SecKey {
         var error: Unmanaged<CFError>?
+        var privateAttrs: [String: Any] = [
+            kSecAttrIsPermanent as String:     true,
+            kSecAttrApplicationTag as String:  Self.WRAP_TAG.data(using: .utf8)!
+        ]
+        var attrs: [String: Any] = [
+            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String:  256
+        ]
+        #if targetEnvironment(simulator)
+        // Use a software key in the simulator with the same accessibility policy
+        privateAttrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        #else
         guard let access = SecAccessControlCreateWithFlags(
             nil,
             kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             .privateKeyUsage,
             &error
         ) else { throw Err.native("SecAccessControl: \(error!.takeRetainedValue())") }
-
-        var attrs: [String: Any] = [
-            kSecAttrKeyType as String:        kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String:  256,
-            kSecPrivateKeyAttrs as String: [
-                kSecAttrIsPermanent as String:     true,
-                kSecAttrApplicationTag as String:  Self.WRAP_TAG.data(using: .utf8)!,
-                kSecAttrAccessControl as String:   access
-            ]
-        ]
-        #if !targetEnvironment(simulator)
-        // SecureEnclave.isAvailable is only true on physical devices
+        privateAttrs[kSecAttrAccessControl as String] = access
         // The private bytes of this key are non-extractable from the SE hardware
         attrs[kSecAttrTokenID as String] = kSecAttrTokenIDSecureEnclave
         #endif
+        attrs[kSecPrivateKeyAttrs as String] = privateAttrs
 
         guard let key = SecKeyCreateRandomKey(attrs as CFDictionary, &error) else {
             throw Err.native("SecKeyCreateRandomKey: \(error!.takeRetainedValue())")
@@ -102,9 +137,7 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
 
     // MARK:  Envelope persistence
 
-
-     // Decrypts the envelope by re-deriving the AES key via ECDH between the
-     //stored ephemeral public key and the SE-resident master private key
+    // Re-derive the AES key from the stored ephemeral public key and wrapper key
     private func loadEnvelope() throws -> [String: (label: String, value: Data)] {
         // Distinguish post wipeAll (E_STORE_UNINITIALIZED) from a mere missing handle
         guard (try? loadWrapKey()) != nil else { throw Err.uninitialized("wrapper key absent") }
@@ -140,52 +173,20 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
         return decode(pt)
     }
 
-     // Saves the envelope
-     //Uses Hybrid Encryption (ECDH) because the Secure Enclave math is restricted to EC
     private func saveEnvelope(_ map: [String: (label: String, value: Data)]) throws {
-        let wrapKey: SecKey
-        do { wrapKey = try loadWrapKey() }
-        catch { throw Err.uninitialized("wrapper key absent") }
-        guard SecKeyCopyPublicKey(wrapKey) != nil else { throw Err.native("no wrap pub") }
+        guard (try? loadWrapKey()) != nil else { throw Err.uninitialized("wrapper key absent") }
 
-        // Generate an ephemeral keypair on the CPU
+        // Generate an ephemeral keypair on the CPU, then derive exactly as reads do
         let eph = P256.KeyAgreement.PrivateKey()
         let ephPubBytes = eph.publicKey.x963Representation
         let salt = randomBytes(16)
-
-        var error: Unmanaged<CFError>?
-        let ephSecKeyAttrs: [String: Any] = [
-            kSecAttrKeyType as String:  kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPublic
-        ]
-        guard let ephAsSecKey = SecKeyCreateWithData(ephPubBytes as CFData, ephSecKeyAttrs as CFDictionary, &error) else {
-            throw Err.native("eph SecKey: \(error!.takeRetainedValue())")
-        }
-
-        // ECDH : The SE hardware multiplies its private key by our ephemeral public key
-        // The resulting shared secret never existed as bytes on disk
-        var dhErr: Unmanaged<CFError>?
-        guard let shared = SecKeyCopyKeyExchangeResult(
-            wrapKey,
-            .ecdhKeyExchangeStandardX963SHA256,
-            ephAsSecKey,
-            [:] as CFDictionary,
-            &dhErr
-        ) as Data? else { throw Err.native("ECDH: \(dhErr!.takeRetainedValue())") }
-
-        // HKDF turns the shared secret into a symmetric 32-byte AES key
-        let aesKey = SymmetricKey(data: HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: shared),
-            salt: salt,
-            info: Self.HKDF_INFO.data(using: .utf8)!,
-            outputByteCount: 32
-        ))
+        let aesKey = try deriveAesKey(ephPub: ephPubBytes, salt: salt)
 
         let pt = encode(map)
         let sealed = try AES.GCM.seal(pt, using: aesKey, nonce: AES.GCM.Nonce(data: randomBytes(12)))
         let iv = sealed.nonce.withUnsafeBytes { Data($0) }
 
-        // Storage : The ephemeral public key and salt must be saved so we can redo ECDH later
+        // Retain the ephemeral public key and salt to derive the same key on reads
         var blob = Data()
         blob.append(UInt8(ephPubBytes.count))
         blob.append(ephPubBytes)
@@ -202,13 +203,11 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
             kSecClass as String:           kSecClassGenericPassword,
             kSecAttrAccount as String:     Self.ENVELOPE_TAG,
             kSecValueData as String:       blob,
-            // AccessibleAfterFirstUnlock: survive reboot
-            // ThisDeviceOnly: ensure the key doesnt leak to iCloud or other devices
+            // Available after first unlock and cannot migrate to another device
             kSecAttrAccessible as String:  kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         let s = SecItemAdd(addAttrs as CFDictionary, nil)
         if s != errSecSuccess { throw Err.native("SecItemAdd envelope: \(s)") }
-    }
     }
 
     private func deriveAesKey(ephPub: Data, salt: Data) throws -> SymmetricKey {
@@ -219,16 +218,17 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
             kSecAttrKeyClass as String: kSecAttrKeyClassPublic
         ]
         guard let ephAsSecKey = SecKeyCreateWithData(ephPub as CFData, ephAttrs as CFDictionary, &error) else {
-            throw Err.native("eph SecKey on read: \(error!.takeRetainedValue())")
+            throw Err.native("eph SecKey: \(error!.takeRetainedValue())")
         }
         var dhErr: Unmanaged<CFError>?
         guard let shared = SecKeyCopyKeyExchangeResult(
             wrapKey,
             .ecdhKeyExchangeStandardX963SHA256,
             ephAsSecKey,
-            [:] as CFDictionary,
+            // The X9.63 KDF fails without an output size
+            [SecKeyKeyExchangeParameter.requestedSize.rawValue: 32] as CFDictionary,
             &dhErr
-        ) as Data? else { throw Err.native("ECDH read: \(dhErr!.takeRetainedValue())") }
+        ) as Data? else { throw Err.native("ECDH: \(dhErr!.takeRetainedValue())") }
         return SymmetricKey(data: HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: shared),
             salt: salt,
@@ -247,6 +247,17 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
         map[id] = (label, plaintext)
         try saveEnvelope(map)
         return id
+    }
+
+    private func putMany(_ entries: [(String, Data)]) throws -> [String] {
+        var map = try loadEnvelope()
+        let ids = entries.map { entry -> String in
+            let id = randomHex(16)
+            map[id] = (entry.0, entry.1)
+            return id
+        }
+        try saveEnvelope(map)
+        return ids
     }
 
     private func getOnce(handleId: String) throws -> Data {
@@ -290,7 +301,7 @@ final class SecureEnclaveBridge: NSObject, FlutterPlugin {
         if (try? loadWrapKey()) != nil { throw Err.native("wrap key survived deletion") }
     }
 
-    // MARK:  Wire format (matches Android byte for byte)
+    // MARK:  Envelope plaintext format shared with Android
 
     private func encode(_ map: [String: (label: String, value: Data)]) -> Data {
         var d = Data()
