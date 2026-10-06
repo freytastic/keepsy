@@ -1,4 +1,4 @@
-package com.example.client
+package com.freytastic.miuchio
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -25,7 +25,6 @@ class ImageBridge : MethodChannel.MethodCallHandler {
         private const val THUMB_MAX_DIM = 640
         private const val THUMB_MIN_DIM = 320
         private const val THUMB_BUDGET = 420 * 1024
-        // Stored photo cap
         private const val TARGET_PIXELS = 12_500_000L
         // Coarse decode cap before scaling exactly to TARGET_PIXELS
         private const val DECODE_CEILING = 40_000_000L

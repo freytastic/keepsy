@@ -1,4 +1,4 @@
-package com.example.client
+package com.freytastic.miuchio
 
 import android.content.Context
 import android.content.pm.PackageManager
