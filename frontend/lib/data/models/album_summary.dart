@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/data/models/avatar_ref.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
 
 class PreviewMedia {
   final String mediaId;

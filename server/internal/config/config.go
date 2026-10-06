@@ -39,25 +39,25 @@ type Config struct {
 func Load() *Config {
 	devMode := getEnv("APP_ENV", "") == "dev"
 	return &Config{
-		DatabaseURL:      getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/keepsy?sslmode=disable"),
+		DatabaseURL:      getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/miuchio?sslmode=disable"),
 		RedisURL:         getEnv("REDIS_URL", "localhost:6379"),
 		Port:             getEnv("PORT", "8080"),
 		ResendAPIKey:     getEnv("RESEND_API_KEY", ""),
 		DevMode:          devMode,
 		EmailHMACKey:     loadEmailHMACKey(devMode),
-		UserLinkKey:      loadKeyOrDevPlaceholder("KEEPSY_USER_LINK_KEY", "keepsy-dev-userlink-placeholder-do-not-deploy", devMode),
+		UserLinkKey:      loadKeyOrDevPlaceholder("MIUCHIO_USER_LINK_KEY", "miuchio-dev-userlink-placeholder-do-not-deploy", devMode),
 		S3Endpoint:       getEnv("S3_ENDPOINT", "http://localhost:9000"),
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3AccessKey:      getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:      getEnv("S3_SECRET_KEY", "minioadmin"),
-		S3Bucket:         getEnv("S3_BUCKET", "keepsy"),
+		S3Bucket:         getEnv("S3_BUCKET", "miuchio"),
 		S3Region:         getEnv("S3_REGION", "auto"),
 		UsePathStyle:     getEnv("USE_PATH_STYLE", "true") == "true",
 	}
 }
 
 func loadEmailHMACKey(devMode bool) []byte {
-	return loadKeyOrDevPlaceholder("KEEPSY_EMAIL_HMAC_KEY", "keepsy-dev-email-hmac-placeholder-do-not-deploy", devMode)
+	return loadKeyOrDevPlaceholder("MIUCHIO_EMAIL_HMAC_KEY", "miuchio-dev-email-hmac-placeholder-do-not-deploy", devMode)
 }
 
 // loadKeyOrDevPlaceholder reads a base64 32B+ secret from env. In dev mode a

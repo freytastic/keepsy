@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 const String _kFullAsset = 'lib/assets/onboarding/camera_stage.webp';
 const String _kLiteAsset = 'lib/assets/onboarding/camera_stage_lite.webp';
@@ -18,7 +18,7 @@ const int _kMasterWidth = 1400;
 const int _kLiteWidth = 720;
 
 // Build override: full, lite or still
-const String _kForcedTier = String.fromEnvironment('KEEPSY_STAGE_TIER');
+const String _kForcedTier = String.fromEnvironment('MIUCHIO_STAGE_TIER');
 
 // Measured late frames cost about 1.45x the average
 // A 1.25x budget limit leaves average decode time near 0.85x the budget

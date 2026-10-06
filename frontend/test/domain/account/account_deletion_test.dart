@@ -2,10 +2,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/api/account_api.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/data/storage/deletion_marker.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
+import 'package:miuchio/data/api/account_api.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/data/storage/deletion_marker.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
 
 ApiError _err(String code) =>
     ApiError(code: code, message: '', httpStatus: 409);
@@ -241,7 +241,7 @@ void main() {
   group('terminal wipe', () {
     test('repeats every step until nothing is left', () async {
       var runs = 0;
-      var left = ['file keepsy_vault'];
+      var left = ['file miuchio_vault'];
       final wipe = TerminalWipe(
         steps: [(name: 'dirs', run: () async => runs++)],
         leftovers: () async {

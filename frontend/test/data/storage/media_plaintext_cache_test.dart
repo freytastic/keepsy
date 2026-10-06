@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/data/storage/media_cache_key.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
 
 MediaCacheKey _k(String m, {String a = 'A', int e = 0}) =>
     MediaCacheKey(albumId: a, mediaId: m, epochTag: e, asset: CacheAsset.file);

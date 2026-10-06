@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/create/invite_dispatcher.dart';
+import 'package:miuchio/ui/create/invite_dispatcher.dart';
 
 void main() {
   test('sends one invite per id, in the order given', () async {

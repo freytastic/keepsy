@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/member_model.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/member_model.dart';
 
 final _wire = {
   'avatar_id': '6f1c7c2e-0000-4000-8000-000000000001',

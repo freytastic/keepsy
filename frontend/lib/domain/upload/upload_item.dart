@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/uuid_bytes.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
 import 'package:uuid/uuid.dart';
 
 // Stores the canonical UUID and derives AEAD AAD bytes when needed

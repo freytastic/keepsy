@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:keepsy/domain/account/account_deletion.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-const kDeletionMarkerName = 'keepsy_deletion_pending.json';
+const kDeletionMarkerName = 'miuchio_deletion_pending.json';
 
 // Holds only a random receipt and album ids already on the server, so it is
 // stored plain. It must survive the wipe that empties its own directory

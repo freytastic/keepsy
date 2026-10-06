@@ -30,10 +30,10 @@ func (s *ResendEmailService) SendOTP(email, otp string) error {
 
 	url := "https://api.resend.com/emails"
 	payload := map[string]interface{}{
-		"from":    "Keepsy <onboarding@resend.dev>",
+		"from":    "Miuchio <onboarding@resend.dev>",
 		"to":      email,
-		"subject": "Your Keepsy Login Code",
-		"html":    fmt.Sprintf("<strong>Your Keepsy login code is: %s</strong>. This code will expire in 5 minutes.", otp),
+		"subject": "Your Miuchio Login Code",
+		"html":    fmt.Sprintf("<strong>Your Miuchio login code is: %s</strong>. This code will expire in 5 minutes.", otp),
 	}
 
 	jsonPayload, _ := json.Marshal(payload)

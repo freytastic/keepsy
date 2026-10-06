@@ -10,80 +10,80 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sodium/sodium_sumo.dart' show SodiumSumo, SodiumSumoInit;
-import 'package:keepsy/data/api/account_api.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/data/api/epoch_api.dart' as data_epoch;
-import 'package:keepsy/data/api/error_mapper.dart';
-import 'package:keepsy/data/api/invite_json_client.dart';
-import 'package:keepsy/data/api/prekey_json_client.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/native/image_transcoder.dart';
-import 'package:keepsy/data/upload/upload_adapters.dart';
-import 'package:keepsy/diagnostics/perf_probe.dart';
-import 'package:keepsy/data/upload/upload_outbox.dart';
-import 'package:keepsy/data/storage/storage_service.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/domain/albums/album_cleanup.dart';
-import 'package:keepsy/domain/upload/upload_coordinator.dart';
-import 'package:keepsy/ui/providers/album_summary_refresher.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/data/api/realtime_service.dart';
-import 'package:keepsy/data/storage/cache_root_key.dart';
-import 'package:keepsy/data/storage/deletion_marker.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
-import 'package:keepsy/data/storage/media_catalog.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/data/storage/identity_pin_store.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/storage/name_cache.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/display_name.dart';
-import 'package:keepsy/e2ee/sealed_name.dart';
-import 'package:keepsy/e2ee/epoch_api.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/epoch_rotator.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/expected_ik_resolver.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/e2ee/identity_label_map.dart';
-import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/e2ee/invite_api.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/e2ee/member_directory.dart';
-import 'package:keepsy/e2ee/member_removal.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/rotation_recovery.dart';
-import 'package:keepsy/secure_store/key_store_exceptions.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/shelf/seen_store_impl.dart';
-import 'package:keepsy/ui/shelf/shelf_covers_impl.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
-import 'package:keepsy/ui/screens/account_deletion_screen.dart';
-import 'package:keepsy/ui/screens/landing_screen.dart';
-import 'package:keepsy/data/storage/account_owner.dart';
-import 'package:keepsy/data/api/session_refresher.dart';
-import 'package:keepsy/data/api/avatar_api.dart';
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/data/storage/avatar_cache.dart';
-import 'package:keepsy/data/storage/own_avatar_store.dart';
-import 'package:keepsy/domain/account/account_gate.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/activity_recorder.dart';
-import 'package:keepsy/domain/activity/activity_sync.dart';
-import 'package:keepsy/domain/activity/trust_alarm.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
-import 'package:keepsy/e2ee/sealed_avatar.dart';
-import 'package:keepsy/ui/shelf/shelf_view_preference.dart';
-import 'package:keepsy/ui/widgets/default_status_bar.dart';
-import 'package:keepsy/domain/account/local_identity.dart';
-import 'package:keepsy/domain/account/sign_in_gate.dart';
-import 'package:keepsy/ui/screens/onboarding_screen.dart';
+import 'package:miuchio/data/api/account_api.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/data/api/epoch_api.dart' as data_epoch;
+import 'package:miuchio/data/api/error_mapper.dart';
+import 'package:miuchio/data/api/invite_json_client.dart';
+import 'package:miuchio/data/api/prekey_json_client.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/native/image_transcoder.dart';
+import 'package:miuchio/data/upload/upload_adapters.dart';
+import 'package:miuchio/diagnostics/perf_probe.dart';
+import 'package:miuchio/data/upload/upload_outbox.dart';
+import 'package:miuchio/data/storage/storage_service.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/domain/albums/album_cleanup.dart';
+import 'package:miuchio/domain/upload/upload_coordinator.dart';
+import 'package:miuchio/ui/providers/album_summary_refresher.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/data/api/realtime_service.dart';
+import 'package:miuchio/data/storage/cache_root_key.dart';
+import 'package:miuchio/data/storage/deletion_marker.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/data/storage/media_catalog.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/data/storage/identity_pin_store.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/data/storage/name_cache.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/display_name.dart';
+import 'package:miuchio/e2ee/sealed_name.dart';
+import 'package:miuchio/e2ee/epoch_api.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/e2ee/epoch_rotator.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/expected_ik_resolver.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/e2ee/identity_label_map.dart';
+import 'package:miuchio/e2ee/invite.dart';
+import 'package:miuchio/e2ee/invite_api.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/e2ee/member_directory.dart';
+import 'package:miuchio/e2ee/member_removal.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/rotation_recovery.dart';
+import 'package:miuchio/secure_store/key_store_exceptions.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/shelf/seen_store_impl.dart';
+import 'package:miuchio/ui/shelf/shelf_covers_impl.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
+import 'package:miuchio/ui/screens/account_deletion_screen.dart';
+import 'package:miuchio/ui/screens/landing_screen.dart';
+import 'package:miuchio/data/storage/account_owner.dart';
+import 'package:miuchio/data/api/session_refresher.dart';
+import 'package:miuchio/data/api/avatar_api.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/data/storage/avatar_cache.dart';
+import 'package:miuchio/data/storage/own_avatar_store.dart';
+import 'package:miuchio/domain/account/account_gate.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_recorder.dart';
+import 'package:miuchio/domain/activity/activity_sync.dart';
+import 'package:miuchio/domain/activity/trust_alarm.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/e2ee/sealed_avatar.dart';
+import 'package:miuchio/ui/shelf/shelf_view_preference.dart';
+import 'package:miuchio/ui/widgets/default_status_bar.dart';
+import 'package:miuchio/domain/account/local_identity.dart';
+import 'package:miuchio/domain/account/sign_in_gate.dart';
+import 'package:miuchio/ui/screens/onboarding_screen.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
@@ -807,7 +807,7 @@ void main() async {
         Provider<TerminalWipe>.value(value: terminalWipe),
         Provider<AccountOwnerStore>.value(value: accountOwner),
       ],
-      child: KeepsyApp(
+      child: MiuchioApp(
         mediaCacheManager: mediaCacheManager,
         shelfCovers: shelfCovers,
         resumeDeletion: pendingDeletion == null ? null : accountDeletion,
@@ -944,12 +944,12 @@ void _showApiError(ApiError err) {
   }
 }
 
-class KeepsyApp extends StatefulWidget {
+class MiuchioApp extends StatefulWidget {
   final MediaCacheManager mediaCacheManager;
   final ShelfCoversImpl shelfCovers;
   // Set when an earlier run confirmed a deletion it never saw finish
   final AccountDeletion? resumeDeletion;
-  const KeepsyApp({
+  const MiuchioApp({
     super.key,
     required this.mediaCacheManager,
     required this.shelfCovers,
@@ -957,10 +957,10 @@ class KeepsyApp extends StatefulWidget {
   });
 
   @override
-  State<KeepsyApp> createState() => _KeepsyAppState();
+  State<MiuchioApp> createState() => _MiuchioAppState();
 }
 
-class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
+class _MiuchioAppState extends State<MiuchioApp> with WidgetsBindingObserver {
   // Hides shelf photos from task switcher snapshots
   bool _shielded = false;
 
@@ -1000,7 +1000,7 @@ class _KeepsyAppState extends State<KeepsyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Keepsy',
+      title: 'Miuchio',
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavigatorKey,
       scaffoldMessengerKey: rootMessengerKey,

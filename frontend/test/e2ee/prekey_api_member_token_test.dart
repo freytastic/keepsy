@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
 
 class _FakeJsonClient implements PrekeyJsonClient {
   String? lastGetPath;

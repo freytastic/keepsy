@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )

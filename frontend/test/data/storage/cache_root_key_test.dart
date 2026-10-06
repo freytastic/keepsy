@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:keepsy/data/storage/cache_root_key.dart';
+import 'package:miuchio/data/storage/cache_root_key.dart';
 
 import '../../secure_store/mock_secure_key_store.dart';
 

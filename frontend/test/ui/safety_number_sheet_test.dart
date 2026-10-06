@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/widgets/safety_number_sheet.dart';
 
 const _digits = '12345 67890 12345 67890 12345 67890';
 

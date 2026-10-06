@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/invite_api.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/invite_api.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
 
 class _FakeInviteJsonClient implements InviteJsonClient {
   String? path;
@@ -46,7 +46,7 @@ void main() {
       };
     final token = await HttpInviteApi(fake).deliverExistingUser(
       albumId: 'alb-1',
-      targetKeepsyId: 'K7F29QXM',
+      targetMiuchioId: 'K7F29QXM',
       ekPub: Uint8List(32),
       opkIdx: 3,
       envelopes: [
@@ -64,7 +64,7 @@ void main() {
     );
 
     expect(fake.path, '/albums/alb-1/invites/existing-user');
-    expect(fake.body!['target_keepsy_id'], 'K7F29QXM');
+    expect(fake.body!['target_miuchio_id'], 'K7F29QXM');
     expect(fake.body!['opk_idx_used'], 3);
     final envs = fake.body!['envelopes'] as List;
     expect(envs.length, 2);

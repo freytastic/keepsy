@@ -3,8 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:keepsy/e2ee/avatar_image.dart';
-import 'package:keepsy/ui/shelf/avatar_crop_screen.dart';
+import 'package:miuchio/e2ee/avatar_image.dart';
+import 'package:miuchio/ui/shelf/avatar_crop_screen.dart';
 
 // 400 x 200: a landscape photo whose short side sets the crop square
 final _source =

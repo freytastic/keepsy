@@ -1,4 +1,4 @@
-import 'package:keepsy/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_model.dart';
 
 // Serializes refreshes so a later failure cannot hide an earlier success
 class AlbumSummaryRefresher {

@@ -2,9 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 // the out of band comparison ritual. Never says anything reassuring until the
 // user has actually read the digits back to the human : trust on first use
@@ -79,7 +79,7 @@ class _SafetyNumberSheetState extends State<SafetyNumberSheet>
         title: Text('Did every digit match?', style: Warm.sheetTitle),
         content: Text(
           'Only confirm if all ${_count > 0 ? _count : 30} digits match '
-          "exactly on both phones. This can't be undone, and it tells Keepsy "
+          "exactly on both phones. This can't be undone, and it tells Miuchio "
           'to trust this key from now on.',
           style: Warm.pageSoft.copyWith(color: Warm.inkSoft),
         ),
@@ -177,7 +177,7 @@ class _SafetyNumberSheetState extends State<SafetyNumberSheet>
                     )
                   : Text(
                       changed
-                          ? "$name's security key changed. Keepsy stopped "
+                          ? "$name's security key changed. Miuchio stopped "
                               'trusting it until you compare these numbers '
                               'in person.'
                           : "Compare this with $name's screen, in person.",
@@ -195,7 +195,7 @@ class _SafetyNumberSheetState extends State<SafetyNumberSheet>
                       child: Text(
                         'These numbers come from keys only your two phones '
                         'hold. If they match, nobody is in between you. '
-                        "Keepsy isn't told when you check.",
+                        "Miuchio isn't told when you check.",
                         textAlign: TextAlign.center,
                         style: Warm.pageSoft,
                       ),

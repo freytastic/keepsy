@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/e2ee/sealed_avatar.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/e2ee/sealed_avatar.dart';
 
 // Unknown is not the same as removed: only an explicit removal may delete
 // avatars from the server, never a missing or unreadable local record

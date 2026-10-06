@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/account_owner.dart';
-import 'package:keepsy/domain/account/account_gate.dart';
-import 'package:keepsy/domain/account/sign_in_gate.dart';
-import 'package:keepsy/ui/screens/landing_screen.dart';
+import 'package:miuchio/data/storage/account_owner.dart';
+import 'package:miuchio/domain/account/account_gate.dart';
+import 'package:miuchio/domain/account/sign_in_gate.dart';
+import 'package:miuchio/ui/screens/landing_screen.dart';
 
 import '../../secure_store/mock_secure_key_store.dart';
 

@@ -5,24 +5,24 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/member_model.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_catalog.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/album_detail_screen.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/member_model.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_catalog.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/screens/album_detail_screen.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
 import 'upload_scaffold.dart';
 
 // SQLite futures do not settle under widget-test fake time
@@ -111,7 +111,7 @@ void main() {
     await store.initialize();
     aks = AlbumKeyStore(store);
     await aks.initialize();
-    dir = await Directory.systemTemp.createTemp('keepsy_lf');
+    dir = await Directory.systemTemp.createTemp('miuchio_lf');
     sealed =
         await MediaSealedCache.open(rootDir: dir, cacheRootKey: Uint8List(32));
   });

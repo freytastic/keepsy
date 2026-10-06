@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 )
 

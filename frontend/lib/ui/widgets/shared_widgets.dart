@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // ui element: orbs glowing in the background
 class GlowOrbs extends StatefulWidget {

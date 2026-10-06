@@ -1,4 +1,4 @@
-import 'package:keepsy/data/models/album_summary.dart';
+import 'package:miuchio/data/models/album_summary.dart';
 
 class AlbumModel {
   final String id;

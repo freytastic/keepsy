@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // Warm blurred overlay that keeps the shelf visible
 class GlassSheet extends StatelessWidget {

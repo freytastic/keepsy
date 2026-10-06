@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/epoch_api.dart';
+import 'package:miuchio/e2ee/epoch_api.dart';
 
 class _Json implements EpochJsonClient {
   final Map<String, dynamic>? body;

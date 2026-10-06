@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/data/storage/avatar_cache.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/data/storage/avatar_cache.dart';
 
 Uint8List _key(int b) => Uint8List.fromList(List<int>.filled(32, b));
 

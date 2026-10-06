@@ -1,6 +1,6 @@
-import 'package:keepsy/data/api/auth_api.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/name_cache.dart';
+import 'package:miuchio/data/api/auth_api.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/name_cache.dart';
 
 // drop auth tokens and wipe the plaintext bearing media
 // cache (L1 RAM + L2 sealed files) + the display name cache. Deliberately does

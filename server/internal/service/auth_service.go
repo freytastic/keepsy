@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/handle"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/handle"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 )
 
-const maxKeepsyIDAttempts = 5
+const maxMiuchioIDAttempts = 5
 
 const (
 	otpTTL = 5 * time.Minute
@@ -87,7 +87,7 @@ func NewAuthService(otpRepo OTPStore, userRepo AuthUserStore, sessionRepo Sessio
 // Separate key so a code MAC can never equal an email HMAC
 func deriveOTPKey(emailHMACKey []byte) []byte {
 	mac := hmac.New(sha256.New, emailHMACKey)
-	mac.Write([]byte("keepsy-otp-key-v1"))
+	mac.Write([]byte("miuchio-otp-key-v1"))
 	return mac.Sum(nil)
 }
 
@@ -166,7 +166,7 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (Verifie
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			user = &model.User{EmailHMAC: emailHMAC}
-			if err := s.createWithKeepsyID(ctx, user); err != nil {
+			if err := s.createWithMiuchioID(ctx, user); err != nil {
 				log.Printf("VerifyOTP: user create failed: %v", err)
 				return VerifiedSession{}, err
 			}
@@ -202,20 +202,20 @@ func (s *AuthService) VerifyOTP(ctx context.Context, email, otp string) (Verifie
 	}, nil
 }
 
-// createWithKeepsyID assigns a fresh random keepsy_id and inserts, retrying on
+// createWithMiuchioID assigns a fresh random miuchio_id and inserts, retrying on
 // the (astronomically rare) UNIQUE collision so registration never fails for it
-func (s *AuthService) createWithKeepsyID(ctx context.Context, user *model.User) error {
+func (s *AuthService) createWithMiuchioID(ctx context.Context, user *model.User) error {
 	var err error
-	for range maxKeepsyIDAttempts {
+	for range maxMiuchioIDAttempts {
 		var id string
 		if id, err = handle.Generate(rand.Reader); err != nil {
 			return err
 		}
-		user.KeepsyID = id
+		user.MiuchioID = id
 		if err = s.UserRepo.Create(ctx, user); err == nil {
 			return nil
 		}
-		if !errors.Is(err, repository.ErrKeepsyIDTaken) {
+		if !errors.Is(err, repository.ErrMiuchioIDTaken) {
 			return err
 		}
 	}

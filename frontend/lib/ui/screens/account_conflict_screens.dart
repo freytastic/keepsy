@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // Account-gate refusals have different destructive remedies
 
@@ -53,11 +53,11 @@ class AccountBelongsToAnotherScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Dead(
-      title: 'This Keepsy belongs to another account',
-      body: 'Nothing was signed in. Keepsy keeps one account per phone so that '
+      title: 'This Miuchio belongs to another account',
+      body: 'Nothing was signed in. Miuchio keeps one account per phone so that '
           "one person's albums and keys can never end up under someone "
           "else's name.\n\nSign in with the account that set up this phone, or "
-          'erase what Keepsy stores here and start fresh.',
+          'erase what Miuchio stores here and start fresh.',
       actions: [
         FilledButton(
           onPressed: () => onUseOwnerAccount(context),
@@ -66,7 +66,7 @@ class AccountBelongsToAnotherScreen extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => onEraseInstallation(context),
-          child: const Text('Erase this Keepsy and start fresh'),
+          child: const Text('Erase this Miuchio and start fresh'),
         ),
       ],
     );
@@ -89,9 +89,9 @@ class AccountKeysLostScreen extends StatelessWidget {
     return _Dead(
       title: 'Your photos are locked to your old phone',
       body:
-          'This account was set up on a different install of Keepsy. The keys '
+          'This account was set up on a different install of Miuchio. The keys '
           'that open its photos only ever existed there, and they cannot be '
-          'rebuilt here.\n\nIf you still have that phone, open Keepsy on it. '
+          'rebuilt here.\n\nIf you still have that phone, open Miuchio on it. '
           'Otherwise you can delete this account and start over, which gives up '
           'the old photos for good.',
       actions: [
@@ -144,17 +144,17 @@ class _EraseInstallationScreenState extends State<EraseInstallationScreen> {
   Widget build(BuildContext context) {
     final (title, body) = switch (_phase) {
       _ErasedPhase.working => (
-          'Erasing this Keepsy',
+          'Erasing this Miuchio',
           'Removing everything the previous account kept on this phone.'
         ),
       _ErasedPhase.done => (
-          'This Keepsy is erased',
+          'This Miuchio is erased',
           'Everything the previous account kept on this phone is gone. Close '
-              'Keepsy and open it again to sign in.'
+              'Miuchio and open it again to sign in.'
         ),
       _ErasedPhase.stuck => (
           'Some of it is still here',
-          'Keepsy could not remove everything on this phone, so the previous '
+          'Miuchio could not remove everything on this phone, so the previous '
               "account's keys may still be stored. Try again before signing in."
         ),
     };
@@ -177,9 +177,9 @@ class ConnectionRequiredScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _Dead(
-      title: 'Keepsy needs to reach the server',
+      title: 'Miuchio needs to reach the server',
       body: 'This phone has not finished setting up your account yet, so '
-          'Keepsy cannot open it offline. Reconnect and open Keepsy again.',
+          'Miuchio cannot open it offline. Reconnect and open Miuchio again.',
       actions: [],
     );
   }

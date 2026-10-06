@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/account/account_gate.dart';
+import 'package:miuchio/domain/account/account_gate.dart';
 
 void main() {
   const userA = '11111111-1111-4111-8111-111111111111';

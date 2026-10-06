@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 import 'api_client.dart';
 import 'api_error.dart';

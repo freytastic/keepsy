@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,9 +18,9 @@ import (
 // These SQL concurrency guarantees require real Postgres
 func mustCrashRepo(t *testing.T) (*Repo, *pgxpool.Pool) {
 	t.Helper()
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run publication crash-consistency tests")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run publication crash-consistency tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/account_owner.dart';
+import 'package:miuchio/data/storage/account_owner.dart';
 
 import '../../secure_store/mock_secure_key_store.dart';
 

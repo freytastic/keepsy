@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/activity/activity_attribution.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/domain/activity/activity_attribution.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 void main() {
   final at = DateTime.utc(2026, 9, 20, 10);

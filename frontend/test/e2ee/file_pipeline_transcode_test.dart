@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:keepsy/e2ee/file_pipeline.dart';
-import 'package:keepsy/e2ee/jpeg_sanity.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/jpeg_sanity.dart';
 
 Uint8List _jpeg({int width = 12, int height = 6, int quality = 90}) {
   final src = img.Image(width: width, height: height);
@@ -14,7 +14,7 @@ Uint8List _jpeg({int width = 12, int height = 6, int quality = 90}) {
 Uint8List _jpegWithExif() {
   final src = img.Image(width: 12, height: 6);
   img.fill(src, color: img.ColorRgb8(90, 40, 10));
-  src.exif.imageIfd['Make'] = 'keepsy';
+  src.exif.imageIfd['Make'] = 'miuchio';
   return Uint8List.fromList(img.encodeJpg(src, quality: 90));
 }
 

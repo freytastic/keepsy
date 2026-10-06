@@ -1,4 +1,4 @@
-name: keepsy
+name: miuchio
 description: "E2E collaborative album sharing cross-platform mobile app."
 
 publish_to: "none"
@@ -32,7 +32,7 @@ dependencies:
   collection: ^1.18.0
   image: ^4.3.0
   # Disk cache for §5.x media : sqflite-backed records.db + raw ciphertext
-  # blobs in <appCacheDir>/keepsy_media/. path_provider gives us cacheDir
+  # blobs in <appCacheDir>/miuchio_media/. path_provider gives us cacheDir
   sqflite: ^2.3.0
   path_provider: ^2.1.5
   path: ^1.9.0

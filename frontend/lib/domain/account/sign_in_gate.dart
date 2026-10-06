@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/data/storage/account_owner.dart';
+import 'package:miuchio/data/storage/account_owner.dart';
 
 import 'account_gate.dart';
 

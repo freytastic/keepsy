@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/handle"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/handle"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -204,7 +204,7 @@ func TestAuthService_VerifyOTP(t *testing.T) {
 	}
 }
 
-func TestAuthService_VerifyOTP_KeepsyIDCollisionRetry(t *testing.T) {
+func TestAuthService_VerifyOTP_MiuchioIDCollisionRetry(t *testing.T) {
 	correctOTP := "123456"
 	calls := 0
 	var lastUser *model.User
@@ -217,7 +217,7 @@ func TestAuthService_VerifyOTP_KeepsyIDCollisionRetry(t *testing.T) {
 			calls++
 			lastUser = u
 			if calls == 1 {
-				return repository.ErrKeepsyIDTaken
+				return repository.ErrMiuchioIDTaken
 			}
 			u.ID = uuid.New()
 			return nil
@@ -241,8 +241,8 @@ func TestAuthService_VerifyOTP_KeepsyIDCollisionRetry(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("Create called %d times, want 2 (collision + retry)", calls)
 	}
-	if lastUser == nil || len(lastUser.KeepsyID) != handle.Length {
-		t.Fatalf("user.KeepsyID not set to a valid handle: %+v", lastUser)
+	if lastUser == nil || len(lastUser.MiuchioID) != handle.Length {
+		t.Fatalf("user.MiuchioID not set to a valid handle: %+v", lastUser)
 	}
 }
 

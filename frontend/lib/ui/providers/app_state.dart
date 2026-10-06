@@ -1,16 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/realtime_service.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/data/storage/storage_service.dart';
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/rotation_recovery.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/api/realtime_service.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/data/storage/storage_service.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/e2ee/rotation_recovery.dart';
 
 // Decrypts an album's name_ct to a display string. Injected at boot (main.dart)
 // so AppState itself stays free of crypto/keystore deps
@@ -89,7 +89,7 @@ class AppState extends ChangeNotifier {
     // identity + profile : must not bleed into the next account's session
     _userId = null;
     _email = null;
-    _keepsyId = null;
+    _miuchioId = null;
     _profileName = 'User';
     notifyListeners();
   }
@@ -544,19 +544,19 @@ class AppState extends ChangeNotifier {
 
   String? _userId;
   String? _email;
-  String? _keepsyId;
+  String? _miuchioId;
   String _profileName = 'User';
 
   String? get userId => _userId;
   String? get email => _email;
 
-  String? get keepsyId => _keepsyId;
+  String? get miuchioId => _miuchioId;
   String get profileName => _profileName;
 
   void setUserData(Map<String, dynamic> data) {
     // The server response intentionally omits email, name and avatar plaintext
     _userId = data['id'];
-    _keepsyId = data['keepsy_id'] as String?;
+    _miuchioId = data['miuchio_id'] as String?;
 
     notifyListeners();
     final id = _userId;

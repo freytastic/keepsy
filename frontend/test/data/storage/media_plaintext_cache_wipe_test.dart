@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/data/storage/media_cache_key.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 void main() {
   test('a wipe zeroes plaintext instead of only dropping it', () {

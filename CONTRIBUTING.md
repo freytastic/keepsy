@@ -1,10 +1,10 @@
-# Contributing to Keepsy
+# Contributing to Miuchio
 
-Thank you for wanting to help. Keepsy is built by one person, so this page explains what is easiest for me to review and what needs a conversation first.
+Thank you for wanting to help. Miuchio is built by one person, so this page explains what is easiest for me to review and what needs a conversation first.
 
 I am open to changes to the design, theme, UI and UX, and to ideas for new features. New features can take a while, because I spend most of my time on the protocol.
 
-Start with the [website](https://www.miuchio.com) for the design and reasoning behind Keepsy, and ask if anything is unclear.
+Start with the [website](https://www.miuchio.com) for the design and reasoning behind Miuchio, and ask if anything is unclear.
 
 ## Before you start
 
@@ -57,4 +57,4 @@ Common types are `feat`, `fix`, `perf`, `refactor`, `test` and `chore`. Keep one
 
 ## License
 
-Keepsy is licensed under the [GNU AGPL v3](LICENSE). By contributing, you agree that your contribution is licensed under the same terms.
+Miuchio is licensed under the [GNU AGPL v3](LICENSE). By contributing, you agree that your contribution is licensed under the same terms.

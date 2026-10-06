@@ -3,14 +3,14 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/e2ee/invite_api.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/prekey_bundle.dart';
-import 'package:keepsy/e2ee/x3dh_session.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/invite.dart';
+import 'package:miuchio/e2ee/invite_api.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_bundle.dart';
+import 'package:miuchio/e2ee/x3dh_session.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';
@@ -54,7 +54,7 @@ class _ByHandlePrekeyApi implements PrekeyApi {
 
 class _CaptureInviteApi implements InviteApi {
   String? albumId;
-  String? targetKeepsyId;
+  String? targetMiuchioId;
   Uint8List? ekPub;
   int? opkIdx;
   List<DeliverEnvelope> envelopes = const [];
@@ -62,13 +62,13 @@ class _CaptureInviteApi implements InviteApi {
   @override
   Future<Uint8List> deliverExistingUser({
     required String albumId,
-    required String targetKeepsyId,
+    required String targetMiuchioId,
     required Uint8List ekPub,
     int? opkIdx,
     required List<DeliverEnvelope> envelopes,
   }) async {
     this.albumId = albumId;
-    this.targetKeepsyId = targetKeepsyId;
+    this.targetMiuchioId = targetMiuchioId;
     this.ekPub = ekPub;
     this.opkIdx = opkIdx;
     this.envelopes = envelopes;
@@ -147,9 +147,9 @@ void main() {
     );
 
     final token = await initiator.inviteExistingUser(
-        keepsyId: 'K7F29QXM', albumId: albumId);
+        miuchioId: 'K7F29QXM', albumId: albumId);
     expect(token.length, 32);
-    expect(capture.targetKeepsyId, 'K7F29QXM');
+    expect(capture.targetMiuchioId, 'K7F29QXM');
     expect(capture.envelopes.length, 3);
 
     for (var i = 0; i < 3; i++) {
@@ -210,7 +210,7 @@ void main() {
       aks: aliceAks,
       pinner: pinner,
       now: () => fixed,
-    ).inviteExistingUser(keepsyId: 'K7F29QXM', albumId: albumId);
+    ).inviteExistingUser(miuchioId: 'K7F29QXM', albumId: albumId);
 
     // pinned under the SAME token the roster will later show, to the exact IK
     // the MK wraps went to
@@ -244,7 +244,7 @@ void main() {
       aks: aliceAks,
       pinner: pinner,
       now: () => fixed,
-    ).inviteExistingUser(keepsyId: 'K7F29QXM', albumId: albumId);
+    ).inviteExistingUser(miuchioId: 'K7F29QXM', albumId: albumId);
 
     // the prior baseline stands : a substituting server still trips 'changed'
     expect(pins[_pinKey(albumId, reusedToken)], equals(priorIk));
@@ -266,7 +266,7 @@ void main() {
       identity: alice.svc,
       aks: aliceAks,
       now: () => fixed,
-    ).inviteExistingUser(keepsyId: 'K7F29QXM', albumId: albumId);
+    ).inviteExistingUser(miuchioId: 'K7F29QXM', albumId: albumId);
 
     final env = capture.envelopes.single;
     final wrap = Uint8List(61)

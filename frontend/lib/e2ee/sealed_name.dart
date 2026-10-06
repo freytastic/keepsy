@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/mk_seal.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/mk_seal.dart';
 
 // Display names (album title + member name) sealed under the album MK. The MK
 // rotates per epoch and every member retains all epoch MKs, so the epoch the
@@ -16,9 +16,9 @@ import 'package:keepsy/e2ee/mk_seal.dart';
 // AAD binds each blob to its slot so a name cant be replayed into another
 class SealedName {
   static final Uint8List _albumTag =
-      Uint8List.fromList('keepsy.album-name-v1'.codeUnits);
+      Uint8List.fromList('miuchio.album-name-v1'.codeUnits);
   static final Uint8List _memberTag =
-      Uint8List.fromList('keepsy.member-name-v1'.codeUnits);
+      Uint8List.fromList('miuchio.member-name-v1'.codeUnits);
 
   static Future<String> sealAlbumName(
       AlbumKeyStore ks, Uint8List albumId, int epoch, String name) {

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 Uint8List _fill(int n, [int v = 7]) => Uint8List.fromList(List.filled(n, v));
 

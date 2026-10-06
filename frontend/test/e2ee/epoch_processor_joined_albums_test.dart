@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/epoch_api.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/invite_api.dart';
-import 'package:keepsy/e2ee/member_directory.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/epoch_api.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/e2ee/invite_api.dart';
+import 'package:miuchio/e2ee/member_directory.dart';
 
 import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';
@@ -30,7 +30,7 @@ class _CapturingInvites implements InviteApi {
   @override
   Future<Uint8List> deliverExistingUser({
     required String albumId,
-    required String targetKeepsyId,
+    required String targetMiuchioId,
     required Uint8List ekPub,
     int? opkIdx,
     required List<DeliverEnvelope> envelopes,

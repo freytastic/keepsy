@@ -7,30 +7,30 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:keepsy/data/native/image_transcoder.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/own_avatar_store.dart';
-import 'package:keepsy/data/storage/picked_file.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
-import 'package:keepsy/e2ee/avatar_image.dart';
-import 'package:keepsy/e2ee/display_name.dart';
-import 'package:keepsy/e2ee/handle.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/shelf/avatar_crop_screen.dart';
-import 'package:keepsy/ui/shelf/safety_summary.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/settings/delete_account_screen.dart';
-import 'package:keepsy/ui/settings/settings_page.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/print_card.dart';
-import 'package:keepsy/ui/widgets/upload_copy.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
-import 'package:keepsy/ui/widgets/warm_field.dart';
+import 'package:miuchio/data/native/image_transcoder.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/own_avatar_store.dart';
+import 'package:miuchio/data/storage/picked_file.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/e2ee/avatar_image.dart';
+import 'package:miuchio/e2ee/display_name.dart';
+import 'package:miuchio/e2ee/handle.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/shelf/avatar_crop_screen.dart';
+import 'package:miuchio/ui/shelf/safety_summary.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/settings/delete_account_screen.dart';
+import 'package:miuchio/ui/settings/settings_page.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/print_card.dart';
+import 'package:miuchio/ui/widgets/upload_copy.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
+import 'package:miuchio/ui/widgets/warm_field.dart';
 
-const _siteUrl = 'https://keepsy-web.vercel.app';
-const _repoUrl = 'https://github.com/freytastic/keepsy';
+const _siteUrl = 'https://www.miuchio.com';
+const _repoUrl = 'https://github.com/freytastic/miuchio';
 
 const _revealFor = Duration(seconds: 20);
 
@@ -209,7 +209,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onName: _editName,
                   ),
                   _Group(top: 30, children: [
-                    _IdRow(handle: state.keepsyId),
+                    _IdRow(handle: state.miuchioId),
                     _Row(
                       title: 'Safety numbers',
                       value: _verified,
@@ -472,7 +472,7 @@ class _IdRowState extends State<_IdRow> {
         children: [
           const SizedBox(width: 8),
           Expanded(
-            child: Text(_copied ? 'Copied' : 'keepsy ID', style: Warm.rowTitle),
+            child: Text(_copied ? 'Copied' : 'miuchio ID', style: Warm.rowTitle),
           ),
           Text(value, style: Warm.idValue.copyWith(color: Warm.inkSoft)),
           const SizedBox(width: 4),
@@ -480,12 +480,12 @@ class _IdRowState extends State<_IdRow> {
             icon: _shown
                 ? Icons.visibility_off_outlined
                 : Icons.visibility_outlined,
-            label: _shown ? 'Hide keepsy ID' : 'Reveal keepsy ID',
+            label: _shown ? 'Hide miuchio ID' : 'Reveal miuchio ID',
             onTap: h == null ? null : _toggle,
           ),
           _IconButton(
             icon: Icons.copy_outlined,
-            label: 'Copy keepsy ID',
+            label: 'Copy miuchio ID',
             onTap: h == null ? null : _copy,
           ),
         ],
@@ -634,7 +634,7 @@ class _Foot extends StatelessWidget {
                   child: SvgPicture.string(_octocat, width: 14, height: 14),
                 ),
                 const SizedBox(width: 7),
-                Text('keepsy 1.0.0 beta', style: Warm.footMark),
+                Text('miuchio 1.0.0 beta', style: Warm.footMark),
               ],
             ),
           ),

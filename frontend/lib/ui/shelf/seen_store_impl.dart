@@ -6,9 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
 
 // Seen watermarks are sealed outside the reclaimable media cache
 class SealedSeenStore extends ChangeNotifier implements SeenStore {
@@ -20,7 +20,7 @@ class SealedSeenStore extends ChangeNotifier implements SeenStore {
   Future<void> _inFlight = Future.value();
 
   static final Uint8List _aad =
-      Uint8List.fromList('keepsy.seen-store-v1'.codeUnits);
+      Uint8List.fromList('miuchio.seen-store-v1'.codeUnits);
 
   SealedSeenStore._(this._file, this._cacheKey);
 
@@ -30,7 +30,7 @@ class SealedSeenStore extends ChangeNotifier implements SeenStore {
   }) async {
     final f = file ??
         File(p.join(
-            (await getApplicationSupportDirectory()).path, 'keepsy_seen.kec'));
+            (await getApplicationSupportDirectory()).path, 'miuchio_seen.kec'));
     final store = SealedSeenStore._(f, cacheRootKey);
     await store._load();
     return store;

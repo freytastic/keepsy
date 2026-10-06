@@ -1,6 +1,6 @@
 import 'package:test/test.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/realtime_service.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/realtime_service.dart';
 
 void main() {
   group('RealtimeService.connected', () {
@@ -23,7 +23,7 @@ void main() {
 
     test('converts https to wss scheme', () {
       final uri =
-          RealtimeService.buildWsUri('https://api.keepsy.app/api/v1', 'abc');
+          RealtimeService.buildWsUri('https://api.miuchio.app/api/v1', 'abc');
       expect(uri.scheme, equals('wss'));
     });
 

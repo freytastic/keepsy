@@ -6,8 +6,8 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 
 // Keeps roster and signer trust separate and sealed under the device cache key
 // Trust survives logout so substituted keys cannot become a new first sight
@@ -28,7 +28,7 @@ class IdentityPinStore {
   Future<void> _inFlight = Future.value();
 
   static final Uint8List _aad =
-      Uint8List.fromList('keepsy.identity-pins-v1'.codeUnits);
+      Uint8List.fromList('miuchio.identity-pins-v1'.codeUnits);
 
   IdentityPinStore._(this._file, this._cacheKey);
 
@@ -38,7 +38,7 @@ class IdentityPinStore {
   }) async {
     final f = file ??
         File(p.join(
-            (await getApplicationSupportDirectory()).path, 'keepsy_pins.kec'));
+            (await getApplicationSupportDirectory()).path, 'miuchio_pins.kec'));
     final s = IdentityPinStore._(f, cacheRootKey);
     await s._load();
     return s;

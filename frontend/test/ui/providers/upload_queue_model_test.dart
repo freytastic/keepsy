@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/upload/upload_coordinator.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/domain/upload/upload_coordinator.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
 
 import '../../domain/upload/fakes.dart';
 

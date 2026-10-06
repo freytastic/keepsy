@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/e2ee/epoch"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/e2ee/epoch"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -26,12 +26,12 @@ func randToken(t *testing.T) []byte {
 	return b
 }
 
-// testRepo wires a realDB invite Repo. Skipped without KEEPSY_TEST_DATABASE_URL
+// testRepo wires a realDB invite Repo. Skipped without MIUCHIO_TEST_DATABASE_URL
 func testRepo(t *testing.T) (*Repo, *userlink.Hasher, *pgxpool.Pool) {
 	t.Helper()
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run real-DB invite repo tests")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run real-DB invite repo tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
@@ -57,7 +57,7 @@ func seedUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	id := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, keepsy_id) VALUES ($1, $2, $3)`,
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, miuchio_id) VALUES ($1, $2, $3)`,
 		id, id[:], id.String()); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestIKByMemberToken_And_MarkReceivedHighWaterMark(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO albums (id, name_ct) VALUES ($1, $2)`, albumID, []byte("n")); err != nil {
 		t.Fatalf("seed album: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, keepsy_id, ik_pub) VALUES ($1, $2, $3, $4)`,
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email_hmac, miuchio_id, ik_pub) VALUES ($1, $2, $3, $4)`,
 		userID, userID[:], userID.String(), []byte(pub)); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/api/account_api.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/domain/account/deletion_launch.dart';
+import 'package:miuchio/data/api/account_api.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/domain/account/deletion_launch.dart';
 
 class _Api implements AccountDeletionApi {
   final List<DeletionAlbum> albums;

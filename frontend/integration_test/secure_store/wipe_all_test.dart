@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:keepsy/secure_store/key_store_exceptions.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_store_exceptions.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/trust_alarm.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/trust_alarm.dart';
 
 void main() {
   final ik = Uint8List.fromList(List.filled(32, 9));

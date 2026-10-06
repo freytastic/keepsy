@@ -6,8 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:keepsy/data/api/session_refresher.dart';
-import 'package:keepsy/data/storage/storage_service.dart';
+import 'package:miuchio/data/api/session_refresher.dart';
+import 'package:miuchio/data/storage/storage_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

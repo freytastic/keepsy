@@ -6,17 +6,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:keepsy/data/api/auth_api.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/session_teardown.dart';
-import 'package:keepsy/data/storage/cache_root_key.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/data/storage/name_cache.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/api/auth_api.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/session_teardown.dart';
+import 'package:miuchio/data/storage/cache_root_key.dart';
+import 'package:miuchio/data/storage/media_cache_key.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/data/storage/name_cache.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 

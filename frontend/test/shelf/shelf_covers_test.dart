@@ -6,15 +6,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_plaintext_cache.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/shelf/shelf_covers_impl.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_plaintext_cache.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/shelf/shelf_covers_impl.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 

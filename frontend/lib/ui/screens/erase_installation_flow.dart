@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:keepsy/domain/account/account_deletion.dart' show TerminalWipe;
+import 'package:miuchio/domain/account/account_deletion.dart' show TerminalWipe;
 
 import 'account_conflict_screens.dart';
 
@@ -13,7 +13,7 @@ Future<void> confirmAndEraseInstallation(
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('Erase this Keepsy?'),
+      title: const Text('Erase this Miuchio?'),
       content: const Text(
           'Every photo and key the other account kept on this phone is '
           'removed. Their account itself is not touched, and this cannot be '

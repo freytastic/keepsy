@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/album_header.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/album_header.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
 
 void main() {
   late int cleared;

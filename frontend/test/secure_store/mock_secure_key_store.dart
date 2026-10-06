@@ -1,9 +1,9 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:keepsy/secure_store/key_handle.dart';
-import 'package:keepsy/secure_store/key_store_exceptions.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_handle.dart';
+import 'package:miuchio/secure_store/key_store_exceptions.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 class MockSecureKeyStore extends SecureKeyStore {
   final Map<String, _Entry> _store = {};

@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
-const MethodChannel _channel = MethodChannel('keepsy/image');
+const MethodChannel _channel = MethodChannel('miuchio/image');
 
 // Only an explicit unavailable result may use the Dart fallback
 const String _kUnavailable = 'E_UNAVAILABLE';

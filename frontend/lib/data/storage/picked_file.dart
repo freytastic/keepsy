@@ -61,7 +61,7 @@ Future<void> sweepPickerStaging(Directory staging) async {
 }
 
 Future<Directory> pickerStagingDir() async => Directory(
-    p.join((await getApplicationCacheDirectory()).path, 'keepsy_picks'));
+    p.join((await getApplicationCacheDirectory()).path, 'miuchio_picks'));
 
 // Makes adoption wait for the startup sweep
 class PickerStaging {

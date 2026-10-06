@@ -11,7 +11,7 @@ const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 const Length = 8
 
-var ErrInvalidHandle = errors.New("invalid keepsy_id handle")
+var ErrInvalidHandle = errors.New("invalid miuchio_id handle")
 
 // Generate returns an 8 char canonical handle from 40 random bits
 func Generate(r io.Reader) (string, error) {

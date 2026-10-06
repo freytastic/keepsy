@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/freytastic/keepsy/internal/crypto"
+	"github.com/freytastic/miuchio/internal/crypto"
 )
 
 type vector struct {

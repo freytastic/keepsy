@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 void main() {
   test('the account is announced from the cache and from the server', () {
@@ -7,7 +7,7 @@ void main() {
     final s = AppState()..attachUserKnown(seen.add);
 
     s.setCachedUserId('u1');
-    s.setUserData({'id': 'u1', 'keepsy_id': 'K1'});
+    s.setUserData({'id': 'u1', 'miuchio_id': 'K1'});
 
     expect(seen, ['u1', 'u1']);
     expect(s.userId, 'u1');
@@ -28,7 +28,7 @@ void main() {
     final seen = <String>[];
     AppState()
       ..attachUserKnown(seen.add)
-      ..setUserData({'keepsy_id': 'K1'});
+      ..setUserData({'miuchio_id': 'K1'});
     expect(seen, isEmpty);
   });
 }

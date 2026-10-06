@@ -3,16 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/people/everyone.dart';
-import 'package:keepsy/ui/screens/album_detail_screen.dart';
-import 'package:keepsy/ui/create/create_album_screen.dart';
-import 'package:keepsy/ui/screens/notifications_screen.dart';
-import 'package:keepsy/ui/shelf/profile_screen.dart';
-import 'package:keepsy/ui/shelf/shelf_screen.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/people/everyone.dart';
+import 'package:miuchio/ui/screens/album_detail_screen.dart';
+import 'package:miuchio/ui/create/create_album_screen.dart';
+import 'package:miuchio/ui/screens/notifications_screen.dart';
+import 'package:miuchio/ui/shelf/profile_screen.dart';
+import 'package:miuchio/ui/shelf/shelf_screen.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 class MainShell extends StatelessWidget {
   const MainShell({super.key});

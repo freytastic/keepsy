@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
 
 import 'album_copy.dart';
 

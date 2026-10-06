@@ -5,49 +5,49 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_catalog.dart';
-import 'package:keepsy/data/storage/name_cache.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/domain/upload/upload_snapshot.dart';
-import 'package:keepsy/ui/album/add_people_sheet.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/album_foot.dart';
-import 'package:keepsy/ui/album/album_header.dart';
-import 'package:keepsy/ui/album/album_info_screen.dart';
-import 'package:keepsy/ui/album/album_menu.dart';
-import 'package:keepsy/ui/album/album_stats.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/album/photo_hold.dart';
-import 'package:keepsy/ui/album/photo_peek.dart';
-import 'package:keepsy/ui/providers/latest_only.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/ui/widgets/upload_pill.dart';
-import 'package:keepsy/ui/widgets/upload_sheet.dart';
-import 'package:keepsy/ui/widgets/upload_tile.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/data/models/member_model.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/e2ee/rotation_recovery.dart';
-import 'package:keepsy/e2ee/sealed_name.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
-import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
-import 'package:keepsy/ui/people/people_screen.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
-import 'package:keepsy/ui/widgets/decrypted_image_preview.dart';
-import 'package:keepsy/ui/widgets/encrypted_image.dart';
-import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
-import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_catalog.dart';
+import 'package:miuchio/data/storage/name_cache.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/domain/upload/upload_snapshot.dart';
+import 'package:miuchio/ui/album/add_people_sheet.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/album_foot.dart';
+import 'package:miuchio/ui/album/album_header.dart';
+import 'package:miuchio/ui/album/album_info_screen.dart';
+import 'package:miuchio/ui/album/album_menu.dart';
+import 'package:miuchio/ui/album/album_stats.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/album/photo_hold.dart';
+import 'package:miuchio/ui/album/photo_peek.dart';
+import 'package:miuchio/ui/providers/latest_only.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/widgets/upload_pill.dart';
+import 'package:miuchio/ui/widgets/upload_sheet.dart';
+import 'package:miuchio/ui/widgets/upload_tile.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/data/models/member_model.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/e2ee/invite.dart';
+import 'package:miuchio/e2ee/rotation_recovery.dart';
+import 'package:miuchio/e2ee/sealed_name.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
+import 'package:miuchio/ui/screens/photo_viewer_screen.dart';
+import 'package:miuchio/ui/people/people_screen.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
+import 'package:miuchio/ui/widgets/decrypted_image_preview.dart';
+import 'package:miuchio/ui/widgets/encrypted_image.dart';
+import 'package:miuchio/ui/widgets/encrypted_thumbnail.dart';
+import 'package:miuchio/ui/widgets/safety_number_sheet.dart';
 
 Future<List<XFile>> _systemPicker({int limit = 0}) =>
     ImagePicker().pickMultiImage(limit: limit);
@@ -694,9 +694,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         for (final a in _avatars())
           if (!a.pending) a
       ],
-      myKeepsyId: state.keepsyId,
-      onInvite: (keepsyId) => initiator.inviteExistingUser(
-          keepsyId: keepsyId, albumId: albumIdBytes),
+      myMiuchioId: state.miuchioId,
+      onInvite: (miuchioId) => initiator.inviteExistingUser(
+          miuchioId: miuchioId, albumId: albumIdBytes),
     );
     if (added && mounted) await _loadMembers();
   }

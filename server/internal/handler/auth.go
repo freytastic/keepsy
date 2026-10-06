@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/service"
 )
 
 type AuthHandler struct {

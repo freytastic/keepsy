@@ -1,12 +1,12 @@
 import 'package:flutter/services.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 import 'key_handle.dart';
 import 'key_store_exceptions.dart';
 import 'secure_key_store.dart';
 
 class AndroidKeystore extends SecureKeyStore {
-  static const _channel = MethodChannel('keepsy/keystore');
+  static const _channel = MethodChannel('miuchio/keystore');
 
   @override
   Future<void> initialize() => _invoke<void>('initialize', const {});

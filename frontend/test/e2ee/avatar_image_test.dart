@@ -2,9 +2,9 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:keepsy/e2ee/avatar_image.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
-import 'package:keepsy/e2ee/sealed_avatar.dart';
+import 'package:miuchio/e2ee/avatar_image.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/sealed_avatar.dart';
 
 Uint8List _jpeg(int w, int h) {
   final image = img.Image(width: w, height: h);

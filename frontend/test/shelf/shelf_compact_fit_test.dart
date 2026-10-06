@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/ui/shelf/album_print.dart';
-import 'package:keepsy/ui/shelf/shelf_layout.dart';
-import 'package:keepsy/ui/shelf/shelf_screen.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/shelf/album_print.dart';
+import 'package:miuchio/ui/shelf/shelf_layout.dart';
+import 'package:miuchio/ui/shelf/shelf_screen.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 import '../ui/upload_scaffold.dart';
 

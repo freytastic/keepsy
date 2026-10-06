@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 Uint8List _album([int s = 0xA1]) => Uint8List.fromList(List<int>.filled(16, s));
 Uint8List _b(int s) => Uint8List.fromList(List<int>.filled(32, s));

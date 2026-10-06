@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/landing_screen.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/screens/landing_screen.dart';
 
 Uint8List _id(int fill) => Uint8List(16)..fillRange(0, 16, fill);
 

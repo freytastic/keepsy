@@ -16,7 +16,7 @@ abstract final class AlbumCopy {
   static const addTitle = 'Add someone';
   static String addTo(String album) => 'to $album';
   static const addHelp =
-      "Ask for their keepsy ID. It's on their profile, under their name.";
+      "Ask for their miuchio ID. It's on their profile, under their name.";
   static const addPaste = 'Paste';
   static const addGo = 'Add to album';
   static const addFinding = 'Finding them…';
@@ -33,7 +33,7 @@ abstract final class AlbumCopy {
   static const addFailed = "Couldn't add them right now. Try again.";
   static const addDoneTitle = 'Invited';
   static String addDoneBody(String album) =>
-      ' can open $album the next time they open Keepsy, with every photo '
+      ' can open $album the next time they open Miuchio, with every photo '
       'already in it.';
   static const addDoneNote =
       "The album's key went to their phone, locked so only that phone can "

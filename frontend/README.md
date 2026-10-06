@@ -1,4 +1,4 @@
-# Keepsy app
+# Miuchio app
 
 The Flutter app for Android and iPhone. Setup, running and tests are described in the [main README](../README.md#running-locally).
 

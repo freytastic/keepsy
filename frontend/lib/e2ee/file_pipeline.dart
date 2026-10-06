@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:image/image.dart' as img;
-import 'package:keepsy/crypto/aead_stream.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/crypto/aead_stream.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 import 'package:uuid/uuid.dart';
 
 import 'album_keys.dart';

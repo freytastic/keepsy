@@ -1,14 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/photo_peek.dart';
-import 'package:keepsy/ui/album/photo_sheets.dart';
-import 'package:keepsy/ui/widgets/encrypted_image.dart';
-import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/photo_peek.dart';
+import 'package:miuchio/ui/album/photo_sheets.dart';
+import 'package:miuchio/ui/widgets/encrypted_image.dart';
+import 'package:miuchio/ui/widgets/encrypted_thumbnail.dart';
 
 class PhotoViewerScreen extends StatefulWidget {
   final List<MediaRecord> records;

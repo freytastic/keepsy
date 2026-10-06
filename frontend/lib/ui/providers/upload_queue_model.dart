@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:keepsy/domain/upload/upload_coordinator.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/domain/upload/upload_snapshot.dart';
-import 'package:keepsy/ui/providers/dismissal_gate.dart';
+import 'package:miuchio/domain/upload/upload_coordinator.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/domain/upload/upload_snapshot.dart';
+import 'package:miuchio/ui/providers/dismissal_gate.dart';
 
 // Owns upload snapshots and optimistic previews for Flutter widgets
 class UploadQueueModel extends ChangeNotifier {

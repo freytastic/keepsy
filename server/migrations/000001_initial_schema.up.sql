@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- (e.g. sessions.expires_at = now()+30d) keep their precision until the call
 -- site itself is quantized
 
--- email_hmac : HMAC-SHA256(KEEPSY_EMAIL_HMAC_KEY, lower(trim(email))). The
+-- email_hmac : HMAC-SHA256(MIUCHIO_EMAIL_HMAC_KEY, lower(trim(email))). The
 -- raw email never lands on disk : it passes through the OTP send path in
 -- memory only, then drops. Lookup goes via the HMAC. Loses the "is this
 -- email registered?" oracle (intended) and the "email already taken" UX
@@ -63,7 +63,7 @@ CREATE TABLE albums (
 -- HMAC handle (forward lookups : "is this user a member?", "what albums for
 -- this user?"). user_id_enc is the AEAD blob (reverse lookups : "which user
 -- owns this member_token?" , needed by WS fanout + epoch admin IK lookup)
--- Both are useless without the live KEEPSY_USER_LINK_KEY, so a stolen DB
+-- Both are useless without the live MIUCHIO_USER_LINK_KEY, so a stolen DB
 -- snapshot cant reconstruct the social graph. The FK to users(id) is
 -- intentionally absent : ON DELETE CASCADE was the only consumer and a
 -- future user delete flow will compute the handle and DELETE explicitly

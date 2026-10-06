@@ -6,9 +6,9 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
 
 // The user's own avatar plus which copy each album holds. A new photo starts
 // a new revision, which makes every album's copy stale at once
@@ -23,7 +23,7 @@ class OwnAvatarStore extends ChangeNotifier implements OwnAvatar {
   Future<void> _writes = Future.value();
 
   static final Uint8List _aad =
-      Uint8List.fromList('keepsy.own-avatar-v1'.codeUnits);
+      Uint8List.fromList('miuchio.own-avatar-v1'.codeUnits);
 
   OwnAvatarStore._(this._file, this._cacheKey);
 
@@ -33,7 +33,7 @@ class OwnAvatarStore extends ChangeNotifier implements OwnAvatar {
   }) async {
     final f = file ??
         File(p.join((await getApplicationSupportDirectory()).path,
-            'keepsy_avatar.kec'));
+            'miuchio_avatar.kec'));
     final s = OwnAvatarStore._(f, cacheRootKey);
     await s._load();
     return s;

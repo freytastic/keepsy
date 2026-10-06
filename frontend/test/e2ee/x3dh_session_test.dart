@@ -2,13 +2,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/identity_label_map.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/prekey_bundle.dart';
-import 'package:keepsy/e2ee/x3dh_session.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/identity_label_map.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_bundle.dart';
+import 'package:miuchio/e2ee/x3dh_session.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';
@@ -169,7 +169,7 @@ void main() {
     });
 
     test(
-        'emits a fresh ekPub and never persists EK (no keepsy.ek.* label '
+        'emits a fresh ekPub and never persists EK (no miuchio.ek.* label '
         'after the call)', () async {
       final aliceR = await _newBootstrappedSvc(now: fixed);
       final bobSvc = (await _newBootstrappedSvc(now: fixed)).svc;
@@ -186,8 +186,8 @@ void main() {
       expect(r1.sharedSecret, isNot(orderedEquals(r2.sharedSecret)));
 
       // No EK label leaked into the label map or the secure store
-      expect(aliceR.labels.labelsWithPrefix('keepsy.ek').length, 0);
-      final ekHandles = await aliceR.store.list(labelPrefix: 'keepsy.ek');
+      expect(aliceR.labels.labelsWithPrefix('miuchio.ek').length, 0);
+      final ekHandles = await aliceR.store.list(labelPrefix: 'miuchio.ek');
       expect(ekHandles, isEmpty);
     });
   });

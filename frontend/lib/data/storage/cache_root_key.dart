@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/secure_store/key_handle.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/secure_store/key_handle.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 const String kCacheRootKeyLabel = 'cache_root_key';
 const int kCacheRootKeyLen = 32;

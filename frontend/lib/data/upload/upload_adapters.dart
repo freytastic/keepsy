@@ -1,18 +1,18 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/api/s3_transport.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/picked_file.dart';
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/data/upload/upload_outbox.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/api/s3_transport.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/picked_file.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/data/upload/upload_outbox.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 // Restricts deletion to resolved app cache roots
 class PickedSourceStoreImpl implements PickedSourceStore {

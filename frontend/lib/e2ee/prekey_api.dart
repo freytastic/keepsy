@@ -43,7 +43,7 @@ class OwnKeys {
 
 // Surfaced when a prekey/SPK/OPK endpoint returns a structured server error
 // Translated from the data layer ApiError by the PrekeyJsonClient adapter so
-// e2ee/ never has to import package:keepsy/data/
+// e2ee/ never has to import package:miuchio/data/
 class PrekeyApiException implements Exception {
   final String code;
   final String message;
@@ -97,14 +97,14 @@ abstract class PrekeyApi {
   Future<PrekeyBundle> fetchPrekeyBundle(String userId);
 
   // GET /users/by-handle/{handle}/prekey-bundle (§6.1 discovery). The returned
-  // bundle's userId field carries the keepsy_id, not the real user_id (server
+  // bundle's userId field carries the miuchio_id, not the real user_id (server
   // never emits it) : X3dhSession.initiate ignores userId anyway hehe. Throws
   // HandleNotFoundException on 404 (unknown or malformed handle, indistinguishable)
   Future<PrekeyBundle> fetchPrekeyBundleByHandle(String handle);
 }
 
-// Thrown when a keepsy_id resolves to no user (or is malformed) : the UI shows
-// a "no such keepsy ID" rather than leaking which case it was
+// Thrown when a miuchio_id resolves to no user (or is malformed) : the UI shows
+// a "no such miuchio ID" rather than leaking which case it was
 class HandleNotFoundException implements Exception {
   final String handle;
   const HandleNotFoundException(this.handle);

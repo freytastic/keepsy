@@ -1,10 +1,12 @@
+name: miuchio
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: keepsy
+      POSTGRES_DB: miuchio
     ports:
       - "5432:5432"
     volumes:
@@ -55,7 +57,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://postgres:password@postgres:5432/keepsy?sslmode=disable
+      DATABASE_URL: postgres://postgres:password@postgres:5432/miuchio?sslmode=disable
       REDIS_URL: redis:6379
       PORT: 8080
     extra_hosts:

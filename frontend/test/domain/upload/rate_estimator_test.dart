@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/upload/rate_estimator.dart';
+import 'package:miuchio/domain/upload/rate_estimator.dart';
 
 void main() {
   group('RateEstimator', () {

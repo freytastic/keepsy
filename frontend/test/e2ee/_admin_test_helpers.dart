@@ -2,16 +2,16 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/e2ee/epoch_api.dart';
-import 'package:keepsy/e2ee/expected_ik_resolver.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/member_directory.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/prekey_bundle.dart';
-import 'package:keepsy/e2ee/wrap_envelope.dart';
-import 'package:keepsy/e2ee/x3dh_session.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/e2ee/epoch_api.dart';
+import 'package:miuchio/e2ee/expected_ik_resolver.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/member_directory.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_bundle.dart';
+import 'package:miuchio/e2ee/wrap_envelope.dart';
+import 'package:miuchio/e2ee/x3dh_session.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 import 'identity_label_map_test_helpers.dart';

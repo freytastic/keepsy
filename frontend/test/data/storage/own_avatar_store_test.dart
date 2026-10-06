@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/own_avatar_store.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/data/storage/own_avatar_store.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
 
 Uint8List _key(int b) => Uint8List.fromList(List<int>.filled(32, b));
 final _jpeg = Uint8List.fromList([0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]);

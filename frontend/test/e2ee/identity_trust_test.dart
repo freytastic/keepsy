@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/safety_numbers.dart';
-import 'package:keepsy/data/storage/identity_pin_store.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
+import 'package:miuchio/crypto/safety_numbers.dart';
+import 'package:miuchio/data/storage/identity_pin_store.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
 
 import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';

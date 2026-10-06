@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 
 void main() {
   group('WireFormat.parse', () {

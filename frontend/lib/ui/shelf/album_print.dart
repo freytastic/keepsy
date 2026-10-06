@@ -2,12 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/ui/shelf/print_style.dart';
-import 'package:keepsy/ui/shelf/shelf_copy.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
-import 'package:keepsy/ui/widgets/print_card.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/ui/shelf/print_style.dart';
+import 'package:miuchio/ui/shelf/shelf_copy.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
+import 'package:miuchio/ui/widgets/print_card.dart';
 
 enum PrintSize { large, small }
 

@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/constants.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/constants.dart';
 
 class RealtimeEvent {
   final String type;

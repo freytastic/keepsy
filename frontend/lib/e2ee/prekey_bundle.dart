@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/primitives.dart';
+import 'package:miuchio/crypto/primitives.dart';
 
 import 'identity.dart' show Now;
 

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
+import 'package:miuchio/data/storage/media_cache_key.dart';
 
 void main() {
   test('equality + hashCode by all four fields', () {

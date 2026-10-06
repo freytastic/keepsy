@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/primitives.dart';
+import 'package:miuchio/crypto/primitives.dart';
 
 import '../_sodium_setup.dart';
 

@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:keepsy/data/api/s3_transport.dart';
+import 'package:miuchio/data/api/s3_transport.dart';
 
 class _RecordingClient extends http.BaseClient {
   final http.Client inner;

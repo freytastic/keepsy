@@ -5,10 +5,10 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/blur_scrim.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/blur_scrim.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
 
 import 'album_copy.dart';
 import 'album_stats.dart';

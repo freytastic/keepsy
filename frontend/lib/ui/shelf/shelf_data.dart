@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:keepsy/data/models/album_summary.dart';
+import 'package:miuchio/data/models/album_summary.dart';
 
 abstract class ShelfCovers implements Listenable {
   Uint8List? bytes(String albumId, int slot);

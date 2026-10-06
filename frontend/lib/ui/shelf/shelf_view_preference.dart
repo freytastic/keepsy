@@ -5,7 +5,7 @@ import 'shelf_layout.dart';
 
 // Loaded before the first frame; contains no album or person identifiers
 class ShelfViewPreference extends ChangeNotifier {
-  static const String _key = 'keepsy.shelf_view';
+  static const String _key = 'miuchio.shelf_view';
 
   final SharedPreferences _prefs;
   ShelfView _view;

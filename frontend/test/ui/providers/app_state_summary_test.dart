@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 PreviewMedia _preview(String id) => PreviewMedia(
       mediaId: id,

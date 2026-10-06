@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 // Refresh on miss cache from sender_token -> {ik_pub, lk_pub}, keyed per
 // album. Production wiring fetches GET /albums/{id}/members through a port
-// closure so this file stays decoupled from package:keepsy/data
+// closure so this file stays decoupled from package:miuchio/data
 
 class MemberPubs {
   final Uint8List ikPub; // 32B Ed25519

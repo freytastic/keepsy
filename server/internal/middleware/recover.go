@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/freytastic/keepsy/internal/apierr"
+	"github.com/freytastic/miuchio/internal/apierr"
 	"github.com/gorilla/mux"
 )
 

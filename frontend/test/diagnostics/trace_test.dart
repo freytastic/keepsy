@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 List<String> capture(void Function() body) {
   final lines = <String>[];

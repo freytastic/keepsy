@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/crypto"
+	"github.com/freytastic/miuchio/internal/crypto"
 )
 
 // TestSignedPayloadKAT loads test_vectors/signed_payload_kat.json and asserts

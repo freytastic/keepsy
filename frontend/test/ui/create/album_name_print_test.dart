@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/create/album_name_print.dart';
+import 'package:miuchio/ui/create/album_name_print.dart';
 
 void main() {
   Future<void> pump(WidgetTester tester, {bool enabled = true}) async {

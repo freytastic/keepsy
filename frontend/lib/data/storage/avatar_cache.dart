@@ -7,10 +7,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 // Downloads and opens one member's avatar. Null when it does not verify
 typedef FetchAvatar = Future<Uint8List?> Function(
@@ -32,7 +32,7 @@ class AvatarCache extends ChangeNotifier {
   int _gen = 0;
 
   static final Uint8List _aad =
-      Uint8List.fromList('keepsy.avatar-cache-v1'.codeUnits);
+      Uint8List.fromList('miuchio.avatar-cache-v1'.codeUnits);
 
   AvatarCache._(this._root, this._cacheKey, this._fetch);
 
@@ -43,7 +43,7 @@ class AvatarCache extends ChangeNotifier {
   }) async {
     final dir = root ??
         Directory(p.join((await getApplicationSupportDirectory()).path,
-            'keepsy_vault', 'avatars'));
+            'miuchio_vault', 'avatars'));
     return AvatarCache._(dir, cacheRootKey, fetch);
   }
 
@@ -158,7 +158,7 @@ class AvatarCache extends ChangeNotifier {
       '$albumId|$memberToken';
 
   static Future<String> _hash(String s) async {
-    final h = await cg.Sha256().hash(utf8.encode('keepsy.avatar-cache:$s'));
+    final h = await cg.Sha256().hash(utf8.encode('miuchio.avatar-cache:$s'));
     return base64Url.encode(h.bytes).replaceAll('=', '');
   }
 

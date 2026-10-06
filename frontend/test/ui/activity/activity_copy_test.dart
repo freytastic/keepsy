@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/ui/activity/activity_copy.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/ui/activity/activity_copy.dart';
 
 void main() {
   final at = DateTime.utc(2026, 9, 20, 10);

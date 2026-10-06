@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/identity_pin_store.dart';
+import 'package:miuchio/data/storage/identity_pin_store.dart';
 
 Uint8List _key(int b) => Uint8List.fromList(List<int>.filled(32, b));
 Uint8List _ik(int b) => Uint8List.fromList(List<int>.filled(32, b));

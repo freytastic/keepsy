@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"errors"
 
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"

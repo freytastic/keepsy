@@ -26,9 +26,9 @@ import javax.crypto.spec.GCMParameterSpec
 class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler {
 
     companion object {
-        const val CHANNEL = "keepsy/keystore"
-        private const val WRAP_ALIAS = "keepsy.wrap"
-        private const val ENVELOPE_FILE = "keepsy_secure_store.bin"
+        const val CHANNEL = "miuchio/keystore"
+        private const val WRAP_ALIAS = "miuchio.wrap"
+        private const val ENVELOPE_FILE = "miuchio_secure_store.bin"
         private const val GCM_TAG_BITS = 128
         private const val IV_BYTES = 12
         private const val HANDLE_BYTES = 16
@@ -41,7 +41,7 @@ class KeystoreBridge(private val ctx: Context) : MethodChannel.MethodCallHandler
 
     // One worker preserves envelope ordering without blocking the UI thread
     private val worker = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "keepsy-keystore").apply { isDaemon = true }
+        Thread(r, "miuchio-keystore").apply { isDaemon = true }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())

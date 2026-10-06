@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )

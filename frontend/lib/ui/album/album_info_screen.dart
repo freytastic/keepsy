@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
 
 import 'album_copy.dart';
 import 'album_stats.dart';

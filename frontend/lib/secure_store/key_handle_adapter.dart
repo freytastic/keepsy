@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'package:keepsy/crypto/primitives.dart';
+import 'package:miuchio/crypto/primitives.dart';
 
 // Thin adapter : raw private bytes from SecureKeyStore → typed keypair
 // All EC math now goes through libsodium via primitives.Sign/Kex

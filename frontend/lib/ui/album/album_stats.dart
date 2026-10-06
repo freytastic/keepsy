@@ -1,4 +1,4 @@
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 class UploaderTally {
   final int photos;

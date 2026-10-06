@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/prekey_bundle.dart';
-import 'package:keepsy/e2ee/x3dh_session.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_bundle.dart';
+import 'package:miuchio/e2ee/x3dh_session.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';

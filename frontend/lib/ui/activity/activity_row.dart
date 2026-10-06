@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
 
 import 'activity_copy.dart';
 

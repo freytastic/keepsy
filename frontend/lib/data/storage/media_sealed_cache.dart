@@ -6,11 +6,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/domain/albums/album_cleanup.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/domain/albums/album_cleanup.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 import 'media_cache_key.dart';
 import 'media_catalog.dart';
@@ -72,14 +72,14 @@ class MediaSealedCache
     // iCloud backup by OS default). Sealed blobs never reach cloud backup
     final root = rootDir ??
         Directory(p.join(
-            (await getApplicationCacheDirectory()).path, 'keepsy_media'));
+            (await getApplicationCacheDirectory()).path, 'miuchio_media'));
     if (!root.existsSync()) root.createSync(recursive: true);
     // iOS must exclude this durable tree from backup before release
     // Tests passing only rootDir keep the legacy single-root layout
     final durable = durableDir ??
         (rootDir ??
             Directory(p.join((await getApplicationSupportDirectory()).path,
-                'keepsy_vault')));
+                'miuchio_vault')));
     if (!durable.existsSync()) durable.createSync(recursive: true);
     final db = await openDatabase(
       p.join(durable.path, 'records.db'),

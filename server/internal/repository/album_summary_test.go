@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,9 +18,9 @@ import (
 // Uses a real database because album list authorization lives in the query
 func openDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run real-DB summary tests")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run real-DB summary tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
@@ -54,7 +54,7 @@ func (e *summaryEnv) seedUser(t *testing.T) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := e.pool.Exec(context.Background(),
-		`INSERT INTO users (id, email_hmac, keepsy_id, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
+		`INSERT INTO users (id, email_hmac, miuchio_id, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, []byte(fmt.Sprintf("summary-%s@example.com", id)), id.String(),
 		make([]byte, 32), make([]byte, 32), make([]byte, 32), make([]byte, 64),

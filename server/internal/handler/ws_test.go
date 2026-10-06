@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 )
 

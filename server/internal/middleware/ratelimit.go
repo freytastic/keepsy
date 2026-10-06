@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
+	"github.com/freytastic/miuchio/internal/apierr"
 	"github.com/redis/go-redis/v9"
 )
 

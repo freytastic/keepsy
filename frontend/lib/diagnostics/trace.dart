@@ -4,9 +4,9 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
-const String kTracePrefix = 'keepsy.trace';
-const bool _kTraceOverride = bool.fromEnvironment('KEEPSY_TRACE');
-const bool _kTraceDefined = bool.hasEnvironment('KEEPSY_TRACE');
+const String kTracePrefix = 'miuchio.trace';
+const bool _kTraceOverride = bool.fromEnvironment('MIUCHIO_TRACE');
+const bool _kTraceDefined = bool.hasEnvironment('MIUCHIO_TRACE');
 
 final Stopwatch _sinceStart = Stopwatch()..start();
 final Random _rng = Random();
@@ -35,7 +35,7 @@ abstract class Trace {
     return b.toString();
   }
 
-  static const Object _zoneKey = #keepsyTraceId;
+  static const Object _zoneKey = #miuchioTraceId;
 
   static String? get currentId => Zone.current[_zoneKey] as String?;
 

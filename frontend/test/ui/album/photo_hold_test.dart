@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/album/photo_hold.dart';
+import 'package:miuchio/ui/album/photo_hold.dart';
 
 void main() {
   testWidgets('opens at 240ms and ignores an early release', (tester) async {

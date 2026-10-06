@@ -1,4 +1,4 @@
-import 'package:keepsy/ui/shelf/album_print.dart';
+import 'package:miuchio/ui/shelf/album_print.dart';
 
 enum ShelfView { stacked, compact }
 

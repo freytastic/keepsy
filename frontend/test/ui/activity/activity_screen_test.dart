@@ -3,11 +3,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/activity/activity_copy.dart';
-import 'package:keepsy/ui/activity/activity_screen.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/activity/activity_copy.dart';
+import 'package:miuchio/ui/activity/activity_screen.dart';
 
 // Widget tests use an in-memory feed because sqflite needs real file I/O
 class FakeFeed implements ActivityFeed {

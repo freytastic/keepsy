@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/album/album_stats.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/album/album_stats.dart';
 
 MediaRecord _shot(String id, String by, {int blob = 1000, int? thumb = 100}) =>
     MediaRecord(

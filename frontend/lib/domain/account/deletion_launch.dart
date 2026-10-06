@@ -1,4 +1,4 @@
-import 'package:keepsy/data/api/account_api.dart';
+import 'package:miuchio/data/api/account_api.dart';
 
 import 'account_deletion.dart';
 

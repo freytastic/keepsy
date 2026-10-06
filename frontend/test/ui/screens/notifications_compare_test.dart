@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/activity_sync.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/notifications_screen.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_sync.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/screens/notifications_screen.dart';
 
 const _album = '11111111-2222-3333-4444-555555555555';
 

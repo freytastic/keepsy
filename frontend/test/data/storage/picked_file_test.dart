@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/picked_file.dart';
+import 'package:miuchio/data/storage/picked_file.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -65,7 +65,7 @@ void main() {
 
   group('staging', () {
     late Directory staging;
-    setUp(() => staging = Directory(p.join(root.path, 'keepsy_picks')));
+    setUp(() => staging = Directory(p.join(root.path, 'miuchio_picks')));
 
     test('adopting moves the picker copy out of the shared cache', () async {
       final f = pick('9f2c-uuid');
@@ -132,7 +132,7 @@ void main() {
 
   group('staging gate', () {
     test('an adoption waits for the startup sweep to finish', () async {
-      final staging = Directory(p.join(root.path, 'keepsy_picks'))
+      final staging = Directory(p.join(root.path, 'miuchio_picks'))
         ..createSync(recursive: true);
       final leftover = File(p.join(staging.path, 'stale.jpg'))
         ..writeAsBytesSync([7]);
@@ -163,7 +163,7 @@ void main() {
     });
 
     test('the sweep runs once however many picks arrive', () async {
-      final staging = Directory(p.join(root.path, 'keepsy_picks'));
+      final staging = Directory(p.join(root.path, 'miuchio_picks'));
       var sweeps = 0;
       final gated = PickerStaging(
         () async => staging,

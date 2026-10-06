@@ -4,9 +4,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'package:keepsy/e2ee/avatar_image.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/e2ee/avatar_image.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 const double _maxZoom = 5;
 // Enough for a sharp preview at the largest zoom without holding the full photo

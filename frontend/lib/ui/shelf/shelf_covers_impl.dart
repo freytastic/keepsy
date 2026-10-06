@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
 
 class ShelfCoversImpl extends ChangeNotifier implements ShelfCovers {
   final MediaSealedCache _l2;

@@ -3,8 +3,8 @@ package repository_test
 import (
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/e2ee/invite"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/e2ee/invite"
+	"github.com/freytastic/miuchio/internal/repository"
 )
 
 // Activity can treat previews as a roster only if they cover the invite cap

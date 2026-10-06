@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/middleware"
+	"github.com/freytastic/miuchio/internal/middleware"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,15 +43,15 @@ func TestInviteE2E(t *testing.T) {
 	adminToken := randToken(t)
 	bobID := uuid.New()
 	// First 8 uuid hex chars upper cased: a valid (unique) Crockford handle
-	bobKeepsyID := strings.ToUpper(bobID.String()[:8])
+	bobMiuchioID := strings.ToUpper(bobID.String()[:8])
 	bobIKPub, bobIKPriv, _ := ed25519.GenerateKey(rand.Reader)
 
 	// admin user + identity
-	mustExec(t, pool, `INSERT INTO users (id, email_hmac, keepsy_id, ik_pub) VALUES ($1,$2,$3,$4)`,
+	mustExec(t, pool, `INSERT INTO users (id, email_hmac, miuchio_id, ik_pub) VALUES ($1,$2,$3,$4)`,
 		adminID, adminID[:], adminID.String(), []byte("admin-ik"))
 	// bob user + real IK + a fresh OPK
-	mustExec(t, pool, `INSERT INTO users (id, email_hmac, keepsy_id, ik_pub) VALUES ($1,$2,$3,$4)`,
-		bobID, bobID[:], bobKeepsyID, []byte(bobIKPub))
+	mustExec(t, pool, `INSERT INTO users (id, email_hmac, miuchio_id, ik_pub) VALUES ($1,$2,$3,$4)`,
+		bobID, bobID[:], bobMiuchioID, []byte(bobIKPub))
 	mustExec(t, pool, `INSERT INTO one_time_prekeys (user_id, opk_idx, key_pub) VALUES ($1, 5, $2)`,
 		bobID, make([]byte, 32))
 	// album with two epochs (current = 1) → deliver must cover 0..1
@@ -87,9 +87,9 @@ func TestInviteE2E(t *testing.T) {
 	ekPubAdmin[0] = 0x77
 	idx := 5
 	deliverBody, _ := json.Marshal(map[string]any{
-		"target_keepsy_id": strings.ToLower(bobKeepsyID), // lower case to exercise Normalize
-		"ek_pub":           b64(ekPubAdmin),
-		"opk_idx_used":     idx,
+		"target_miuchio_id": strings.ToLower(bobMiuchioID), // lower case to exercise Normalize
+		"ek_pub":            b64(ekPubAdmin),
+		"opk_idx_used":      idx,
 		"envelopes": []map[string]any{
 			{"epoch": 0, "wrap_nonce": b64(make([]byte, 12)), "wrap_tag_ct": b64(make([]byte, 48)), "sender_sig": b64(make([]byte, 64))},
 			{"epoch": 1, "wrap_nonce": b64(make([]byte, 12)), "wrap_tag_ct": b64(make([]byte, 48)), "sender_sig": b64(make([]byte, 64))},

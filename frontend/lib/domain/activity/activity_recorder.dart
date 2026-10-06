@@ -1,5 +1,5 @@
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 import 'activity_attribution.dart';
 import 'activity_derivation.dart';

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/people/people_screen.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/people/people_screen.dart';
 
 PersonEntry _p(String id, TrustState trust, {bool invited = false}) =>
     PersonEntry(

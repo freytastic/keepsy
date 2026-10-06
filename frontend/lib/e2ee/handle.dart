@@ -1,4 +1,4 @@
-// Crockford base32 keepsy_id, mirror of server/internal/handle. Folding +
+// Crockford base32 miuchio_id, mirror of server/internal/handle. Folding +
 // validation MUST stay byte-identical to the Go Normalize (cross lang vectors
 // in handle_test.dart). No I/L/O/U: I/L fold to 1, O folds to 0
 
@@ -23,15 +23,15 @@ String normalizeHandle(String input) {
     }
     final ch = String.fromCharCode(c);
     if (!_alphabet.contains(ch)) {
-      throw const FormatException('invalid keepsy_id handle');
+      throw const FormatException('invalid miuchio_id handle');
     }
     out.write(ch);
     if (out.length > handleLength) {
-      throw const FormatException('invalid keepsy_id handle');
+      throw const FormatException('invalid miuchio_id handle');
     }
   }
   if (out.length != handleLength) {
-    throw const FormatException('invalid keepsy_id handle');
+    throw const FormatException('invalid miuchio_id handle');
   }
   return out.toString();
 }

@@ -2,8 +2,8 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/x3dh.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/x3dh.dart';
 
 import '../_sodium_setup.dart';
 

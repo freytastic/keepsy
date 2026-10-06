@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 
 typedef ClientFactory = http.Client Function();
 

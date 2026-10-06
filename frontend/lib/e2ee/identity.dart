@@ -3,11 +3,11 @@ import 'dart:developer' as developer;
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/secure_store/key_handle.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/secure_store/key_handle.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 import 'identity_label_map.dart';
 import 'prekey_api.dart';
@@ -365,11 +365,11 @@ class IdentityService {
       await _reconcilePendingSpk();
     } on IdentityDivergenceException {
       developer.log('spk: identity divergence, rotation blocked',
-          name: 'keepsy.identity');
+          name: 'miuchio.identity');
       return;
     } on SpkReconciliationConflict {
       developer.log('spk: conflict, recovering with a fresh rotation',
-          name: 'keepsy.identity');
+          name: 'miuchio.identity');
     } catch (_) {
       // The responder can use pending while reconciliation is offline
     }
@@ -382,10 +382,10 @@ class IdentityService {
         await _reconcilePendingSpk();
       } on IdentityDivergenceException {
         developer.log('spk: identity divergence, rotation blocked',
-            name: 'keepsy.identity');
+            name: 'miuchio.identity');
       } on SpkReconciliationConflict {
         developer.log('spk: conflict after rotation, retrying once',
-            name: 'keepsy.identity');
+            name: 'miuchio.identity');
         try {
           await _ensureSpkRotated();
         } catch (_) {}
@@ -565,7 +565,7 @@ class IdentityService {
     if (ikHandleId == null) return;
     final ikHandle = KeyHandle(id: ikHandleId, label: kLabelIK);
 
-    // Pick a fresh idx range above any existing keepsy.opk.* label
+    // Pick a fresh idx range above any existing miuchio.opk.* label
     final existing = _labels.labelsWithPrefix(kLabelOpkPrefix);
     var maxIdx = -1;
     for (final l in existing) {
