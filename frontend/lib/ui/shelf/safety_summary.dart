@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
 
 // Counts distinct verified peer keys locally to avoid cross album identity linking
 Future<String?> safetyNumberSummary({

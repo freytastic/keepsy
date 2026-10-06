@@ -13,9 +13,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-LINE = re.compile(r"\((\s*\d+)\):\s*keepsy\.trace\|(\d+)\|t=(\d+)\|([^|\s]+)(?:\|dur=(\d+))?(.*)$")
+LINE = re.compile(r"\((\s*\d+)\):\s*miuchio\.trace\|(\d+)\|t=(\d+)\|([^|\s]+)(?:\|dur=(\d+))?(.*)$")
 FIELD = re.compile(r"(\w+)=(\S+)")
-HEADER = re.compile(r"#\s*keepsy\.capture\s+(.*)")
+HEADER = re.compile(r"#\s*miuchio\.capture\s+(.*)")
 
 # Attribute frame timings to the most recent screen marker
 PHASES = [

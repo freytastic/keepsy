@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/domain/upload/upload_coordinator.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_ports.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/domain/upload/upload_coordinator.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_ports.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
 
 // Idle queue for widget tests that only require the provider
 class _NoSources implements PickedSourceStore {

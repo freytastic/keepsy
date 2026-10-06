@@ -39,7 +39,7 @@ abstract class PerfProbe {
   // Retry while the wrapper key is unavailable
   static Future<void> _probeKeystore() async {
     if (!Platform.isAndroid) return;
-    const channel = MethodChannel('keepsy/keystore');
+    const channel = MethodChannel('miuchio/keystore');
     for (var i = 0; i < 60; i++) {
       try {
         final r = await channel.invokeMethod<Map>('probe');

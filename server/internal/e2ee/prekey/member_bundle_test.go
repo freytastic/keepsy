@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )

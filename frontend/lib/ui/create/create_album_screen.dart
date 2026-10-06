@@ -4,18 +4,18 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/storage/identity_pin_store.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/display_name.dart';
-import 'package:keepsy/e2ee/epoch_rotator.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/e2ee/sealed_name.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/storage/identity_pin_store.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/display_name.dart';
+import 'package:miuchio/e2ee/epoch_rotator.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/invite.dart';
+import 'package:miuchio/e2ee/sealed_name.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 import 'album_name_print.dart';
 import 'glass_sheet.dart';
@@ -163,8 +163,8 @@ class _CreateAlbumScreenState extends State<CreateAlbumScreen> {
         name: creatorDisplayName,
       );
       // Invites require epoch 0 keys
-      final failed = await InviteDispatcher((keepsyId) => inviter
-              .inviteExistingUser(keepsyId: keepsyId, albumId: albumIdBytes))
+      final failed = await InviteDispatcher((miuchioId) => inviter
+              .inviteExistingUser(miuchioId: miuchioId, albumId: albumIdBytes))
           .sendAll(inviteIds);
       if (failed > 0) {
         messenger.showSnackBar(SnackBar(

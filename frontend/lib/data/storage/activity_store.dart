@@ -7,15 +7,15 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 // Seal social-graph payloads and hash row keys so album ids remain hidden
 // Only ordering and read state stay clear
 
-const String _activityAad = 'keepsy.activity-v1';
+const String _activityAad = 'miuchio.activity-v1';
 
 abstract class ActivityFeed {
   Future<List<StoredActivity>> read({ActivityLane? lane});
@@ -48,7 +48,7 @@ class ActivityStore implements ActivityFeed {
   }) async {
     final root = dir ??
         Directory(p.join(
-            (await getApplicationSupportDirectory()).path, 'keepsy_vault'));
+            (await getApplicationSupportDirectory()).path, 'miuchio_vault'));
     if (!root.existsSync()) root.createSync(recursive: true);
     final db = await openDatabase(
       p.join(root.path, 'activity.db'),

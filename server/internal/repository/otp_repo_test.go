@@ -14,9 +14,9 @@ import (
 
 func testOTPRepo(t *testing.T) (*OTPRepository, string) {
 	t.Helper()
-	addr := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	addr := os.Getenv("MIUCHIO_TEST_REDIS_URL")
 	if addr == "" {
-		t.Skip("KEEPSY_TEST_REDIS_URL not set")
+		t.Skip("MIUCHIO_TEST_REDIS_URL not set")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: addr})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {

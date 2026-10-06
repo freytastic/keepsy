@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 )
 

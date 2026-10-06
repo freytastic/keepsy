@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/default_status_bar.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/default_status_bar.dart';
 
 void main() {
   testWidgets('closing a dark screen brings the dark icons back',

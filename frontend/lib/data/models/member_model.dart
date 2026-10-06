@@ -1,4 +1,4 @@
-import 'package:keepsy/data/models/avatar_ref.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
 
 class MemberProfile {
   final String? ikPub;

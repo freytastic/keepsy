@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/apierr"
+	"github.com/freytastic/miuchio/internal/apierr"
 	"github.com/google/uuid"
 )
 

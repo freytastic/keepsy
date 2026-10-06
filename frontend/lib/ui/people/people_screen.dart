@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 class PersonEntry {
   final String id;

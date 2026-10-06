@@ -4,8 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:keepsy/secure_store/key_store_exceptions.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_store_exceptions.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -23,9 +23,9 @@ void main() {
         await store.put('tamper.k', Uint8List.fromList(List.filled(32, 0xCC)));
 
     // path_provider's getApplicationSupportDirectory ≈ ctx.filesDir on Android,
-    // which is where KeystoreBridge writes keepsy_secure_store.bin
+    // which is where KeystoreBridge writes miuchio_secure_store.bin
     final docs = await getApplicationSupportDirectory();
-    final f = File('${docs.path}/keepsy_secure_store.bin');
+    final f = File('${docs.path}/miuchio_secure_store.bin');
     expect(f.existsSync(), isTrue);
     final raw = f.readAsBytesSync();
     raw[raw.length - 1] ^= 0x01;

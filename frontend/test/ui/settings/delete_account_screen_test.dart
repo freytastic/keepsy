@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/api/account_api.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/settings/delete_account_screen.dart';
+import 'package:miuchio/data/api/account_api.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/settings/delete_account_screen.dart';
 import 'package:provider/provider.dart';
 
 class _World implements AccountDeletionApi, DeletionMarkerStore {
@@ -112,7 +112,7 @@ void main() {
     final world = _World()..offline = true;
     await _pump(tester, world);
 
-    expect(find.text("Couldn't reach Keepsy."), findsOneWidget);
+    expect(find.text("Couldn't reach Miuchio."), findsOneWidget);
 
     world.offline = false;
     await tester.tap(find.text('Try again'));

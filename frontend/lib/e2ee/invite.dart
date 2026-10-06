@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import 'album_keys.dart';
 import 'identity.dart';
@@ -44,7 +44,7 @@ class InviteIdentityPinner {
   }
 }
 
-// Looks up the invitee's bundle by keepsy_id, runs ONE X3DH,
+// Looks up the invitee's bundle by miuchio_id, runs ONE X3DH,
 // wraps every locally held MK (0..current) under the single shared secret, signs
 // each per §4.2 D3, and ships them. Async for recipient : the invitee redeems
 // later via EpochProcessor backfill. The shared secret is zeroed after delivery
@@ -72,10 +72,10 @@ class InviteInitiator {
 
   // Returns the new member_token minted by the server
   Future<Uint8List> inviteExistingUser({
-    required String keepsyId,
+    required String miuchioId,
     required Uint8List albumId,
   }) async {
-    final bundle = await _prekeys.fetchPrekeyBundleByHandle(keepsyId);
+    final bundle = await _prekeys.fetchPrekeyBundleByHandle(miuchioId);
     await bundle.verify(now: _now);
 
     final init = await X3dhSession.initiate(
@@ -132,7 +132,7 @@ class InviteInitiator {
 
       final token = await _invites.deliverExistingUser(
         albumId: _uuidString(albumId),
-        targetKeepsyId: keepsyId,
+        targetMiuchioId: miuchioId,
         ekPub: init.ekPub,
         opkIdx: init.opkIdx,
         envelopes: envelopes,

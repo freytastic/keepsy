@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/screens/onboarding_screen.dart';
-import 'package:keepsy/ui/widgets/camera_stage.dart';
+import 'package:miuchio/ui/screens/onboarding_screen.dart';
+import 'package:miuchio/ui/widgets/camera_stage.dart';
 
 void main() {
   Future<void> pumpEmailWithKeyboard(

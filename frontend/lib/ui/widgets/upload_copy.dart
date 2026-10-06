@@ -1,4 +1,4 @@
-import 'package:keepsy/domain/upload/upload_snapshot.dart';
+import 'package:miuchio/domain/upload/upload_snapshot.dart';
 
 String formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';

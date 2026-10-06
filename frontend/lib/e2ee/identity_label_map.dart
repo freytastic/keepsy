@@ -5,27 +5,27 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 // Persists key handle labels and publication sidecars in secure storage
 // Kept off the SecureKeyStore on purpose : metadata, not key material
 
-const String kIdentityLabelMapKey = 'keepsy.identity.label_map';
-const String kIdentitySpkTsKey = 'keepsy.identity.spk_ts';
+const String kIdentityLabelMapKey = 'miuchio.identity.label_map';
+const String kIdentitySpkTsKey = 'miuchio.identity.spk_ts';
 // Two phase bootstrap : keys may exist locally before the server has accepted
 // them. Tracked separately so a network blip between /keys and /opks doesnt
 // strand the user on a regenerated, server rejected IK
-const String kIdentityPublishedKey = 'keepsy.identity.identity_published';
+const String kIdentityPublishedKey = 'miuchio.identity.identity_published';
 const String kInitialOpksPublishedKey =
-    'keepsy.identity.initial_opks_published';
+    'miuchio.identity.initial_opks_published';
 // Server timestamp that a recovery rotation must exceed
-const String kIdentitySpkConflictKey = 'keepsy.identity.spk_conflict_ts';
+const String kIdentitySpkConflictKey = 'miuchio.identity.spk_conflict_ts';
 
 // Static identity labels (D6)
-const String kLabelIK = 'keepsy.ik';
-const String kLabelLK = 'keepsy.lk';
-const String kLabelSpkCurrent = 'keepsy.spk.current';
-const String kLabelSpkPrevious = 'keepsy.spk.previous';
+const String kLabelIK = 'miuchio.ik';
+const String kLabelLK = 'miuchio.lk';
+const String kLabelSpkCurrent = 'miuchio.spk.current';
+const String kLabelSpkPrevious = 'miuchio.spk.previous';
 // Addressable key for a rotation whose server outcome is not yet known
-const String kLabelSpkPending = 'keepsy.spk.pending';
+const String kLabelSpkPending = 'miuchio.spk.pending';
 // Most recent unacknowledged key, retained for delayed wraps
-const String kLabelSpkArchived = 'keepsy.spk.archived';
-const String kLabelOpkPrefix = 'keepsy.opk.';
+const String kLabelSpkArchived = 'miuchio.spk.archived';
+const String kLabelOpkPrefix = 'miuchio.opk.';
 
 // Tiny KV abstraction so tests can swap in an in-memory fake without dragging
 // in the platform channels of FlutterSecureStorage. Production wraps FSS

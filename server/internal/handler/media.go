@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/service"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/baked_paint.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/baked_paint.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 class FootScrim extends StatelessWidget {
   final double height;

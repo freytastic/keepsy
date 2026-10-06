@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/albums/album_cleanup.dart';
+import 'package:miuchio/domain/albums/album_cleanup.dart';
 
 class _Store implements AlbumCleanupStore {
   final records = <String, CleanupRecord>{};

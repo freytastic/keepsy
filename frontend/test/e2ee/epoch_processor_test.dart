@@ -1,15 +1,15 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/epoch_api.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/e2ee/expected_ik_resolver.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/member_directory.dart';
-import 'package:keepsy/e2ee/prekey_api.dart';
-import 'package:keepsy/e2ee/wrap_envelope.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/epoch_api.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/e2ee/expected_ik_resolver.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/member_directory.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/wrap_envelope.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import '../_sodium_setup.dart';
 import '_admin_test_helpers.dart';

@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:keepsy/e2ee/invite_api.dart';
+import 'package:miuchio/e2ee/invite_api.dart';
 
 import 'api_client.dart';
 

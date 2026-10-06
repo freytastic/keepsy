@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 
 // Decoded GET /albums/{id}/epoch/{n}/wrap response. Bytes in / bytes out :
 // EpochProcessor pre validates lengths and the VER prefix (verifyShape) before

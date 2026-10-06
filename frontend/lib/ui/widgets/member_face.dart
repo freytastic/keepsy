@@ -3,13 +3,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/data/storage/avatar_cache.dart';
-import 'package:keepsy/data/storage/own_avatar_store.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/data/storage/avatar_cache.dart';
+import 'package:miuchio/data/storage/own_avatar_store.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // A member's face in one album: their decrypted avatar once it has loaded,
 // otherwise their stable colour and initial (which is totally bleh :/)

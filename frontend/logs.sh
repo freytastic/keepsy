@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stream Keepsy traces from every connected Android device
+# Stream Miuchio traces from every connected Android device
 
 #   ./logs.sh -a                       # include every logcat tag
 #   ./logs.sh -c -t out/ -n scenario  # clear and save a named capture
@@ -8,7 +8,7 @@
 set -uo pipefail
 
 # Mirrors the tag in lib/diagnostics/trace.dart
-TRACE_TAG="keepsy.trace"
+TRACE_TAG="miuchio.trace"
 
 ALL_TAGS=0
 CLEAR_FIRST=0
@@ -94,7 +94,7 @@ for DEVICE in $DEVICES; do
     printf '  \033[38;5;%sm%-10s\033[0m %s\n' "$COLOUR" "$LABEL" "$DEVICE"
     i=$((i + 1))
 done
-echo "(server side: docker logs -f keepsy-server-1 | jq)"
+echo "(server side: docker logs -f miuchio-server-1 | jq)"
 echo
 
 i=0
@@ -106,7 +106,7 @@ for DEVICE in $DEVICES; do
     if [ -n "$TEE_DIR" ]; then
         MODEL=$(adb -s "$DEVICE" shell getprop ro.product.model 2>/dev/null | tr -d '\r' | tr ' ' '_')
         ANDROID=$(adb -s "$DEVICE" shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' | tr ' ' '_')
-        printf '# keepsy.capture device=%s model=%s android=%s scenario=%s\n' \
+        printf '# miuchio.capture device=%s model=%s android=%s scenario=%s\n' \
             "$LABEL" "${MODEL:-unknown}" "${ANDROID:-unknown}" "${RUN_LABEL:-unlabelled}" \
             > "$TEE_DIR/$LABEL.log"
     fi

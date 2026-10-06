@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/identity_label_map.dart';
+import 'package:miuchio/e2ee/identity_label_map.dart';
 
 class _FakeKv implements IdentityKv {
   final Map<String, String> store = {};

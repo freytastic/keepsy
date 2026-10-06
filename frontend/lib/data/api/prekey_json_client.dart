@@ -1,13 +1,13 @@
 import 'dart:convert';
 
-import 'package:keepsy/e2ee/prekey_api.dart';
+import 'package:miuchio/e2ee/prekey_api.dart';
 
 import 'api_client.dart';
 import 'api_error.dart';
 
 // Adapter from PrekeyJsonClient (in lib/e2ee/) to ApiClient (in lib/data/)
 // Translates the data layer ApiError into PrekeyApiException so e2ee/ never
-// has to import package:keepsy/data/
+// has to import package:miuchio/data/
 class ApiClientPrekeyJsonClient implements PrekeyJsonClient {
   final ApiClient _api;
   ApiClientPrekeyJsonClient(this._api);

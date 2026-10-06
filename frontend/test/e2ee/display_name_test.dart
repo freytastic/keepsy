@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/display_name.dart';
-import 'package:keepsy/e2ee/sealed_name.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/display_name.dart';
+import 'package:miuchio/e2ee/sealed_name.dart';
 
 import '../_sodium_setup.dart';
 import '../secure_store/mock_secure_key_store.dart';

@@ -1,4 +1,4 @@
-import 'package:keepsy/e2ee/identity_label_map.dart';
+import 'package:miuchio/e2ee/identity_label_map.dart';
 
 // Tiny in memory IdentityKv shared across the e2ee test suite
 class _MemKv implements IdentityKv {

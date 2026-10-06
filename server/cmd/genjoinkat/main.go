@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/freytastic/keepsy/internal/e2ee/invite"
+	"github.com/freytastic/miuchio/internal/e2ee/invite"
 	"github.com/google/uuid"
 )
 

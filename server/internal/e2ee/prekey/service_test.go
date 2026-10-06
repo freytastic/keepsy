@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/model"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/model"
 	"github.com/google/uuid"
 )
 

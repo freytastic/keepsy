@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/domain/upload/upload_item.dart';
-import 'package:keepsy/domain/upload/upload_snapshot.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/domain/upload/upload_item.dart';
+import 'package:miuchio/domain/upload/upload_snapshot.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 class UploadTile extends StatelessWidget {
   final UploadItemView item;

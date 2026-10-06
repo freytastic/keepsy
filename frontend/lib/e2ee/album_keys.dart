@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keepsy/secure_store/key_handle.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_handle.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
-const String kAlbumLabelPrefix = 'keepsy.album.';
+const String kAlbumLabelPrefix = 'miuchio.album.';
 
 class AlbumKeyStore {
   final SecureKeyStore _store;
@@ -199,7 +199,7 @@ class EpochReplayException implements Exception {
       'EpochReplayException($reason, epoch=$epoch, latest=$latestEpoch)';
 }
 
-final RegExp _kLabelRe = RegExp(r'^keepsy\.album\.([0-9a-f]{32})\.mk\.(\d+)$');
+final RegExp _kLabelRe = RegExp(r'^miuchio\.album\.([0-9a-f]{32})\.mk\.(\d+)$');
 
 ({String albumHex, int epoch})? _parseLabel(String label) {
   final m = _kLabelRe.firstMatch(label);

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/shelf/shelf_layout.dart';
+import 'package:miuchio/ui/shelf/shelf_layout.dart';
 
 void main() {
   test('a tall screen keeps the lead print at full size', () {

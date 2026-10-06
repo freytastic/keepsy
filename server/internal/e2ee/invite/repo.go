@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"errors"
 
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,13 +33,13 @@ type Repo struct {
 
 func NewRepo(db *pgxpool.Pool, linker *userlink.Hasher, users *repository.UserRepository) *Repo {
 	if linker == nil || users == nil {
-		panic("invite.NewRepo: linker and users are required (M-bridge + keepsy_id lookup)")
+		panic("invite.NewRepo: linker and users are required (M-bridge + miuchio_id lookup)")
 	}
 	return &Repo{db: db, linker: linker, users: users}
 }
 
-func (r *Repo) FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error) {
-	return r.users.FindUserIDByKeepsyID(ctx, keepsyID)
+func (r *Repo) FindUserIDByMiuchioID(ctx context.Context, miuchioID string) (uuid.UUID, error) {
+	return r.users.FindUserIDByMiuchioID(ctx, miuchioID)
 }
 
 func (r *Repo) CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, error) {

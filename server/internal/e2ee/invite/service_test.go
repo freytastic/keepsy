@@ -4,20 +4,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 )
 
 type mockStore struct {
-	findFn    func(ctx context.Context, keepsyID string) (uuid.UUID, error)
+	findFn    func(ctx context.Context, miuchioID string) (uuid.UUID, error)
 	currentFn func(ctx context.Context, albumID uuid.UUID) (int, error)
 	deliverFn func(ctx context.Context, in DeliverMemberInput) ([]byte, error)
 	ikFn      func(ctx context.Context, memberToken []byte) ([]byte, error)
 	markFn    func(ctx context.Context, memberToken []byte, epoch int) error
 }
 
-func (m *mockStore) FindUserIDByKeepsyID(ctx context.Context, k string) (uuid.UUID, error) {
+func (m *mockStore) FindUserIDByMiuchioID(ctx context.Context, k string) (uuid.UUID, error) {
 	return m.findFn(ctx, k)
 }
 func (m *mockStore) CurrentEpoch(ctx context.Context, a uuid.UUID) (int, error) {
@@ -49,10 +49,10 @@ func envs(epochs ...int) []Envelope {
 func baseInput() DeliverExistingUserInput {
 	idx := 3
 	return DeliverExistingUserInput{
-		TargetKeepsyID: "k7f2-9qxm",
-		EKPub:          make([]byte, pubLen),
-		OPKIdxUsed:     &idx,
-		Envelopes:      envs(0, 1, 2),
+		TargetMiuchioID: "k7f2-9qxm",
+		EKPub:           make([]byte, pubLen),
+		OPKIdxUsed:      &idx,
+		Envelopes:       envs(0, 1, 2),
 	}
 }
 
@@ -135,7 +135,7 @@ func TestDeliverExistingUser_Validation(t *testing.T) {
 		{"non-admin", "member", 2, nil, nil, "E_FORBIDDEN"},
 		{"co-admin", "co-admin", 2, nil, nil, "E_FORBIDDEN"},
 		{"unknown handle", "admin", 2, nil, repository.ErrUserNotFound, "E_NOT_FOUND"},
-		{"malformed handle", "admin", 2, func(in *DeliverExistingUserInput) { in.TargetKeepsyID = "!!!" }, nil, "E_NOT_FOUND"},
+		{"malformed handle", "admin", 2, func(in *DeliverExistingUserInput) { in.TargetMiuchioID = "!!!" }, nil, "E_NOT_FOUND"},
 		{"max epoch below current (replay)", "admin", 2, func(in *DeliverExistingUserInput) { in.Envelopes = envs(0, 1) }, nil, "E_EPOCH_REPLAY"},
 		{"gap in epochs", "admin", 2, func(in *DeliverExistingUserInput) { in.Envelopes = envs(0, 2) }, nil, "E_VALIDATION"},
 		{"bad ek_pub length", "admin", 2, func(in *DeliverExistingUserInput) { in.EKPub = make([]byte, 31) }, nil, "E_VALIDATION"},

@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/e2ee/file_decryptor.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/e2ee/file_decryptor.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 import 'decrypted_image_preview.dart';
 

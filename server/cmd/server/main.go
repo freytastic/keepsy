@@ -12,18 +12,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/config"
-	"github.com/freytastic/keepsy/internal/e2ee/epoch"
-	"github.com/freytastic/keepsy/internal/e2ee/invite"
-	"github.com/freytastic/keepsy/internal/e2ee/prekey"
-	"github.com/freytastic/keepsy/internal/handler"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/service"
-	"github.com/freytastic/keepsy/internal/storage"
-	"github.com/freytastic/keepsy/internal/userlink"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/config"
+	"github.com/freytastic/miuchio/internal/e2ee/epoch"
+	"github.com/freytastic/miuchio/internal/e2ee/invite"
+	"github.com/freytastic/miuchio/internal/e2ee/prekey"
+	"github.com/freytastic/miuchio/internal/handler"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/service"
+	"github.com/freytastic/miuchio/internal/storage"
+	"github.com/freytastic/miuchio/internal/userlink"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -172,7 +172,7 @@ func main() {
 			),
 		),
 	).Methods(http.MethodGet)
-	// resolve a random keepsy_id to a prekey bundle. Per (requester, handle)
+	// resolve a random miuchio_id to a prekey bundle. Per (requester, handle)
 	// 5/min plus a per requester cap on all ID lookups : the real user_id never
 	// leaves here
 	authed.Handle(

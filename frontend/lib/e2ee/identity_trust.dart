@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/safety_numbers.dart';
-import 'package:keepsy/data/storage/identity_pin_store.dart';
-import 'package:keepsy/e2ee/identity.dart';
+import 'package:miuchio/crypto/safety_numbers.dart';
+import 'package:miuchio/data/storage/identity_pin_store.dart';
+import 'package:miuchio/e2ee/identity.dart';
 
 // Local TOFU state for the roster UI. Roster pins detect key changes but do not
 // authorize epoch signers: only markVerified writes both trust layers

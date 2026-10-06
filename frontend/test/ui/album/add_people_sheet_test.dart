@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
-import 'package:keepsy/ui/album/add_people_sheet.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/e2ee/prekey_api.dart' show HandleNotFoundException;
+import 'package:miuchio/ui/album/add_people_sheet.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
 
 // The caret blinks while the field has focus, so the sheet never settles
 Future<void> settle(WidgetTester tester) async {
@@ -27,7 +27,7 @@ void main() {
                 ctx,
                 albumTitle: 'Birthday',
                 members: const [AvatarMember(token: 'a', name: 'Noor')],
-                myKeepsyId: '7K3M9QPZ',
+                myMiuchioId: '7K3M9QPZ',
                 onInvite: onInvite,
               ),
               child: const Text('open'),

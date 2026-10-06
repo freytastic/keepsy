@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 

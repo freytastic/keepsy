@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -49,10 +49,10 @@ type envelopeItem struct {
 }
 
 type deliverReq struct {
-	TargetKeepsyID string         `json:"target_keepsy_id"`
-	EKPub          string         `json:"ek_pub"`
-	OPKIdxUsed     *int           `json:"opk_idx_used"`
-	Envelopes      []envelopeItem `json:"envelopes"`
+	TargetMiuchioID string         `json:"target_miuchio_id"`
+	EKPub           string         `json:"ek_pub"`
+	OPKIdxUsed      *int           `json:"opk_idx_used"`
+	Envelopes       []envelopeItem `json:"envelopes"`
 }
 
 // DeliverExistingUser handles POST /api/v1/albums/{id}/invites/existing-user
@@ -103,10 +103,10 @@ func (h *Handler) DeliverExistingUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token, targetUserID, err := h.svc.DeliverExistingUser(r.Context(), albumID, callerToken, callerRole, DeliverExistingUserInput{
-		TargetKeepsyID: req.TargetKeepsyID,
-		EKPub:          ekPub,
-		OPKIdxUsed:     req.OPKIdxUsed,
-		Envelopes:      envelopes,
+		TargetMiuchioID: req.TargetMiuchioID,
+		EKPub:           ekPub,
+		OPKIdxUsed:      req.OPKIdxUsed,
+		Envelopes:       envelopes,
 	})
 	if err != nil {
 		apierr.Write(w, r, err)

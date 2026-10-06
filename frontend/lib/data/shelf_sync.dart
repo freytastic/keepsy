@@ -1,5 +1,5 @@
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/storage/media_catalog.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/storage/media_catalog.dart';
 
 // Apply the durable shelf before refreshing from the server
 // Failed refreshes keep local state and only a valid listing may shrink it

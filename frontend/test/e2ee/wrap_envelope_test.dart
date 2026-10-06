@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/wrap_envelope.dart';
+import 'package:miuchio/e2ee/wrap_envelope.dart';
 
 Map<String, dynamic> _validJson() {
   // 0x01 ‖ 12B nonce ‖ 16B tag ‖ 32B ct = 61B

@@ -1,11 +1,11 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/activity_recorder.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_recorder.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 class _Sink {
   final List<ActivityEvent> recorded = [];

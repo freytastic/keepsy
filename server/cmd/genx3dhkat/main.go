@@ -13,7 +13,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/freytastic/keepsy/internal/crypto"
+	"github.com/freytastic/miuchio/internal/crypto"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
 )

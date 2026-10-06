@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/handle"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/handle"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -25,7 +25,7 @@ type Notifier interface {
 
 // Keeps the resolved UUID out of by-handle responses
 type HandleResolver interface {
-	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
+	FindUserIDByMiuchioID(ctx context.Context, miuchioID string) (uuid.UUID, error)
 }
 
 // Resolves rotation targets without exposing their UUIDs
@@ -252,7 +252,7 @@ func (h *Handler) GetPrekeyBundleByHandle(w http.ResponseWriter, r *http.Request
 		apierr.Write(w, r, apierr.NotFound("user not found"))
 		return
 	}
-	targetID, err := h.resolver.FindUserIDByKeepsyID(r.Context(), norm)
+	targetID, err := h.resolver.FindUserIDByMiuchioID(r.Context(), norm)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			apierr.Write(w, r, apierr.NotFound("user not found"))
@@ -323,7 +323,7 @@ func decodeMemberTokenPath(s string) ([]byte, error) {
 
 // writeBundle encodes the bundle JSON and fires the post commit opk_low fanout
 // userIDField is the value of the response "user_id": the real UUID for the
-// by id route, the keepsy_id handle for the by handle route
+// by id route, the miuchio_id handle for the by handle route
 func (h *Handler) writeBundle(w http.ResponseWriter, userIDField any, bundle *PrekeyBundle, targetID uuid.UUID) {
 	out := map[string]any{
 		"user_id": userIDField,

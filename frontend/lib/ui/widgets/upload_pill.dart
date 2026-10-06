@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
 import 'package:provider/provider.dart';
 
 import 'upload_copy.dart';

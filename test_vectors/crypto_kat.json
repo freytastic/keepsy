@@ -1,5 +1,5 @@
 {
-  "_about": "Cross language Known Answer Tests for keepsy crypto. Both flutter test test/crypto/ and go test ./internal/crypto/... read this file. If either side fails on a vector, the implementation diverged from the spec and BYTE-LEVEL parity is broken. Vectors are sourced from RFC standards where they exist; AES-GCM vectors are from Test Case 13/14 of the McGrew-Viega GCM specification (also in NIST SP 800-38D).",
+  "_about": "Cross language Known Answer Tests for miuchio crypto. Both flutter test test/crypto/ and go test ./internal/crypto/... read this file. If either side fails on a vector, the implementation diverged from the spec and BYTE-LEVEL parity is broken. Vectors are sourced from RFC standards where they exist; AES-GCM vectors are from Test Case 13/14 of the McGrew-Viega GCM specification (also in NIST SP 800-38D).",
 
   "aead_aes_gcm_decrypt": [
     {

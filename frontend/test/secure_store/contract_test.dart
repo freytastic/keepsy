@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/secure_store/key_store_exceptions.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_store_exceptions.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 import 'mock_secure_key_store.dart';
 
@@ -64,10 +64,10 @@ void runContractTests(String name, StoreFactory factory) {
     });
 
     test('list filters by labelPrefix', () async {
-      await store.put('keepsy.opk.0', Uint8List(32));
-      await store.put('keepsy.opk.1', Uint8List(32));
+      await store.put('miuchio.opk.0', Uint8List(32));
+      await store.put('miuchio.opk.1', Uint8List(32));
       await store.put('other.thing', Uint8List(32));
-      final opks = await store.list(labelPrefix: 'keepsy.opk.');
+      final opks = await store.list(labelPrefix: 'miuchio.opk.');
       expect(opks.length, 2);
       final all = await store.list();
       expect(all.length, 3);

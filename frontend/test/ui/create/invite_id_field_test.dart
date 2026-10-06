@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/create/create_copy.dart';
-import 'package:keepsy/ui/create/invite_id_field.dart';
+import 'package:miuchio/ui/create/create_copy.dart';
+import 'package:miuchio/ui/create/invite_id_field.dart';
 
 void main() {
   late List<String> ids;

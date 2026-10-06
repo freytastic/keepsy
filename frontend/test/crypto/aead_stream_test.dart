@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/crypto/aead_stream.dart';
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/aead_stream.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 
 Uint8List _bytes(int n, [int seed = 0]) {
   final out = Uint8List(n);

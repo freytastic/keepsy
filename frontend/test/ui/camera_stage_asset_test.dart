@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/widgets/camera_stage.dart';
+import 'package:miuchio/ui/widgets/camera_stage.dart';
 
 Future<({int frames, int width, int height, int ms})> _read(String path) async {
   final codec = await ui.instantiateImageCodec(await File(path).readAsBytes());

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/service"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/service"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 )
 

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -17,7 +17,7 @@ func seedSessionUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email_hmac, keepsy_id)
+		`INSERT INTO users (id, email_hmac, miuchio_id)
 		 VALUES ($1, $2, $3)`,
 		id, []byte(fmt.Sprintf("session-%s@example.com", id)), id.String(),
 	); err != nil {

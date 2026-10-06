@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/epoch_rotator.dart';
-import 'package:keepsy/e2ee/expected_ik_resolver.dart';
-import 'package:keepsy/e2ee/member_removal.dart';
+import 'package:miuchio/e2ee/epoch_rotator.dart';
+import 'package:miuchio/e2ee/expected_ik_resolver.dart';
+import 'package:miuchio/e2ee/member_removal.dart';
 
 Uint8List _album([int s = 0xA1]) => Uint8List.fromList(List<int>.filled(16, s));
 Uint8List _tok(int s) => Uint8List.fromList(List<int>.filled(32, s));

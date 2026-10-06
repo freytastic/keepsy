@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/epoch_processor.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/e2ee/epoch_processor.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 void main() {
   late AppState state;

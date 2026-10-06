@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 )
 

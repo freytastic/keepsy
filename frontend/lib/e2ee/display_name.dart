@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/e2ee/sealed_name.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/e2ee/sealed_name.dart';
 
 // PUT /albums/{id}/members/me/profile-ct with the sealed name_ct. The server
 // resolves the caller's member_token from middleware, so no token is passed

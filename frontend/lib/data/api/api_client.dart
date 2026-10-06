@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:keepsy/data/constants.dart';
-import 'package:keepsy/data/storage/storage_service.dart';
-import 'package:keepsy/diagnostics/trace.dart';
+import 'package:miuchio/data/constants.dart';
+import 'package:miuchio/data/storage/storage_service.dart';
+import 'package:miuchio/diagnostics/trace.dart';
 import 'api_error.dart';
 import 'session_refresher.dart';
 

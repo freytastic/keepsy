@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 import 'package:uuid/uuid.dart';
 
 import 'album_keys.dart';
@@ -39,9 +39,9 @@ class SealedAvatar {
 //   key_ct = MkSeal(MK_epoch, DEK, aad = key tag || album || token || avatar_id || u32_be(epoch))
 abstract class AvatarCrypto {
   static final Uint8List _blobTag =
-      Uint8List.fromList('keepsy.avatar-v1'.codeUnits);
+      Uint8List.fromList('miuchio.avatar-v1'.codeUnits);
   static final Uint8List _keyTag =
-      Uint8List.fromList('keepsy.avatar-key-v1'.codeUnits);
+      Uint8List.fromList('miuchio.avatar-key-v1'.codeUnits);
 
   // Sealed under the album's newest MK
   static Future<SealedAvatar> seal({

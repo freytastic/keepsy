@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/data/api/account_api.dart';
-import 'package:keepsy/data/api/api_error.dart';
+import 'package:miuchio/data/api/account_api.dart';
+import 'package:miuchio/data/api/api_error.dart';
 
 class DeletionPlan {
   final List<DeletionAlbum> albums;

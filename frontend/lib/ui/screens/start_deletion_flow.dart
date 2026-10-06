@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/domain/account/deletion_launch.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/widgets/delete_shared_albums_dialog.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/domain/account/deletion_launch.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/widgets/delete_shared_albums_dialog.dart';
 
 import 'account_deletion_screen.dart';
 

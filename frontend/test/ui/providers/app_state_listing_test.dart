@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 AlbumModel _album(String id) => AlbumModel(
       id: id,

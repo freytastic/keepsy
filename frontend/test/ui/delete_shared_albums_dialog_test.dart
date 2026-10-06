@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/widgets/delete_shared_albums_dialog.dart';
+import 'package:miuchio/ui/widgets/delete_shared_albums_dialog.dart';
 
 void main() {
   testWidgets('deleting shared albums needs its own explicit agreement',

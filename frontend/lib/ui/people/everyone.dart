@@ -4,20 +4,20 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/e2ee/invite.dart';
-import 'package:keepsy/ui/album/add_people_sheet.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/people/people_screen.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
-import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/e2ee/invite.dart';
+import 'package:miuchio/ui/album/add_people_sheet.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/people/people_screen.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
+import 'package:miuchio/ui/widgets/safety_number_sheet.dart';
 
 // One person across albums, grouped by key on this phone only
 class _Person {
@@ -209,9 +209,9 @@ Future<void> openAlbumPeople(BuildContext context, AlbumModel album,
         for (final a in roster.avatars)
           if (!a.pending) a
       ],
-      myKeepsyId: state.keepsyId,
-      onInvite: (keepsyId) =>
-          initiator.inviteExistingUser(keepsyId: keepsyId, albumId: albumBytes),
+      myMiuchioId: state.miuchioId,
+      onInvite: (miuchioId) =>
+          initiator.inviteExistingUser(miuchioId: miuchioId, albumId: albumBytes),
     );
   }
 

@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/shelf/seen_store_impl.dart';
+import 'package:miuchio/ui/shelf/seen_store_impl.dart';
 
 Uint8List _key([int fill = 0x11]) =>
     Uint8List.fromList(List<int>.filled(32, fill));
@@ -13,7 +13,7 @@ void main() {
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('seen_');
-    file = File('${tmp.path}/keepsy_seen.kec');
+    file = File('${tmp.path}/miuchio_seen.kec');
   });
 
   tearDown(() {

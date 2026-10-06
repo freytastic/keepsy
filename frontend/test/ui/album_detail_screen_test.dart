@@ -1,23 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:keepsy/data/api/album_api.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/data/models/member_model.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/member_avatars.dart';
-import 'package:keepsy/ui/people/people_screen.dart';
-import 'package:keepsy/ui/screens/album_detail_screen.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
+import 'package:miuchio/data/api/album_api.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/data/models/member_model.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/member_avatars.dart';
+import 'package:miuchio/ui/people/people_screen.dart';
+import 'package:miuchio/ui/screens/album_detail_screen.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
 
 import '../secure_store/mock_secure_key_store.dart';
 
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
 import 'upload_scaffold.dart';
 
 class _MockAlbumService extends AlbumService {

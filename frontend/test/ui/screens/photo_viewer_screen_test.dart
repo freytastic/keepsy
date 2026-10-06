@@ -2,10 +2,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/e2ee/media_record.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/screens/photo_viewer_screen.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/e2ee/media_record.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/screens/photo_viewer_screen.dart';
 
 MediaRecord _shot(String id) => MediaRecord(
       id: id,

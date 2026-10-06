@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // Stable hashing keeps card tilt fixed across launches
 int fnv1a32(String s) {

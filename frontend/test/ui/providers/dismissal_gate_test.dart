@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/providers/dismissal_gate.dart';
+import 'package:miuchio/ui/providers/dismissal_gate.dart';
 
 void main() {
   late DismissalGate gate;

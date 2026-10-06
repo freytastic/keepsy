@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/secure_store/key_handle.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/secure_store/key_handle.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 // Keep the owner with vault keys so iOS Keychain persistence cannot separate
 // surviving keys from their account binding
-const String kAccountOwnerLabel = 'keepsy.account.owner';
+const String kAccountOwnerLabel = 'miuchio.account.owner';
 
 // Raised when a second account tries to claim a vault that is already bound
 class AccountOwnerConflict implements Exception {

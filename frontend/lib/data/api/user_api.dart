@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:keepsy/data/api/api_client.dart';
+import 'package:miuchio/data/api/api_client.dart';
 
 class UserService {
   final ApiClient _client = ApiClient();

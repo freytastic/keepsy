@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/e2ee/handle.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/e2ee/handle.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
 
 import 'create_copy.dart';
 

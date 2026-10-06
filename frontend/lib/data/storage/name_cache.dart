@@ -6,8 +6,8 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
 
 // Seals names and their ciphertext fingerprints under the device cache key
 // A changed fingerprint makes stale names miss naturally
@@ -21,7 +21,7 @@ class NameCache {
   Future<void> _inFlight = Future.value();
 
   static final Uint8List _aad =
-      Uint8List.fromList('keepsy.name-cache-v1'.codeUnits);
+      Uint8List.fromList('miuchio.name-cache-v1'.codeUnits);
 
   NameCache._(this._file, this._cacheKey);
 
@@ -34,7 +34,7 @@ class NameCache {
   }) async {
     final f = file ??
         File(p.join(
-            (await getApplicationSupportDirectory()).path, 'keepsy_names.kec'));
+            (await getApplicationSupportDirectory()).path, 'miuchio_names.kec'));
     final c = NameCache._(f, cacheRootKey);
     await c._load();
     return c;

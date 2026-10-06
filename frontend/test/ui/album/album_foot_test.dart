@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/album_foot.dart';
-import 'package:keepsy/ui/widgets/foot_bar.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/album_foot.dart';
+import 'package:miuchio/ui/widgets/foot_bar.dart';
 
 void main() {
   Future<void> pump(WidgetTester tester) async {

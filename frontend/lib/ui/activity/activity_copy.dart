@@ -1,4 +1,4 @@
-import 'package:keepsy/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
 
 // Names are sealed per album, so a token alone cannot resolve one
 class ActivityNames {
@@ -99,7 +99,7 @@ LineCopy lineFor(ActivityEvent e, ActivityNames names) {
         where: where,
         // Removal commits before rotation, which can still fail
         aside: e.rotationPending
-            ? 'Keepsy is still locking '
+            ? 'Miuchio is still locking '
                 '${names.memberName(e.albumId, e.memberToken)} out. Until '
                 "that's done, they may see new photos."
             : "${names.memberName(e.albumId, e.memberToken)} can't see "

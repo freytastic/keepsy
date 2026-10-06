@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/ui/screens/account_deleted_screen.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/ui/screens/account_deleted_screen.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 enum _Phase { working, offline, stuck, unconfirmed }
 
@@ -73,10 +73,10 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
     final (title, body) = switch (_phase) {
       _Phase.working => (
           'Deleting your account',
-          'Keep Keepsy open. This finishes in a moment.',
+          'Keep Miuchio open. This finishes in a moment.',
         ),
       _Phase.offline => (
-          "Couldn't reach Keepsy",
+          "Couldn't reach Miuchio",
           'Your deletion may already be underway. Connect to the internet and '
               'try again.',
         ),
@@ -87,7 +87,7 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
         ),
       _Phase.unconfirmed => (
           'Finish deleting your account?',
-          "Keepsy hasn't confirmed your deletion yet. Continue to send it "
+          "Miuchio hasn't confirmed your deletion yet. Continue to send it "
               'again, or keep your account.',
         ),
     };

@@ -25,7 +25,7 @@ abstract class InviteApi {
   // POST /albums/{id}/invites/existing-user. Returns the new member_token bytes
   Future<Uint8List> deliverExistingUser({
     required String albumId,
-    required String targetKeepsyId,
+    required String targetMiuchioId,
     required Uint8List ekPub,
     int? opkIdx,
     required List<DeliverEnvelope> envelopes,
@@ -55,14 +55,14 @@ class HttpInviteApi implements InviteApi {
   @override
   Future<Uint8List> deliverExistingUser({
     required String albumId,
-    required String targetKeepsyId,
+    required String targetMiuchioId,
     required Uint8List ekPub,
     int? opkIdx,
     required List<DeliverEnvelope> envelopes,
   }) async {
     final body = await _client
         .postJsonForResult('/albums/$albumId/invites/existing-user', {
-      'target_keepsy_id': targetKeepsyId,
+      'target_miuchio_id': targetMiuchioId,
       'ek_pub': base64Encode(ekPub),
       'opk_idx_used': opkIdx,
       'envelopes': [

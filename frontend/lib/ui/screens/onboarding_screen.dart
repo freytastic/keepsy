@@ -4,25 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/data/api/auth_api.dart';
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/data/storage/storage_service.dart';
-import 'package:keepsy/domain/account/account_deletion.dart' show TerminalWipe;
-import 'package:keepsy/domain/account/account_gate.dart';
-import 'package:keepsy/domain/account/sign_in_gate.dart';
-import 'package:keepsy/ui/screens/account_conflict_screens.dart';
-import 'package:keepsy/ui/screens/erase_installation_flow.dart';
-import 'package:keepsy/ui/screens/start_deletion_flow.dart';
-import 'package:keepsy/data/api/realtime_service.dart';
-import 'package:keepsy/data/api/user_api.dart';
-import 'package:keepsy/e2ee/identity.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/main_shell.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/camera_stage.dart';
-import 'package:keepsy/ui/widgets/caret_blink.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
-import 'package:keepsy/ui/widgets/warm_field.dart';
+import 'package:miuchio/data/api/auth_api.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/data/storage/storage_service.dart';
+import 'package:miuchio/domain/account/account_deletion.dart' show TerminalWipe;
+import 'package:miuchio/domain/account/account_gate.dart';
+import 'package:miuchio/domain/account/sign_in_gate.dart';
+import 'package:miuchio/ui/screens/account_conflict_screens.dart';
+import 'package:miuchio/ui/screens/erase_installation_flow.dart';
+import 'package:miuchio/ui/screens/start_deletion_flow.dart';
+import 'package:miuchio/data/api/realtime_service.dart';
+import 'package:miuchio/data/api/user_api.dart';
+import 'package:miuchio/e2ee/identity.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/screens/main_shell.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/camera_stage.dart';
+import 'package:miuchio/ui/widgets/caret_blink.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
+import 'package:miuchio/ui/widgets/warm_field.dart';
 
 const int _kOtpLength = 6;
 final RegExp _kEmailRe = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
@@ -172,7 +172,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             _showBelongsToAnother();
           case AccountGateOutcome.connectionRequired:
             _showError(
-                'Keepsy could not reach the server. Try again when you are back online.');
+                'Miuchio could not reach the server. Try again when you are back online.');
           case AccountGateOutcome.proceed:
           case AccountGateOutcome.adoptUnbound:
           case AccountGateOutcome.newAccount:
@@ -539,7 +539,10 @@ class _IntroCopy extends StatelessWidget {
     return const Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('Keepsy', style: Warm.wordmark),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text('Miuchio', style: Warm.wordmark, maxLines: 1),
+        ),
         SizedBox(height: Warm.headingToLead),
         SizedBox(
           width: Warm.leadMaxWidth,

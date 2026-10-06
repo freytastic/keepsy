@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/service"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/service"
 	"github.com/google/uuid"
 )
 
@@ -21,14 +21,14 @@ func (s *stubUserStore) GetByID(ctx context.Context, id uuid.UUID) (*model.User,
 	return s.getByIDFn(ctx, id)
 }
 
-// TestGetMe_IncludesKeepsyID locks the §6.1 discovery handle into the /me
+// TestGetMe_IncludesMiuchioID locks the §6.1 discovery handle into the /me
 // response : the profile screen reads it from here, so a dropped field hides
-// the user's shareable keepsy ID
-func TestGetMe_IncludesKeepsyID(t *testing.T) {
+// the user's shareable miuchio ID
+func TestGetMe_IncludesMiuchioID(t *testing.T) {
 	id := uuid.New()
 	store := &stubUserStore{
 		getByIDFn: func(_ context.Context, _ uuid.UUID) (*model.User, error) {
-			return &model.User{ID: id, KeepsyID: "K7F29QXM"}, nil
+			return &model.User{ID: id, MiuchioID: "K7F29QXM"}, nil
 		},
 	}
 	h := NewUserHandler(service.NewUserService(store))
@@ -45,7 +45,7 @@ func TestGetMe_IncludesKeepsyID(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["keepsy_id"] != "K7F29QXM" {
-		t.Fatalf("keepsy_id = %v, want K7F29QXM (must reach /me so the profile can show it)", body["keepsy_id"])
+	if body["miuchio_id"] != "K7F29QXM" {
+		t.Fatalf("miuchio_id = %v, want K7F29QXM (must reach /me so the profile can show it)", body["miuchio_id"])
 	}
 }

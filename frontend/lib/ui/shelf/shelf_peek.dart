@@ -2,13 +2,13 @@ import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/ui/album/album_copy.dart';
-import 'package:keepsy/ui/album/album_menu.dart';
-import 'package:keepsy/ui/shelf/shelf_copy.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/blur_scrim.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/ui/album/album_copy.dart';
+import 'package:miuchio/ui/album/album_menu.dart';
+import 'package:miuchio/ui/shelf/shelf_copy.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/blur_scrim.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
 
 typedef PeekPrint = Widget Function({required bool fanned});
 

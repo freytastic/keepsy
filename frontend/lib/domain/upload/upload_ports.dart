@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 import 'upload_item.dart';
 

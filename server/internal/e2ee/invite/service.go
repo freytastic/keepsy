@@ -6,9 +6,9 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/handle"
-	"github.com/freytastic/keepsy/internal/repository"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/handle"
+	"github.com/freytastic/miuchio/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -31,7 +31,7 @@ const MaxAlbumMembers = 10
 
 // store is the repo surface DeliverExistingUser needs. Tests substitute a mock
 type store interface {
-	FindUserIDByKeepsyID(ctx context.Context, keepsyID string) (uuid.UUID, error)
+	FindUserIDByMiuchioID(ctx context.Context, miuchioID string) (uuid.UUID, error)
 	CurrentEpoch(ctx context.Context, albumID uuid.UUID) (int, error)
 	DeliverMember(ctx context.Context, in DeliverMemberInput) ([]byte, error)
 	IKByMemberToken(ctx context.Context, memberToken []byte) ([]byte, error)
@@ -52,10 +52,10 @@ type Envelope struct {
 }
 
 type DeliverExistingUserInput struct {
-	TargetKeepsyID string
-	EKPub          []byte
-	OPKIdxUsed     *int
-	Envelopes      []Envelope
+	TargetMiuchioID string
+	EKPub           []byte
+	OPKIdxUsed      *int
+	Envelopes       []Envelope
 }
 
 // DeliverMemberInput is the single tx write shape handed to the repo
@@ -80,11 +80,11 @@ func (s *Service) DeliverExistingUser(ctx context.Context, albumID uuid.UUID, ca
 		return nil, uuid.Nil, apierr.Validation("opk_idx_used must be >= 0 when present")
 	}
 
-	norm, err := handle.Normalize(in.TargetKeepsyID)
+	norm, err := handle.Normalize(in.TargetMiuchioID)
 	if err != nil {
 		return nil, uuid.Nil, apierr.NotFound("user not found")
 	}
-	userID, err := s.repo.FindUserIDByKeepsyID(ctx, norm)
+	userID, err := s.repo.FindUserIDByMiuchioID(ctx, norm)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			return nil, uuid.Nil, apierr.NotFound("user not found")

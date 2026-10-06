@@ -8,7 +8,7 @@ import 'secure_key_store.dart';
 // surface. Keeping them as two classes (instead of a shared base) makes it
 // obvious in stack traces : revisit after Phase 2
 class IosSecureEnclave extends SecureKeyStore {
-  static const _channel = MethodChannel('keepsy/keystore');
+  static const _channel = MethodChannel('miuchio/keystore');
 
   @override
   Future<void> initialize() => _invoke<void>('initialize', const {});

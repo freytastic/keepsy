@@ -4,9 +4,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 import '../../_sodium_setup.dart';
 
@@ -23,7 +23,7 @@ void main() {
   });
 
   setUp(() async {
-    dir = await Directory.systemTemp.createTemp('keepsy-activity');
+    dir = await Directory.systemTemp.createTemp('miuchio-activity');
     store = await ActivityStore.open(cacheRootKey: key, dir: dir);
   });
 

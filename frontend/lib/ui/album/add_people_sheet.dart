@@ -4,26 +4,26 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/e2ee/handle.dart';
-import 'package:keepsy/e2ee/prekey_api.dart' show HandleNotFoundException;
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/blur_scrim.dart';
-import 'package:keepsy/ui/widgets/caret_blink.dart';
-import 'package:keepsy/ui/widgets/member_face.dart';
-import 'package:keepsy/ui/widgets/pressable_scale.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/e2ee/handle.dart';
+import 'package:miuchio/e2ee/prekey_api.dart' show HandleNotFoundException;
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/blur_scrim.dart';
+import 'package:miuchio/ui/widgets/caret_blink.dart';
+import 'package:miuchio/ui/widgets/member_face.dart';
+import 'package:miuchio/ui/widgets/pressable_scale.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 import 'album_copy.dart';
 import 'member_avatars.dart';
 
-typedef SendInvite = Future<void> Function(String keepsyId);
+typedef SendInvite = Future<void> Function(String miuchioId);
 
 class AddPeopleSheet extends StatefulWidget {
   final String? albumId;
   final String albumTitle;
   final List<AvatarMember> members;
-  final String? myKeepsyId;
+  final String? myMiuchioId;
   final SendInvite onInvite;
   final Animation<double> entry;
 
@@ -32,7 +32,7 @@ class AddPeopleSheet extends StatefulWidget {
     this.albumId,
     required this.albumTitle,
     required this.members,
-    required this.myKeepsyId,
+    required this.myMiuchioId,
     required this.onInvite,
     this.entry = kAlwaysCompleteAnimation,
   });
@@ -42,7 +42,7 @@ class AddPeopleSheet extends StatefulWidget {
     String? albumId,
     required String albumTitle,
     required List<AvatarMember> members,
-    required String? myKeepsyId,
+    required String? myMiuchioId,
     required SendInvite onInvite,
   }) async {
     final added = await Navigator.of(context).push(PageRouteBuilder<bool>(
@@ -54,7 +54,7 @@ class AddPeopleSheet extends StatefulWidget {
         albumId: albumId,
         albumTitle: albumTitle,
         members: members,
-        myKeepsyId: myKeepsyId,
+        myMiuchioId: myMiuchioId,
         onInvite: onInvite,
         entry: a,
       ),
@@ -142,7 +142,7 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
   }
 
   void _copyMine() {
-    final mine = widget.myKeepsyId;
+    final mine = widget.myMiuchioId;
     if (mine == null) return;
     Clipboard.setData(ClipboardData(text: formatHandle(mine)));
     _copiedReset?.cancel();
@@ -155,7 +155,7 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
   Future<void> _submit() async {
     if (_code.length != handleLength || _finding) return;
     final handle = normalizeHandle(_code);
-    if (handle == widget.myKeepsyId) return _fail(AlbumCopy.addSelf);
+    if (handle == widget.myMiuchioId) return _fail(AlbumCopy.addSelf);
     setState(() => _finding = true);
     try {
       await widget.onInvite(handle);
@@ -308,10 +308,10 @@ class _AddPeopleSheetState extends State<AddPeopleSheet>
           primary: true,
           onTap: _code.length == handleLength && !_finding ? _submit : null,
         ),
-        if (widget.myKeepsyId != null) ...[
+        if (widget.myMiuchioId != null) ...[
           const SizedBox(height: 14),
           _Mine(
-            id: formatHandle(widget.myKeepsyId!),
+            id: formatHandle(widget.myMiuchioId!),
             copied: _copied,
             onCopy: _copyMine,
           ),

@@ -12,7 +12,7 @@
 //     with a deterministic nonce derived from member_token (which is itself
 //     32B CSPRNG, so each row's nonce is unique by construction)
 
-// Both subkeys are HKDF-derived from KEEPSY_USER_LINK_KEY so one env var covers
+// Both subkeys are HKDF-derived from MIUCHIO_USER_LINK_KEY so one env var covers
 // both purposes without key reuse. A leaked DB snapshot is useless without the
 // live key (HMAC reversal infeasible : AEAD undecryptable). A live compromised
 // server still has the key , this is "encryption at rest" for the bridge, not

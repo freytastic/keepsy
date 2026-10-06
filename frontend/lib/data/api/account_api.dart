@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/api_error.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/api_error.dart';
 
 enum DeletionOutcome { leave, deleteAlbum, deleteShared }
 

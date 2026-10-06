@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/domain/activity/activity_sync.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/domain/activity/activity_sync.dart';
 
 AlbumModel _album(String id) => AlbumModel(
       id: id,

@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart' as cg;
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
 
 import 'album_keys.dart';
 import 'epoch_api.dart';

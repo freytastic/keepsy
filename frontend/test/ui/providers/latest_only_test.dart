@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/providers/latest_only.dart';
+import 'package:miuchio/ui/providers/latest_only.dart';
 
 void main() {
   late LatestOnly guard;

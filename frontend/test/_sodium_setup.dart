@@ -1,5 +1,5 @@
 import 'package:sodium/sodium_sumo.dart' show SodiumSumo, SodiumSumoInit;
-import 'package:keepsy/crypto/primitives.dart';
+import 'package:miuchio/crypto/primitives.dart';
 
 SodiumSumo? _sodium;
 

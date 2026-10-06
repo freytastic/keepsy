@@ -2,10 +2,10 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/create/create_album_screen.dart';
-import 'package:keepsy/ui/create/create_copy.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/ui/create/create_album_screen.dart';
+import 'package:miuchio/ui/create/create_copy.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 
 void main() {
   Future<void> pump(WidgetTester tester) async {

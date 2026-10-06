@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/e2ee/album_keys.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/e2ee/album_keys.dart';
 
 typedef AadForEpoch = Uint8List Function(int epoch);
 

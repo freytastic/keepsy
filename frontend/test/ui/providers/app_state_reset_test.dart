@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 AlbumModel _album(String id) => AlbumModel(
       id: id,
@@ -41,7 +41,7 @@ void main() {
 
   test('reset clears identity, profile and realtime signal fields', () async {
     final s = AppState();
-    s.setUserData({'id': 'u1', 'keepsy_id': 'kid-1'});
+    s.setUserData({'id': 'u1', 'miuchio_id': 'kid-1'});
     s.setEmail('me@example.com');
     s.setProfileName('Alice');
     s.notifyMediaAdded('alb', 'med');
@@ -56,7 +56,7 @@ void main() {
     // identity + profile must not survive into the next account's session
     expect(s.userId, isNull);
     expect(s.email, isNull);
-    expect(s.keepsyId, isNull);
+    expect(s.miuchioId, isNull);
     expect(s.profileName, 'User'); // back to the default placeholder
     // realtime one shot signals
     expect(s.lastMediaAddedAlbumId, isNull);

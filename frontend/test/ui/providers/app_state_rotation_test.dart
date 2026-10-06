@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/e2ee/rotation_recovery.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/e2ee/rotation_recovery.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
 
 AlbumModel _album(String id, {String? role}) => AlbumModel(
       id: id,

@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/crypto"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/crypto"
 	"github.com/google/uuid"
 )
 

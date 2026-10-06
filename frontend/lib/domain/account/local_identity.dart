@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/e2ee/identity_label_map.dart';
-import 'package:keepsy/secure_store/key_handle_adapter.dart';
-import 'package:keepsy/secure_store/secure_key_store.dart';
+import 'package:miuchio/e2ee/identity_label_map.dart';
+import 'package:miuchio/secure_store/key_handle_adapter.dart';
+import 'package:miuchio/secure_store/secure_key_store.dart';
 
 import 'sign_in_gate.dart';
 

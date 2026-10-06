@@ -4,18 +4,18 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/data/storage/activity_store.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/activity_sync.dart';
-import 'package:keepsy/e2ee/identity_trust.dart';
-import 'package:keepsy/ui/activity/activity_copy.dart';
-import 'package:keepsy/ui/activity/activity_screen.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/encrypted_thumbnail.dart';
-import 'package:keepsy/ui/widgets/safety_number_sheet.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/data/storage/activity_store.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_sync.dart';
+import 'package:miuchio/e2ee/identity_trust.dart';
+import 'package:miuchio/ui/activity/activity_copy.dart';
+import 'package:miuchio/ui/activity/activity_screen.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/encrypted_thumbnail.dart';
+import 'package:miuchio/ui/widgets/safety_number_sheet.dart';
 
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});

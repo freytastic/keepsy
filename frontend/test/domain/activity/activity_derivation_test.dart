@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/domain/activity/activity_event.dart';
-import 'package:keepsy/domain/activity/activity_derivation.dart';
+import 'package:miuchio/domain/activity/activity_event.dart';
+import 'package:miuchio/domain/activity/activity_derivation.dart';
 
 void main() {
   final now = DateTime.utc(2026, 9, 21, 12);

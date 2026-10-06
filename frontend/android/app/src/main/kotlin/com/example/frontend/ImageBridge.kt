@@ -18,7 +18,7 @@ import java.util.concurrent.Executors
 class ImageBridge : MethodChannel.MethodCallHandler {
 
     companion object {
-        const val CHANNEL = "keepsy/image"
+        const val CHANNEL = "miuchio/image"
         private const val FULL_QUALITY = 90
         private const val THUMB_QUALITY = 82
         private const val THUMB_MIN_QUALITY = 60
@@ -40,7 +40,7 @@ class ImageBridge : MethodChannel.MethodCallHandler {
                 android.os.Process.THREAD_PRIORITY_BACKGROUND
             )
             r.run()
-        }, "keepsy-image").apply { isDaemon = true }
+        }, "miuchio-image").apply { isDaemon = true }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())

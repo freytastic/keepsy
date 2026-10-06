@@ -3,7 +3,7 @@ package handler
 import (
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/model"
+	"github.com/freytastic/miuchio/internal/model"
 	"github.com/google/uuid"
 )
 

@@ -6,10 +6,10 @@ import 'package:cryptography/cryptography.dart' as cg;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:keepsy/crypto/primitives.dart';
-import 'package:keepsy/crypto/uuid_bytes.dart';
-import 'package:keepsy/crypto/wire_format.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/crypto/primitives.dart';
+import 'package:miuchio/crypto/uuid_bytes.dart';
+import 'package:miuchio/crypto/wire_format.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 class OutboxRecord {
   final String itemId;
@@ -42,7 +42,7 @@ class UploadOutboxStore {
   }) async {
     final d = dir ??
         Directory(p.join(
-            (await getApplicationSupportDirectory()).path, 'keepsy_outbox'));
+            (await getApplicationSupportDirectory()).path, 'miuchio_outbox'));
     await d.create(recursive: true);
     final store = UploadOutboxStore._(d, cacheRootKey);
     await store._sweepUncommitted();
@@ -243,7 +243,7 @@ class UploadOutboxStore {
 
   // Binds each sealed meta to its own entry so metas cannot be swapped
   Uint8List _aad(String itemId) =>
-      Uint8List.fromList(utf8.encode('keepsy.outbox-v1|$itemId'));
+      Uint8List.fromList(utf8.encode('miuchio.outbox-v1|$itemId'));
 
   Future<void> _write(File f, Uint8List bytes) async {
     final tmp = File('${f.path}.tmp');

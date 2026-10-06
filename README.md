@@ -1,16 +1,16 @@
-# Keepsy
+# Miuchio
 
 A shared photo album for small groups, end-to-end encrypted. Photos are locked on your phone before they are uploaded, and only the people in the album hold the keys. The server stores the locked copies and enforces the album's rules, but it is never given the keys to open them.
 
-[Website](https://www.miuchio.com) · [How it works](https://www.miuchio.com/how-it-works) · [Protocol](https://www.miuchio.com/protocol/overview) · [What Keepsy does not protect](https://www.miuchio.com/protocol/limits)
+[Website](https://www.miuchio.com) · [How it works](https://www.miuchio.com/how-it-works) · [Protocol](https://www.miuchio.com/protocol/overview) · [What Miuchio does not protect](https://www.miuchio.com/protocol/limits)
 
-## What Keepsy is
+## What Miuchio is
 
-Keepsy is meant for a family, a group of friends or the people from one trip: a quiet place to keep photos together, not a feed. Everyone in an album can add photos, and nobody outside it can open them, including the server.
+Miuchio is meant for a family, a group of friends or the people from one trip: a quiet place to keep photos together, not a feed. Everyone in an album can add photos, and nobody outside it can open them, including the server.
 
 - **Photos, album titles, names and profile photos are encrypted** on the phone. The server only ever holds ciphertext.
 - **Location and camera details are removed** before a photo is encrypted. If that cannot be done, the photo is not uploaded.
-- **Your email address is not stored.** The database keeps only a keyed hash of it. People add you with a random Keepsy ID, never by email, phone number or contacts.
+- **Your email address is not stored.** The database keeps only a keyed hash of it. People add you with a random Miuchio ID, never by email, phone number or contacts.
 - **Removing someone locks them out of what comes next.** The album moves to a new key that only the remaining members receive.
 - **You can check you have the right keys** by comparing a safety number with the other person.
 
@@ -18,19 +18,19 @@ The [How it works](https://www.miuchio.com/how-it-works) page walks through one 
 
 ## Status
 
-Keepsy is in its **testing phase**. Beta v1 is not on the App Store or Play Store yet, so expect some bugs in the UI and the odd glitch while you try it.
+Miuchio is in its **testing phase**. Beta v1 is not on the App Store or Play Store yet, so expect some bugs in the UI and the odd glitch while you try it.
 
 - An album holds up to 10 people and has one admin, the person who created it.
 - There is no backup and no second device yet. Removing the app or losing your phone means losing access to your albums.
 - **The protocol and the code have not had an independent security review.** Do not rely on it yet where a failure would put someone at risk.
 
-Every known limit is listed on [What Keepsy does not protect](https://www.miuchio.com/protocol/limits).
+Every known limit is listed on [What Miuchio does not protect](https://www.miuchio.com/protocol/limits).
 
 ## Roadmap
 
 | Release | What it adds |
 | --- | --- |
-| **Beta v1** (in testing) | Encrypted albums, invites by Keepsy ID, removal with a new album key, safety numbers, encrypted names, titles and profile photos, an upload queue that survives the app closing, offline browsing of cached albums and photos, account deletion |
+| **Beta v1** (in testing) | Encrypted albums, invites by Miuchio ID, removal with a new album key, safety numbers, encrypted names, titles and profile photos, an upload queue that survives the app closing, offline browsing of cached albums and photos, account deletion |
 | **Beta v2** (planned) | Videos, comments and heart reactions |
 | **Beta v3** (planned) | Backup: save a backup before you remove the app and get your albums back afterwards |
 
@@ -118,7 +118,7 @@ Enter any email address. When `RESEND_API_KEY` is empty, the server does not sen
 docker compose logs -f server
 ```
 
-To try invites, removal or safety numbers, sign in on a second phone or emulator with another email and add each other with your Keepsy IDs.
+To try invites, removal or safety numbers, sign in on a second phone or emulator with another email and add each other with your Miuchio IDs.
 
 ### Configuration
 
@@ -129,12 +129,12 @@ The server is configured with environment variables. `.env.example` lists the on
 | `APP_ENV` | `dev` allows placeholder keys and enables test endpoints |
 | `DATABASE_URL`, `REDIS_URL`, `PORT` | Set by `docker-compose.yml`. `REDIS_URL` is a `host:port` address |
 | `RESEND_API_KEY` | Sends sign-in codes through [Resend](https://resend.com). Empty prints them to the log |
-| `KEEPSY_EMAIL_HMAC_KEY` | Keys the hash that stands in for email addresses. Required outside dev |
-| `KEEPSY_USER_LINK_KEY` | Keys the encrypted link between accounts and album memberships. Required outside dev |
+| `MIUCHIO_EMAIL_HMAC_KEY` | Keys the hash that stands in for email addresses. Required outside dev |
+| `MIUCHIO_USER_LINK_KEY` | Keys the encrypted link between accounts and album memberships. Required outside dev |
 | `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` | Storage address for the server, and the one used in links handed to phones |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_REGION`, `USE_PATH_STYLE` | Storage credentials and options |
 
-Generate the two Keepsy keys with `openssl rand -base64 32`. Treat them like a database password and never change them on a server with real data: changing either one disconnects every existing account from its albums.
+Generate the two Miuchio keys with `openssl rand -base64 32`. Treat them like a database password and never change them on a server with real data: changing either one disconnects every existing account from its albums.
 
 ## Tests
 
@@ -154,26 +154,26 @@ Some server tests need a real Postgres and Redis and skip themselves otherwise. 
 
 ```bash
 docker compose up -d postgres redis
-docker compose exec -T postgres createdb -U postgres keepsy_test
+docker compose exec -T postgres createdb -U postgres miuchio_test
 for f in server/migrations/*.up.sql; do
-  docker compose exec -T postgres psql -U postgres -d keepsy_test -v ON_ERROR_STOP=1 -q < "$f"
+  docker compose exec -T postgres psql -U postgres -d miuchio_test -v ON_ERROR_STOP=1 -q < "$f"
 done
 
 cd server
-KEEPSY_TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/keepsy_test?sslmode=disable" \
-KEEPSY_TEST_REDIS_URL="localhost:6379" \
+MIUCHIO_TEST_DATABASE_URL="postgres://postgres:password@localhost:5432/miuchio_test?sslmode=disable" \
+MIUCHIO_TEST_REDIS_URL="localhost:6379" \
 go test ./...
 ```
 
-`KEEPSY_TEST_REDIS_URL` is a `host:port` address, not a `redis://` URL. With the wrong form the Redis tests skip silently.
+`MIUCHIO_TEST_REDIS_URL` is a `host:port` address, not a `redis://` URL. With the wrong form the Redis tests skip silently.
 
 ## Contributing
 
-Bug reports, fixes and ideas are welcome. I am open to changes to the design, theme, UI and UX, and to new features. New features can take a while, because I build Keepsy alone and spend most of my time on the protocol.
+Bug reports, fixes and ideas are welcome. I am open to changes to the design, theme, UI and UX, and to new features. New features can take a while, because I build Miuchio alone and spend most of my time on the protocol.
 
 Small fixes can go straight to a pull request. For anything bigger, and for any change to the protocol or cryptography, open an issue first so we can agree on the approach. [CONTRIBUTING.md](CONTRIBUTING.md) has the details.
 
-Start with the [website](https://www.miuchio.com) for the design and reasoning behind Keepsy, and ask if anything is unclear.
+Start with the [website](https://www.miuchio.com) for the design and reasoning behind Miuchio, and ask if anything is unclear.
 
 ## Security
 
@@ -189,6 +189,6 @@ I reply fastest on Signal and Discord. Email can take a while.
 
 ## License
 
-Keepsy is licensed under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version of the server for other people, you have to make your changes available to them under the same license.
+Miuchio is licensed under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version of the server for other people, you have to make your changes available to them under the same license.
 
-Keepsy is designed and built by [Freytastic](https://www.freytastic.dev/).
+Miuchio is designed and built by [Freytastic](https://www.freytastic.dev/).

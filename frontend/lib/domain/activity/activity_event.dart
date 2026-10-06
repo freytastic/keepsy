@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 
 // Security groups identity and access changes; Albums groups content
 enum ActivityLane { security, albums }

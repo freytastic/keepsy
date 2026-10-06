@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/domain/account/account_deletion.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/screens/account_deletion_screen.dart';
-import 'package:keepsy/ui/settings/settings_page.dart';
-import 'package:keepsy/ui/shelf/album_print.dart';
-import 'package:keepsy/ui/shelf/shelf_data.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/domain/account/account_deletion.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/screens/account_deletion_screen.dart';
+import 'package:miuchio/ui/settings/settings_page.dart';
+import 'package:miuchio/ui/shelf/album_print.dart';
+import 'package:miuchio/ui/shelf/shelf_data.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 import 'package:provider/provider.dart';
 
 const _holdFor = Duration(milliseconds: 1800);
@@ -111,7 +111,7 @@ class _DeleteAccountScreenState extends State<DeleteAccountScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text("Couldn't reach Keepsy.", style: Warm.pageSoft),
+                  child: Text("Couldn't reach Miuchio.", style: Warm.pageSoft),
                 ),
                 WarmTextButton(label: 'Try again', onTap: _load),
               ],

@@ -1,9 +1,9 @@
 import 'dart:convert';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/member_model.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/domain/albums/album_cleanup.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/member_model.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/domain/albums/album_cleanup.dart';
 
 class AlbumService {
   final ApiClient _client = ApiClient();

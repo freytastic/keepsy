@@ -1,7 +1,7 @@
 import 'package:flutter/animation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/ui/shelf/develop_store.dart';
+import 'package:miuchio/ui/shelf/develop_store.dart';
 
 class _Vsync implements TickerProvider {
   final List<Ticker> tickers = [];

@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/userlink"
+	"github.com/freytastic/miuchio/internal/userlink"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,11 +23,11 @@ func mkRand(t *testing.T, n int) []byte {
 }
 
 // TestPendingMembers exercises the 24h / epoch-behind threshold against a real
-// DB. Skipped without KEEPSY_TEST_DATABASE_URL
+// DB. Skipped without MIUCHIO_TEST_DATABASE_URL
 func TestPendingMembers(t *testing.T) {
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run real-DB pending-members test")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run real-DB pending-members test")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dbURL)

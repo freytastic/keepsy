@@ -4,11 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:keepsy/data/api/api_client.dart';
-import 'package:keepsy/data/api/api_error.dart';
-import 'package:keepsy/data/api/media_api.dart';
-import 'package:keepsy/data/api/s3_transport.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/data/api/api_client.dart';
+import 'package:miuchio/data/api/api_error.dart';
+import 'package:miuchio/data/api/media_api.dart';
+import 'package:miuchio/data/api/s3_transport.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 
 class _FakeApiClient extends ApiClient {
   final List<String> posts = [];

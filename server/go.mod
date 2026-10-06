@@ -1,4 +1,4 @@
-module github.com/freytastic/keepsy
+module github.com/freytastic/miuchio
 
 go 1.26.1
 

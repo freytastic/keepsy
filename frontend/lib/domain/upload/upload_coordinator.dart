@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:keepsy/diagnostics/trace.dart';
-import 'package:keepsy/e2ee/file_pipeline.dart';
+import 'package:miuchio/diagnostics/trace.dart';
+import 'package:miuchio/e2ee/file_pipeline.dart';
 import 'package:uuid/uuid.dart';
 
 import 'rate_estimator.dart';

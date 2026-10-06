@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/data/storage/media_cache_manager.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
-import 'package:keepsy/ui/widgets/upload_copy.dart';
-import 'package:keepsy/ui/widgets/warm_button.dart';
+import 'package:miuchio/data/storage/media_cache_manager.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/widgets/upload_copy.dart';
+import 'package:miuchio/ui/widgets/warm_button.dart';
 import 'package:provider/provider.dart';
 
 // One page a settings row opens: bare back, optional glyph, title, then content
@@ -121,7 +121,7 @@ class NotificationsPage extends StatelessWidget {
         glyph: Icons.notifications_none_rounded,
         children: [
           SettingsLead('For now, everything new shows up in Activity when you '
-              'open Keepsy.'),
+              'open Miuchio.'),
           SettingsLead('Push notifications are coming in the next beta.'),
         ],
       );
@@ -140,11 +140,11 @@ class BackupPage extends StatelessWidget {
             (
               Icons.lock_outline_rounded,
               'What unlocks your photos is kept only on this phone. Not even '
-                  'Keepsy has a copy.'
+                  'Miuchio has a copy.'
             ),
             (
               Icons.smartphone_outlined,
-              "If you uninstall Keepsy or lose this phone, you can't open "
+              "If you uninstall Miuchio or lose this phone, you can't open "
                   'your albums again and will need to delete this account.'
             ),
             (
@@ -209,7 +209,7 @@ class _StoragePageState extends State<StoragePage> {
     return SettingsPage(
       title: 'Storage',
       children: [
-        const SettingsLead("Keepsy's cache on this phone"),
+        const SettingsLead("Miuchio's cache on this phone"),
         Padding(
           padding: const EdgeInsets.only(top: 6),
           child: Text(u == null ? '…' : formatBytes(total),

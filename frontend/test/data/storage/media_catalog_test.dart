@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/storage/media_cache_key.dart';
-import 'package:keepsy/data/storage/media_sealed_cache.dart';
-import 'package:keepsy/e2ee/media_record.dart';
+import 'package:miuchio/data/storage/media_cache_key.dart';
+import 'package:miuchio/data/storage/media_sealed_cache.dart';
+import 'package:miuchio/e2ee/media_record.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 MediaRecord rec(String id, {String album = 'album-1', int epoch = 0}) =>
@@ -34,7 +34,7 @@ void main() {
   late MediaSealedCache cache;
 
   setUp(() async {
-    dir = await Directory.systemTemp.createTemp('keepsy_catalog');
+    dir = await Directory.systemTemp.createTemp('miuchio_catalog');
     cache = await MediaSealedCache.open(
       rootDir: dir,
       cacheRootKey: Uint8List(32),

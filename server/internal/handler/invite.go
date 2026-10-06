@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/freytastic/keepsy/internal/apierr"
+	"github.com/freytastic/miuchio/internal/apierr"
 )
 
 // Invite handlers are in P0.2 (acc to implementation plan)

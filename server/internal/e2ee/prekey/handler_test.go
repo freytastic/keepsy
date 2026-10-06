@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/model"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/model"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,10 +54,10 @@ func newRouter(h *Handler) http.Handler {
 }
 
 type stubResolver struct {
-	fn func(ctx context.Context, keepsyID string) (uuid.UUID, error)
+	fn func(ctx context.Context, miuchioID string) (uuid.UUID, error)
 }
 
-func (s stubResolver) FindUserIDByKeepsyID(ctx context.Context, k string) (uuid.UUID, error) {
+func (s stubResolver) FindUserIDByMiuchioID(ctx context.Context, k string) (uuid.UUID, error) {
 	return s.fn(ctx, k)
 }
 
@@ -257,12 +257,12 @@ func TestPrekeyBundle_DoesNotEmitWhenAtOrAboveThreshold(t *testing.T) {
 }
 
 // TestPrekeyBundle_ConcurrentConsumesDistinctOPKs exercises the real Postgres
-// SKIP LOCKED path. Skipped without KEEPSY_TEST_DATABASE_URL since the in mem
+// SKIP LOCKED path. Skipped without MIUCHIO_TEST_DATABASE_URL since the in mem
 // fixture cannot prove the row level concurrency guarantee
 func TestPrekeyBundle_ConcurrentConsumesDistinctOPKs(t *testing.T) {
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run real-DB concurrency test")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run real-DB concurrency test")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
@@ -374,7 +374,7 @@ func TestPrekeyBundleByHandle(t *testing.T) {
 	}}
 	h := NewHandler(svc, nil, resolver, nil)
 
-	t.Run("valid handle -> 200 with user_id=keepsy_id (not UUID)", func(t *testing.T) {
+	t.Run("valid handle -> 200 with user_id=miuchio_id (not UUID)", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		// lowercase+dash form exercises Normalize on the way in
 		req := authReq(http.MethodGet, "/users/by-handle/k7f2-9qxm/prekey-bundle", nil, uuid.New())
@@ -419,9 +419,9 @@ func TestPrekeyBundleByHandle(t *testing.T) {
 }
 
 func TestPrekeyBundleByHandle_RateLimit(t *testing.T) {
-	redisURL := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	redisURL := os.Getenv("MIUCHIO_TEST_REDIS_URL")
 	if redisURL == "" {
-		t.Skip("set KEEPSY_TEST_REDIS_URL to run rate-limit test")
+		t.Skip("set MIUCHIO_TEST_REDIS_URL to run rate-limit test")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
 	t.Cleanup(func() { _ = rdb.Close() })
@@ -474,9 +474,9 @@ func TestPrekeyBundleByHandle_RateLimit(t *testing.T) {
 // Distinct IDs each stay under the per ID limit, so only the per account cap
 // stops a sweep
 func TestPrekeyBundleByHandle_SweepCapped(t *testing.T) {
-	redisURL := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	redisURL := os.Getenv("MIUCHIO_TEST_REDIS_URL")
 	if redisURL == "" {
-		t.Skip("set KEEPSY_TEST_REDIS_URL to run rate-limit test")
+		t.Skip("set MIUCHIO_TEST_REDIS_URL to run rate-limit test")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
 	t.Cleanup(func() { _ = rdb.Close() })
@@ -528,11 +528,11 @@ func TestPrekeyBundleByHandle_SweepCapped(t *testing.T) {
 }
 
 // TestPrekeyBundle_RateLimit drives the actual middleware.RateLimiter against a
-// real Redis. Skipped without KEEPSY_TEST_REDIS_URL
+// real Redis. Skipped without MIUCHIO_TEST_REDIS_URL
 func TestPrekeyBundle_RateLimit(t *testing.T) {
-	redisURL := os.Getenv("KEEPSY_TEST_REDIS_URL")
+	redisURL := os.Getenv("MIUCHIO_TEST_REDIS_URL")
 	if redisURL == "" {
-		t.Skip("set KEEPSY_TEST_REDIS_URL to run rate-limit test")
+		t.Skip("set MIUCHIO_TEST_REDIS_URL to run rate-limit test")
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
 	t.Cleanup(func() { _ = rdb.Close() })
@@ -593,7 +593,7 @@ func mustSeedUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	id := uuid.New()
 	email := fmt.Sprintf("test-%s@example.com", id.String())
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email_hmac, keepsy_id) VALUES ($1, $2, $3)`,
+		`INSERT INTO users (id, email_hmac, miuchio_id) VALUES ($1, $2, $3)`,
 		id, []byte(email), id.String()); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

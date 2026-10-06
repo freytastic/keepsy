@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/data/models/album_model.dart';
-import 'package:keepsy/data/models/album_summary.dart';
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/domain/avatar/avatar_publisher.dart';
-import 'package:keepsy/e2ee/sealed_avatar.dart';
+import 'package:miuchio/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_summary.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/domain/avatar/avatar_publisher.dart';
+import 'package:miuchio/e2ee/sealed_avatar.dart';
 
 class _Own implements OwnAvatar {
   @override

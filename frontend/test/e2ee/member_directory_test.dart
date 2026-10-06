@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:keepsy/e2ee/member_directory.dart';
+import 'package:miuchio/e2ee/member_directory.dart';
 
 Uint8List _album([int s = 0xA1]) => Uint8List.fromList(List<int>.filled(16, s));
 Uint8List _tok(int s) => Uint8List.fromList(List<int>.filled(32, s));

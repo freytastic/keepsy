@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // Scale feedback for controls without ink effects
 class PressableScale extends StatefulWidget {

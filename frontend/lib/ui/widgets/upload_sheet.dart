@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:keepsy/domain/upload/upload_snapshot.dart';
-import 'package:keepsy/ui/providers/app_state.dart';
-import 'package:keepsy/ui/providers/upload_queue_model.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/domain/upload/upload_snapshot.dart';
+import 'package:miuchio/ui/providers/app_state.dart';
+import 'package:miuchio/ui/providers/upload_queue_model.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 import 'package:provider/provider.dart';
 
 import 'pressable_scale.dart';

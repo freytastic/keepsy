@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:keepsy/data/models/avatar_ref.dart';
-import 'package:keepsy/e2ee/sealed_avatar.dart';
+import 'package:miuchio/data/models/avatar_ref.dart';
+import 'package:miuchio/e2ee/sealed_avatar.dart';
 
 import 'api_client.dart';
 import 's3_transport.dart';

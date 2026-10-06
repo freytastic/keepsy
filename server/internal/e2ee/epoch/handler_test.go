@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/repository"
-	"github.com/freytastic/keepsy/internal/userlink"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/repository"
+	"github.com/freytastic/miuchio/internal/userlink"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -65,9 +65,9 @@ type testUser struct {
 
 func mustOpenTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("KEEPSY_TEST_DATABASE_URL")
+	dbURL := os.Getenv("MIUCHIO_TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("set KEEPSY_TEST_DATABASE_URL to run real-DB epoch tests")
+		t.Skip("set MIUCHIO_TEST_DATABASE_URL to run real-DB epoch tests")
 	}
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
@@ -156,7 +156,7 @@ func seedUserWithIdentity(t *testing.T, pool *pgxpool.Pool) testUser {
 	spkSig := make([]byte, 64)
 	spkTs := time.Now().Unix()
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, email_hmac, keepsy_id, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
+		`INSERT INTO users (id, email_hmac, miuchio_id, ik_pub, lk_pub, spk_pub, spk_sig, spk_ts)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, []byte(email), id.String(), []byte(pub), lkPub, spkPub, spkSig, spkTs,
 	); err != nil {

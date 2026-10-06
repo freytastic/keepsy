@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:keepsy/data/models/album_model.dart';
+import 'package:miuchio/data/models/album_model.dart';
 
 // Serializes authoritative shelf comparisons and coalesces realtime bursts
 class ActivitySync {

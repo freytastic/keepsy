@@ -5,7 +5,7 @@ If you find a serious security or protocol bug, reach out to me first:
 - **Signal:** `freya.47`
 - **Discord:** `freytastic`
 - **Email:** [uExistentialist@proton.me](mailto:uExistentialist@proton.me)
-- [GitHub private vulnerability reporting](https://github.com/freytastic/keepsy/security/advisories/new)
+- [GitHub private vulnerability reporting](https://github.com/freytastic/miuchio/security/advisories/new)
 
 I reply fastest on Signal and Discord.
 
@@ -21,7 +21,7 @@ Anything that breaks a promise the [protocol pages](https://www.miuchio.com/prot
 - getting a phone to accept a key or signature it should refuse,
 - metadata such as location surviving in an uploaded photo.
 
-Known limits are listed on [What Keepsy does not protect](https://www.miuchio.com/protocol/limits). A way to make one of them worse than the page says still counts.
+Known limits are listed on [What Miuchio does not protect](https://www.miuchio.com/protocol/limits). A way to make one of them worse than the page says still counts.
 
 ## Status
 

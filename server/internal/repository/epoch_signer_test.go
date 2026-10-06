@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/freytastic/keepsy/internal/e2ee/epoch"
+	"github.com/freytastic/miuchio/internal/e2ee/epoch"
 )
 
 // A second admin row only exists in legacy data, but it is the one way a

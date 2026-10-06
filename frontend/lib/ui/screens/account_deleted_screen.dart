@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:keepsy/ui/theme/warm_tokens.dart';
+import 'package:miuchio/ui/theme/warm_tokens.dart';
 
 // Terminal screen after the device wipe. The service graph behind the app was
 // built on keys that no longer exist, so nothing here may touch it
@@ -24,8 +24,8 @@ class AccountDeletedScreen extends StatelessWidget {
                 Text('Your account is deleted', style: Warm.h1),
                 const SizedBox(height: Warm.headingToLead),
                 Text(
-                  'Everything Keepsy kept on this phone is gone. Our servers '
-                  'are removing the rest. Close Keepsy to finish.',
+                  'Everything Miuchio kept on this phone is gone. Our servers '
+                  'are removing the rest. Close Miuchio to finish.',
                   style: Warm.sub,
                 ),
                 const SizedBox(height: 32),
@@ -33,7 +33,7 @@ class AccountDeletedScreen extends StatelessWidget {
                 if (defaultTargetPlatform != TargetPlatform.iOS)
                   TextButton(
                     onPressed: () => SystemNavigator.pop(),
-                    child: const Text('Close Keepsy'),
+                    child: const Text('Close Miuchio'),
                   ),
               ],
             ),

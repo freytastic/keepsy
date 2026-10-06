@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freytastic/keepsy/internal/apierr"
-	"github.com/freytastic/keepsy/internal/middleware"
-	"github.com/freytastic/keepsy/internal/ws"
+	"github.com/freytastic/miuchio/internal/apierr"
+	"github.com/freytastic/miuchio/internal/middleware"
+	"github.com/freytastic/miuchio/internal/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
@@ -65,7 +65,7 @@ func memberReq(albumID uuid.UUID, body []byte, role string) *http.Request {
 	return req.WithContext(ctx)
 }
 
-func deliverBody(keepsyID string, nEpochs int) []byte {
+func deliverBody(miuchioID string, nEpochs int) []byte {
 	envs := make([]map[string]any, nEpochs)
 	for i := range envs {
 		envs[i] = map[string]any{
@@ -76,10 +76,10 @@ func deliverBody(keepsyID string, nEpochs int) []byte {
 		}
 	}
 	b, _ := json.Marshal(map[string]any{
-		"target_keepsy_id": keepsyID,
-		"ek_pub":           base64.StdEncoding.EncodeToString(make([]byte, 32)),
-		"opk_idx_used":     3,
-		"envelopes":        envs,
+		"target_miuchio_id": miuchioID,
+		"ek_pub":            base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"opk_idx_used":      3,
+		"envelopes":         envs,
 	})
 	return b
 }
