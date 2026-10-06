@@ -83,7 +83,7 @@ def grade(image: Image.Image, saturation: float, contrast: float) -> Image.Image
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--frames", default="../miuchio-mock-final/frames_hq")
-    parser.add_argument("--out", default="frontend/lib/assets/onboarding/camera_stage.webp")
+    parser.add_argument("--out", default="client/lib/assets/onboarding/camera_stage.webp")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--crop", default=None,
                         help="left,top,right,bottom; measured from the frames "

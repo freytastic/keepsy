@@ -27,12 +27,12 @@ cd server
 go vet ./...
 go test ./...
 
-cd ../frontend
+cd ../client
 flutter analyze
 flutter test
 ```
 
-`flutter test` must run from `frontend/`, because the cross-language tests read `../test_vectors/crypto_kat.json`.
+`flutter test` must run from `client/`, because the cross-language tests read `../test_vectors/crypto_kat.json`.
 
 Some server tests need a real Postgres and Redis and skip themselves without them. They cover locking, races and replay, so run them if you touch the server's repositories, epochs, invites or prekeys. See [Tests](README.md#tests) for how.
 

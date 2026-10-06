@@ -1,7 +1,7 @@
 // genspkrotatekat is the one shot generator for test_vectors/spk_rotate_kat.json
 // Output is byte- stable : re running emits identical JSON. The fixture is
 // consumed by both Go (internal/e2ee/prekey/kat_test.go) and Dart
-// (frontend/test/e2ee/kat_test.dart). Run it once, redirect stdout into the
+// (client/test/e2ee/kat_test.dart). Run it once, redirect stdout into the
 // JSON, then never modify the byte values again
 
 package main

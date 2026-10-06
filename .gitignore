@@ -12,28 +12,28 @@ server/tmp/
 .env
 /docs
 
-# frontend
+# client
 # Miscellaneous
-frontend/*.class
-frontend/*.log
-frontend/*.pyc
-frontend/*.swp
-frontend/.DS_Store
-frontend/.atom/
-frontend/.build/
-frontend/.buildlog/
-frontend/.history
-frontend/.svn/
-frontend/.swiftpm/
-frontend/migrate_working_dir/
+client/*.class
+client/*.log
+client/*.pyc
+client/*.swp
+client/.DS_Store
+client/.atom/
+client/.build/
+client/.buildlog/
+client/.history
+client/.svn/
+client/.swiftpm/
+client/migrate_working_dir/
 
-frontend/flash.sh
+client/flash.sh
 
 # IntelliJ related
-frontend/*.iml
-frontend/*.ipr
-frontend/*.iws
-frontend/.idea/
+client/*.iml
+client/*.ipr
+client/*.iws
+client/.idea/
 
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
@@ -41,25 +41,25 @@ frontend/.idea/
 #.vscode/
 
 # Flutter/Dart/Pub related
-frontend/**/doc/api/
-frontend/**/ios/Flutter/.last_build_id
-frontend/**/.dart_tool/
-frontend/.flutter-plugins-dependencies
-frontend/**/.pub-cache/
-frontend/**/.pub/
-frontend/**/build/
-frontend/coverage/
-frontend/out/
+client/**/doc/api/
+client/**/ios/Flutter/.last_build_id
+client/**/.dart_tool/
+client/.flutter-plugins-dependencies
+client/**/.pub-cache/
+client/**/.pub/
+client/**/build/
+client/coverage/
+client/out/
 
 # Symbolication related
-frontend/app.*.symbols
+client/app.*.symbols
 
 # Obfuscation related
-frontend/app.*.map.json
+client/app.*.map.json
 
 # Android Studio will place build artifacts here
-frontend/android/app/debug
-frontend/android/app/profile
-frontend/android/app/release
+client/android/app/debug
+client/android/app/profile
+client/android/app/release
 
 server/docs

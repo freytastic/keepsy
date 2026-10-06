@@ -1,4 +1,4 @@
-package com.example.frontend
+package com.example.client
 
 import android.content.Context
 import android.content.pm.PackageManager
