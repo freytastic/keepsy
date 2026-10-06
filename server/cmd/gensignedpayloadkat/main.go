@@ -1,7 +1,7 @@
 // gensignedpayloadkat is the one shot generator for
 // test_vectors/signed_payload_kat.json. Output is byte stable: re running
 // emits identical JSON. The fixture is consumed by both Go (internal/e2ee/
-// epoch/signed_payload_kat_test.go) and Dart (frontend/test/e2ee/
+// epoch/signed_payload_kat_test.go) and Dart (client/test/e2ee/
 // mk_delivery_kat_test.dart). Run it once, redirect stdout into the JSON,
 // then never modify the byte values again
 

@@ -31,7 +31,7 @@ Map<String, dynamic> _loadKat() {
   if (!f.existsSync()) {
     throw StateError(
         'KAT file not found at $_katFile (cwd=${Directory.current.path}). '
-        'Run flutter test from the frontend/ package root.');
+        'Run flutter test from the client/ package root.');
   }
   return jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
 }

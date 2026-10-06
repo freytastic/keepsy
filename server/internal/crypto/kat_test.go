@@ -18,7 +18,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// katFile is outside both the server/ and frontend/ trees so it just feeds
+// katFile is outside both the server/ and client/ trees so it just feeds
 // both runners. it has to be in this path to sync with the Dart KAT loader
 const katFile = "../../../test_vectors/crypto_kat.json"
 

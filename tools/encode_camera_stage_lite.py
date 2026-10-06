@@ -16,10 +16,10 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("Pillow is required: pip install --user Pillow")
 
-MASTER = "frontend/lib/assets/onboarding/camera_stage.webp"
-LITE_OUT = "frontend/lib/assets/onboarding/camera_stage_lite.webp"
-STILL_OUT = "frontend/lib/assets/onboarding/camera_stage_still.webp"
-PROBE_OUT = "frontend/lib/assets/onboarding/camera_stage_probe.webp"
+MASTER = "client/lib/assets/onboarding/camera_stage.webp"
+LITE_OUT = "client/lib/assets/onboarding/camera_stage_lite.webp"
+STILL_OUT = "client/lib/assets/onboarding/camera_stage_still.webp"
+PROBE_OUT = "client/lib/assets/onboarding/camera_stage_probe.webp"
 
 # Probe master frames 119-123 to sample late decode cost
 PROBE_START = 119

@@ -8,8 +8,8 @@ import Security
  // key that encrypts the actual "envelope" of handles stored in the Keychain
 final class SecureEnclaveBridge: NSObject, FlutterPlugin {
     static let CHANNEL = "miuchio/keystore"
-    static let WRAP_TAG = "com.example.frontend.miuchio.wrap"
-    static let ENVELOPE_TAG = "com.example.frontend.miuchio.envelope"
+    static let WRAP_TAG = "com.example.client.miuchio.wrap"
+    static let ENVELOPE_TAG = "com.example.client.miuchio.envelope"
     static let HKDF_INFO = "miuchio.envelope.v1"
 
     static func register(with registrar: FlutterPluginRegistrar) {

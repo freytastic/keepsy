@@ -58,11 +58,11 @@ The parts I designed myself, such as epochs, signed key changes, the upload free
 | `server/internal/e2ee/` | The server's protocol checks: prekeys, epochs and invites |
 | `server/migrations/` | Database schema, applied automatically when the server starts |
 | `server/cmd/` | The server, plus generators for the known answer test vectors |
-| `frontend/` | Flutter app for Android and iPhone |
-| `frontend/lib/crypto/` | Primitives, the X3DH handshake and the wire formats |
-| `frontend/lib/e2ee/` | Epochs, invites, removal, trust and the photo pipeline |
-| `frontend/lib/secure_store/` | Key storage backed by the Android Keystore and the Secure Enclave |
-| `frontend/android/`, `frontend/ios/` | Native code for the key store and, on Android, photo processing |
+| `client/` | Flutter app for Android and iPhone |
+| `client/lib/crypto/` | Primitives, the X3DH handshake and the wire formats |
+| `client/lib/e2ee/` | Epochs, invites, removal, trust and the photo pipeline |
+| `client/lib/secure_store/` | Key storage backed by the Android Keystore and the Secure Enclave |
+| `client/android/`, `client/ios/` | Native code for the key store and, on Android, photo processing |
 | `test_vectors/` | Known answer tests that the Go server and the Dart app must both match byte for byte |
 | `tools/` | Development scripts for performance traces and onboarding animations |
 
@@ -101,14 +101,14 @@ curl http://localhost:8080/health
 ### 2. Run the app
 
 ```bash
-cd frontend
+cd client
 flutter pub get
 flutter run --dart-define=API_BASE_URL=http://192.168.1.10:8080/api/v1
 ```
 
 Use the same LAN IP as in `.env`, so a real phone on the same network can reach the server.
 
-For a real iPhone, open `frontend/ios/Runner.xcworkspace` in Xcode once and choose your team under Signing & Capabilities.
+For a real iPhone, open `client/ios/Runner.xcworkspace` in Xcode once and choose your team under Signing & Capabilities.
 
 ### 3. Sign in
 
@@ -143,12 +143,12 @@ cd server
 go vet ./...
 go test ./...
 
-cd ../frontend
+cd ../client
 flutter analyze
 flutter test
 ```
 
-Run `flutter test` from `frontend/`, because the cross-language tests read `../test_vectors/crypto_kat.json`.
+Run `flutter test` from `client/`, because the cross-language tests read `../test_vectors/crypto_kat.json`.
 
 Some server tests need a real Postgres and Redis and skip themselves otherwise. They cover the album lock, races and replay, which mocks cannot. To run them, create a separate test database, apply the migrations to it and pass both addresses:
 

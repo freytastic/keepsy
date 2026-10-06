@@ -1,4 +1,4 @@
-package com.example.frontend
+package com.example.client
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

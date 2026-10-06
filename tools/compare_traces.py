@@ -2,7 +2,7 @@
 """Compare device traces with the S24 Ultra first when present
 
 Usage:
-  python3 tools/compare_traces.py frontend/out/<capture dir>
+  python3 tools/compare_traces.py client/out/<capture dir>
   python3 tools/compare_traces.py a.log b.log
 
 """
