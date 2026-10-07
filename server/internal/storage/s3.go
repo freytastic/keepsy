@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -63,7 +64,12 @@ func NewS3Client(endpoint, presignEndpoint, accessKey, secretKey, bucket, region
 		client: client,
 		presignClient: s3.NewPresignClient(s3.NewFromConfig(presignCfg, func(o *s3.Options) {
 			o.UsePathStyle = usePathStyle
-		})),
+		}), func(o *s3.PresignOptions) {
+			// keep x-amz-checksum-sha256 a signed header instead of a query param:
+			o.Presigner = v4.NewSigner(func(so *v4.SignerOptions) {
+				so.DisableHeaderHoisting = true
+			})
+		}),
 		bucket: bucket,
 	}, nil
 }
