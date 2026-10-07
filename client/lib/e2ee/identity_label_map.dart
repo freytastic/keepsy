@@ -1,22 +1,21 @@
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:miuchio/data/storage/secure_storage.dart';
 
 // Persists key handle labels and publication sidecars in secure storage
 // Kept off the SecureKeyStore on purpose : metadata, not key material
 
 const String kIdentityLabelMapKey = 'miuchio.identity.label_map';
 const String kIdentitySpkTsKey = 'miuchio.identity.spk_ts';
-// Two phase bootstrap : keys may exist locally before the server has accepted
-// them. Tracked separately so a network blip between /keys and /opks doesnt
-// strand the user on a regenerated, server rejected IK
+// Track key and OPK publication separately so a failure between /keys and
+// /opks does not regenerate an identity the server already accepted
 const String kIdentityPublishedKey = 'miuchio.identity.identity_published';
 const String kInitialOpksPublishedKey =
     'miuchio.identity.initial_opks_published';
 // Server timestamp that a recovery rotation must exceed
 const String kIdentitySpkConflictKey = 'miuchio.identity.spk_conflict_ts';
 
-// Static identity labels (D6)
 const String kLabelIK = 'miuchio.ik';
 const String kLabelLK = 'miuchio.lk';
 const String kLabelSpkCurrent = 'miuchio.spk.current';
@@ -27,8 +26,6 @@ const String kLabelSpkPending = 'miuchio.spk.pending';
 const String kLabelSpkArchived = 'miuchio.spk.archived';
 const String kLabelOpkPrefix = 'miuchio.opk.';
 
-// Tiny KV abstraction so tests can swap in an in-memory fake without dragging
-// in the platform channels of FlutterSecureStorage. Production wraps FSS
 abstract class IdentityKv {
   Future<String?> read(String key);
   Future<void> write(String key, String value);
@@ -54,7 +51,7 @@ class IdentityLabelMap {
   bool _loaded = false;
 
   IdentityLabelMap({IdentityKv? kv})
-      : _kv = kv ?? const _FssAdapter(FlutterSecureStorage());
+      : _kv = kv ?? const _FssAdapter(appSecureStorage);
 
   Future<void> load() async {
     final raw = await _kv.read(kIdentityLabelMapKey);

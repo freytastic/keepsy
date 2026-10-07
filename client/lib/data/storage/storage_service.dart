@@ -1,6 +1,8 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'secure_storage.dart';
+
 // Keeps credentials in secure storage and non-secret display values in prefs
 class StorageService {
   static const _keyToken = 'auth_token';
@@ -18,9 +20,7 @@ class StorageService {
   factory StorageService() => _instance;
   StorageService._();
 
-  // const : each call resolves the current platform (mockable in tests via
-  // FlutterSecureStorage.setMockInitialValues)
-  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+  static const FlutterSecureStorage _secure = appSecureStorage;
 
   SharedPreferences? _prefs;
 

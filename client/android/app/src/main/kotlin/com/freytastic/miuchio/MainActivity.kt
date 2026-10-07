@@ -1,4 +1,4 @@
-package com.example.client
+package com.freytastic.miuchio
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
