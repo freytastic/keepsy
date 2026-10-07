@@ -12,6 +12,7 @@ type Config struct {
 	RedisURL     string
 	Port         string
 	ResendAPIKey string
+	EmailFrom    string
 	DevMode      bool // enables /test/* endpoints: never true in production
 
 	// HMAC key for users.email_hmac. Stable across the deployment lifetime :
@@ -42,7 +43,8 @@ func Load() *Config {
 		DatabaseURL:      getEnv("DATABASE_URL", "postgres://postgres:password@localhost:5432/miuchio?sslmode=disable"),
 		RedisURL:         getEnv("REDIS_URL", "localhost:6379"),
 		Port:             getEnv("PORT", "8080"),
-		ResendAPIKey:     getEnv("RESEND_API_KEY", ""),
+		ResendAPIKey:     requireOutsideDev("RESEND_API_KEY", devMode),
+		EmailFrom:        loadEmailFrom(devMode),
 		DevMode:          devMode,
 		EmailHMACKey:     loadEmailHMACKey(devMode),
 		UserLinkKey:      loadKeyOrDevPlaceholder("MIUCHIO_USER_LINK_KEY", "miuchio-dev-userlink-placeholder-do-not-deploy", devMode),
@@ -80,6 +82,26 @@ func loadKeyOrDevPlaceholder(envKey, devSeed string, devMode bool) []byte {
 	}
 	d := sha256.Sum256([]byte(devSeed))
 	return d[:]
+}
+
+// Resend only delivers its onboarding sender to the account owner, so it is a
+// dev fallback and production must name a sender on a verified domain
+func loadEmailFrom(devMode bool) string {
+	from := requireOutsideDev("EMAIL_FROM", devMode)
+	if from == "" {
+		return "Miuchio <onboarding@resend.dev>"
+	}
+	return from
+}
+
+// requireOutsideDev stops startup when key is unset outside dev mode, so a
+// production server never falls back to printing sign-in codes to its log
+func requireOutsideDev(key string, devMode bool) string {
+	value := getEnv(key, "")
+	if value == "" && !devMode {
+		log.Fatalf("%s is required in non dev mode", key)
+	}
+	return value
 }
 
 func getEnv(key, fallback string) string {
