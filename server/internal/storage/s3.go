@@ -64,12 +64,7 @@ func NewS3Client(endpoint, presignEndpoint, accessKey, secretKey, bucket, region
 		client: client,
 		presignClient: s3.NewPresignClient(s3.NewFromConfig(presignCfg, func(o *s3.Options) {
 			o.UsePathStyle = usePathStyle
-		}), func(o *s3.PresignOptions) {
-			// keep x-amz-checksum-sha256 a signed header instead of a query param:
-			o.Presigner = v4.NewSigner(func(so *v4.SignerOptions) {
-				so.DisableHeaderHoisting = true
-			})
-		}),
+		})),
 		bucket: bucket,
 	}, nil
 }
@@ -98,6 +93,15 @@ type PresignedUpload struct {
 	RequiredHeader map[string]string // headers the client MUST set on PUT
 }
 
+// signChecksumHeader keeps x-amz-checksum-sha256 a signed header instead of a
+// query param so R2 accepts it: upload links only, on GET it would also sign
+// x-amz-checksum-mode, which the client never sends
+func signChecksumHeader(o *s3.PresignOptions) {
+	o.Presigner = v4.NewSigner(func(so *v4.SignerOptions) {
+		so.DisableHeaderHoisting = true
+	})
+}
+
 // GetPresignedUploadURLWithChecksum returns a PUT URL that S3 will reject
 // unless the body is exactly contentLength bytes and its SHA256 matches
 // sha256B64. contentType is set so MinIO doesnt default to octet stream
@@ -108,7 +112,7 @@ func (s *S3Client) GetPresignedUploadURLWithChecksum(ctx context.Context, key, c
 		ContentType:    aws.String(contentType),
 		ContentLength:  aws.Int64(contentLength),
 		ChecksumSHA256: aws.String(sha256B64),
-	}, s3.WithPresignExpires(expires))
+	}, s3.WithPresignExpires(expires), signChecksumHeader)
 	if err != nil {
 		return nil, err
 	}
