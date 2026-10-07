@@ -92,7 +92,10 @@ func main() {
 		log.Printf("s3 bucket bootstrap: %v", err) // non fatal : bucket may exist + creds may have only object level perms
 	}
 
-	emailService := service.NewResendEmailService(cfg.ResendAPIKey)
+	var emailService service.EmailService = service.NewResendEmailService(cfg.ResendAPIKey, cfg.EmailFrom)
+	if cfg.ResendAPIKey == "" {
+		emailService = service.ConsoleEmailService{} // config.Load only allows an empty key in dev mode
+	}
 	authService := service.NewAuthService(otpRepo, userRepo, sessionRepo, emailService, cfg.EmailHMACKey)
 	userService := service.NewUserService(userRepo)
 	albumService := service.NewAlbumService(albumRepo)

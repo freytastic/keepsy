@@ -13,24 +13,28 @@ type EmailService interface {
 	SendOTP(email, otp string) error
 }
 
-type ResendEmailService struct {
-	APIKey string
+// ConsoleEmailService prints codes to stdout and is only wired in dev mode
+// without a Resend key: a production server must never log a sign-in code
+type ConsoleEmailService struct{}
+
+func (ConsoleEmailService) SendOTP(email, otp string) error {
+	fmt.Printf("dev sign-in code: %s -> %s\n", email, otp)
+	return nil
 }
 
-func NewResendEmailService(apiKey string) *ResendEmailService {
-	return &ResendEmailService{APIKey: apiKey}
+type ResendEmailService struct {
+	APIKey string
+	From   string
+}
+
+func NewResendEmailService(apiKey, from string) *ResendEmailService {
+	return &ResendEmailService{APIKey: apiKey, From: from}
 }
 
 func (s *ResendEmailService) SendOTP(email, otp string) error {
-	if s.APIKey == "" {
-		// for testing
-		fmt.Printf("RESEND_API_KEY not set. Printing OTP to console: %s -> %s\n", email, otp)
-		return nil
-	}
-
 	url := "https://api.resend.com/emails"
 	payload := map[string]interface{}{
-		"from":    "Miuchio <onboarding@resend.dev>",
+		"from":    s.From,
 		"to":      email,
 		"subject": "Your Miuchio Login Code",
 		"html":    fmt.Sprintf("<strong>Your Miuchio login code is: %s</strong>. This code will expire in 5 minutes.", otp),
@@ -49,8 +53,12 @@ func (s *ResendEmailService) SendOTP(email, otp string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Resend API failed: Status %d, Body: %s", resp.StatusCode, string(body))
+		// only the error name is logged: Resend messages can echo addresses
+		var apiErr struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&apiErr)
+		log.Printf("Resend API failed: status %d, error %q", resp.StatusCode, apiErr.Name)
 		return fmt.Errorf("failed to send email: status code %d", resp.StatusCode)
 	}
 
