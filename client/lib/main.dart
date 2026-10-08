@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -1035,8 +1036,14 @@ class _MiuchioAppState extends State<MiuchioApp> with WidgetsBindingObserver {
           children: [
             if (child != null) child,
             if (_shielded)
-              const Positioned.fill(
-                child: ColoredBox(color: Warm.ground),
+              Positioned.fill(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: Warm.shieldBlur,
+                    sigmaY: Warm.shieldBlur,
+                  ),
+                  child: const ColoredBox(color: Warm.shieldScrim),
+                ),
               ),
           ],
         ),

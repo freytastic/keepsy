@@ -7,18 +7,67 @@ import 'package:miuchio/ui/widgets/warm_button.dart';
 import 'album_copy.dart';
 import 'album_stats.dart';
 
-Future<T?> _paperSheet<T>(BuildContext context, WidgetBuilder builder) =>
-    showModalBottomSheet<T>(
-      context: context,
-      // Keep sheets above the transparent peek route
-      useRootNavigator: true,
-      backgroundColor: Warm.paper,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: builder,
-    );
+Future<T?> _paperSheet<T>(BuildContext context, WidgetBuilder builder) {
+  // Keep sheets above the transparent peek route
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final labels = MaterialLocalizations.of(context);
+  return navigator.push(_PaperSheetRoute<T>(
+    builder: builder,
+    capturedThemes:
+        InheritedTheme.capture(from: context, to: navigator.context),
+    barrierLabel: labels.scrimLabel,
+    barrierOnTapHint: labels.scrimOnTapHint(labels.bottomSheetLabel),
+    backgroundColor: Warm.paper,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+  ));
+}
+
+class _PaperSheetRoute<T> extends ModalBottomSheetRoute<T> {
+  _PaperSheetRoute({
+    required super.builder,
+    required super.capturedThemes,
+    required super.barrierLabel,
+    required super.barrierOnTapHint,
+    required super.backgroundColor,
+    required super.isScrollControlled,
+    required super.shape,
+  });
+
+  double _dragFrom = 0;
+
+  void _close() {
+    if (isCurrent) navigator?.pop();
+  }
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) =>
+      NotificationListener<OverscrollNotification>(
+        onNotification: (n) {
+          if (n.overscroll < 0 && n.dragDetails != null) _close();
+          return false;
+        },
+        child: super.buildPage(context, animation, secondaryAnimation),
+      );
+
+  @override
+  Widget buildModalBarrier() => GestureDetector(
+        onVerticalDragStart: (d) => _dragFrom = d.globalPosition.dy,
+        onVerticalDragEnd: (d) {
+          if (d.globalPosition.dy - _dragFrom > 24 ||
+              (d.primaryVelocity ?? 0) > 300) {
+            _close();
+          }
+        },
+        child: super.buildModalBarrier(),
+      );
+}
 
 Future<bool> confirmPhotoDelete(BuildContext context) async =>
     await _paperSheet<bool>(context, (_) => const _DeleteSheet()) ?? false;
@@ -153,6 +202,7 @@ class _DetailsSheet extends StatelessWidget {
         ),
         child: ListView(
           key: const Key('photo-details'),
+          primary: false,
           shrinkWrap: true,
           padding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
           children: [
